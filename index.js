@@ -357,6 +357,10 @@ app.post('/api/export-all-payments', async (req, res) => {
     const payments = await stripe.paymentIntents.list({ limit: 100 });
     console.log(`📊 Найдено: ${payments.data.length} платежей`);
     
+    // Сортируем платежи по дате создания (старые → новые)
+    payments.data.sort((a, b) => a.created - b.created);
+    console.log('📅 Платежи отсортированы: старые → новые');
+    
     // Создаем правильный JWT токен
     const header = {
       "alg": "RS256",
