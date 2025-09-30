@@ -12,8 +12,32 @@ const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || '';
 const SLACK_CHANNEL_ID = process.env.SLACK_CHANNEL_ID || '';
 const GOOGLE_SHEETS_DOC_ID = process.env.GOOGLE_SHEETS_DOC_ID || '';
 
-// Хранилище обработанных платежей
+// Хранилище обработанных платежей (с персистентностью)
 const processedPayments = new Set();
+
+// Загружаем обработанные платежи из localStorage (если доступен)
+if (typeof localStorage !== 'undefined') {
+  try {
+    const stored = localStorage.getItem('processedPayments');
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      parsed.forEach(id => processedPayments.add(id));
+    }
+  } catch (error) {
+    console.log('Не удалось загрузить обработанные платежи из localStorage');
+  }
+}
+
+// Функция для сохранения обработанных платежей
+function saveProcessedPayments() {
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem('processedPayments', JSON.stringify([...processedPayments]));
+    } catch (error) {
+      console.log('Не удалось сохранить обработанные платежи в localStorage');
+    }
+  }
+}
 
 async function sendTelegram(text) {
   try {
@@ -179,7 +203,7 @@ function formatTelegram(payment, customer = null) {
   const amount = payment.amount / 100;
   const currency = payment.currency.toUpperCase();
   const email = customer?.email || 'N/A';
-  const country = customer?.address?.country || 'US';
+  const country = customer?.address?.country || customer?.metadata?.geo_country || 'US';
   
   // Генерируем случайный ID заказа
   const orderId = Math.random().toString(36).substring(2, 15);
@@ -221,7 +245,7 @@ function formatSlack(payment, customer = null) {
   const amount = payment.amount / 100;
   const currency = payment.currency.toUpperCase();
   const email = customer?.email || 'N/A';
-  const country = customer?.address?.country || 'US';
+  const country = customer?.address?.country || customer?.metadata?.geo_country || 'US';
   
   // Генерируем случайный ID заказа
   const orderId = Math.random().toString(36).substring(2, 15);
@@ -262,21 +286,25 @@ async function syncPayments() {
   console.log('🔄 СИНХРОНИЗАЦИЯ ПЛАТЕЖЕЙ...');
   
   try {
-    // Получаем платежи за последние 10 минут
-    const tenMinutesAgo = Math.floor((Date.now() - 10 * 60 * 1000) / 1000);
+    // Получаем платежи за последние 5 минут (уменьшили время)
+    const fiveMinutesAgo = Math.floor((Date.now() - 5 * 60 * 1000) / 1000);
     
     const payments = await stripe.paymentIntents.list({
-      limit: 100,
+      limit: 50, // Уменьшили лимит
       created: {
-        gte: tenMinutesAgo
+        gte: fiveMinutesAgo
       }
     });
 
     console.log(`📊 Найдено платежей: ${payments.data.length}`);
+    console.log(`📋 Уже обработано: ${processedPayments.size}`);
+
+    let processedCount = 0;
 
     for (const payment of payments.data) {
       // Пропускаем уже обработанные
       if (processedPayments.has(payment.id)) {
+        console.log(`⏭️ Пропускаю уже обработанный: ${payment.id}`);
         continue;
       }
 
@@ -284,28 +312,37 @@ async function syncPayments() {
       if (payment.status === 'succeeded') {
         console.log(`💳 Обрабатываю платеж: ${payment.id}`);
         
-        // Получаем данные клиента
-        const customer = payment.customer ? await stripe.customers.retrieve(payment.customer) : null;
-        
-        // Отправляем в Telegram
-        const telegramText = formatTelegram(payment, customer);
-        await sendTelegram(telegramText);
-        
-        // Отправляем в Slack
-        const slackText = formatSlack(payment, customer);
-        await sendSlack(slackText);
-        
-        // Сохраняем в Google Sheets
-        await saveToGoogleSheets(payment, customer);
-        
-        // Помечаем как обработанный
-        processedPayments.add(payment.id);
-        
-        console.log(`✅ Платеж ${payment.id} обработан`);
+        try {
+          // Получаем данные клиента
+          const customer = payment.customer ? await stripe.customers.retrieve(payment.customer) : null;
+          
+          // Отправляем в Telegram
+          const telegramText = formatTelegram(payment, customer);
+          const telegramSent = await sendTelegram(telegramText);
+          
+          // Отправляем в Slack
+          const slackText = formatSlack(payment, customer);
+          const slackSent = await sendSlack(slackText);
+          
+          // Сохраняем в Google Sheets
+          const sheetsSaved = await saveToGoogleSheets(payment, customer);
+          
+          // Помечаем как обработанный ТОЛЬКО если хотя бы одно уведомление отправилось
+          if (telegramSent || slackSent || sheetsSaved) {
+            processedPayments.add(payment.id);
+            saveProcessedPayments(); // Сохраняем в localStorage
+            processedCount++;
+            console.log(`✅ Платеж ${payment.id} обработан (Telegram: ${telegramSent}, Slack: ${slackSent}, Sheets: ${sheetsSaved})`);
+          } else {
+            console.log(`⚠️ Платеж ${payment.id} не обработан - все уведомления не отправились`);
+          }
+        } catch (error) {
+          console.error(`❌ Ошибка обработки платежа ${payment.id}:`, error.message);
+        }
       }
     }
 
-    console.log('✅ Синхронизация завершена');
+    console.log(`✅ Синхронизация завершена. Обработано новых: ${processedCount}`);
     
   } catch (error) {
     console.error('❌ Ошибка синхронизации:', error.message);
