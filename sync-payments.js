@@ -133,22 +133,34 @@ async function saveToGoogleSheets(payment, customer = null) {
     // Получаем metadata из customer
     const metadata = customer?.metadata || payment.metadata || {};
     
-    // Получаем простой ГЕО по IP
-    const ipAddress = metadata.ip_address || 'N/A';
+    // Получаем ГЕО данные (приоритет: metadata > IP lookup)
     let geo = 'N/A';
     
-    if (ipAddress !== 'N/A' && !ipAddress.includes(':')) {
-      try {
-        const geoResponse = await fetch(`https://ipinfo.io/${ipAddress}/json`);
-        const geoData = await geoResponse.json();
-        const country = geoData.country || 'N/A';
-        const city = geoData.city || 'N/A';
-        geo = `${country}, ${city}`;
-      } catch (error) {
-        console.log('Ошибка получения ГЕО:', error.message);
+    // Сначала пробуем взять из metadata (уже есть в Stripe)
+    if (metadata.geo_country && metadata.geo_city) {
+      geo = `${metadata.geo_country}, ${metadata.geo_city}`;
+      console.log(`📍 ГЕО из metadata: ${geo}`);
+    } else if (metadata.geo_country) {
+      geo = metadata.geo_country;
+      console.log(`📍 ГЕО страна из metadata: ${geo}`);
+    } else {
+      // Если нет в metadata, пробуем по IP
+      const ipAddress = metadata.ip_address || 'N/A';
+      if (ipAddress !== 'N/A' && !ipAddress.includes(':')) {
+        try {
+          const geoResponse = await fetch(`https://ipinfo.io/${ipAddress}/json`);
+          const geoData = await geoResponse.json();
+          const country = geoData.country || 'N/A';
+          const city = geoData.city || 'N/A';
+          geo = `${country}, ${city}`;
+          console.log(`📍 ГЕО по IP: ${geo}`);
+        } catch (error) {
+          console.log('Ошибка получения ГЕО по IP:', error.message);
+        }
+      } else if (ipAddress.includes(':')) {
+        geo = 'IPv6';
+        console.log(`📍 IPv6 адрес: ${ipAddress}`);
       }
-    } else if (ipAddress.includes(':')) {
-      geo = 'IPv6';
     }
     
     // Подготавливаем данные
@@ -203,7 +215,8 @@ function formatTelegram(payment, customer = null) {
   const amount = payment.amount / 100;
   const currency = payment.currency.toUpperCase();
   const email = customer?.email || 'N/A';
-  const country = customer?.address?.country || customer?.metadata?.geo_country || 'US';
+  const metadata = customer?.metadata || {};
+  const country = customer?.address?.country || metadata.geo_country || 'US';
   
   // Генерируем случайный ID заказа
   const orderId = Math.random().toString(36).substring(2, 15);
@@ -245,7 +258,8 @@ function formatSlack(payment, customer = null) {
   const amount = payment.amount / 100;
   const currency = payment.currency.toUpperCase();
   const email = customer?.email || 'N/A';
-  const country = customer?.address?.country || customer?.metadata?.geo_country || 'US';
+  const metadata = customer?.metadata || {};
+  const country = customer?.address?.country || metadata.geo_country || 'US';
   
   // Генерируем случайный ID заказа
   const orderId = Math.random().toString(36).substring(2, 15);
