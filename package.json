@@ -7,7 +7,7 @@
     "dev": "tsx src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "render-postbuild": "npm run build"
+    "render-postbuild": "npm run build && npm run start"
   },
   "dependencies": {
     "body-parser": "^1.20.2",
