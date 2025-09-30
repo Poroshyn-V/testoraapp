@@ -205,6 +205,83 @@ app.get('/health', (req, res) => {
   res.status(200).send('ok');
 });
 
+// Test webhook simulation endpoint
+app.post('/api/test-webhook-simulation', async (req, res) => {
+  try {
+    console.log('🔍 Симулируем webhook событие...');
+    
+    // Получаем последний платеж
+    const payments = await stripe.paymentIntents.list({ limit: 1 });
+    if (payments.data.length === 0) {
+      return res.json({ success: false, message: 'Нет платежей для тестирования' });
+    }
+    
+    const payment = payments.data[0];
+    let customer = null;
+    if (payment.customer) {
+      customer = await stripe.customers.retrieve(payment.customer);
+    }
+    
+    console.log('👤 Customer data:', JSON.stringify(customer?.metadata, null, 2));
+    
+    // Симулируем webhook событие
+    const mockEvent = {
+      type: 'payment_intent.succeeded',
+      data: {
+        object: payment
+      }
+    };
+    
+    // Формируем данные как в webhook
+    const orderId = payment.id.substring(0, 9);
+    const amount = (payment.amount / 100).toFixed(2);
+    const currency = payment.currency.toUpperCase();
+    const email = customer?.email || 'N/A';
+    const country = customer?.metadata?.geo_country || 'N/A';
+    const city = customer?.metadata?.geo_city || '';
+    const geo = city ? `${city}, ${country}` : country;
+    
+    const telegramText = `🟢 Order ${orderId} was processed!
+---------------------------
+💳 card
+💰 ${amount} ${currency}
+🏷️ N/A
+---------------------------
+📧 ${email}
+---------------------------
+🌪️ ${orderId}
+📍 ${country}
+🧍 N/A
+🔗 N/A
+${customer?.metadata?.utm_source || 'N/A'}
+${customer?.metadata?.utm_medium || 'N/A'}
+${customer?.metadata?.ad_name || 'N/A'}
+${customer?.metadata?.adset_name || 'N/A'}
+${customer?.metadata?.utm_campaign || 'N/A'}`;
+    
+    return res.json({
+      success: true,
+      message: 'Webhook симуляция завершена',
+      telegram_text: telegramText,
+      customer_metadata: customer?.metadata,
+      geo_data: geo,
+      utm_source: customer?.metadata?.utm_source,
+      utm_medium: customer?.metadata?.utm_medium,
+      utm_campaign: customer?.metadata?.utm_campaign,
+      ad_name: customer?.metadata?.ad_name,
+      adset_name: customer?.metadata?.adset_name
+    });
+    
+  } catch (error) {
+    console.log('❌ Ошибка симуляции webhook:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Ошибка симуляции',
+      error: error.message
+    });
+  }
+});
+
 // Test webhook data endpoint
 app.post('/api/test-webhook-data', async (req, res) => {
   try {
