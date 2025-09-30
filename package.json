@@ -4,10 +4,8 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "tsx src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "render-postbuild": "npm run build"
+    "dev": "node index.js",
+    "start": "node index.js"
   },
   "dependencies": {
     "body-parser": "^1.20.2",
