@@ -113,20 +113,81 @@ ${customer?.metadata?.utm_campaign || 'N/A'}`;
         console.log('✅ Slack уведомление отправлено');
       }
       
-      // Автоматически обновляем Google Sheets через API
-      try {
-        const apiResponse = await fetch(`https://stripe-ops.onrender.com/api/export-all-payments`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        });
-        
-        if (apiResponse.ok) {
-          console.log('✅ Google Sheets автоматически обновлен через API');
-        } else {
-          console.log('❌ Ошибка автоматического обновления Google Sheets');
+      // Добавляем новую покупку в Google Sheets
+      if (process.env.GOOGLE_SHEETS_DOC_ID && process.env.GOOGLE_SERVICE_EMAIL && process.env.GOOGLE_SERVICE_PRIVATE_KEY) {
+        try {
+          // Создаем JWT токен для Google Sheets
+          const header = { "alg": "RS256", "typ": "JWT" };
+          const now = Math.floor(Date.now() / 1000);
+          const payload = {
+            iss: process.env.GOOGLE_SERVICE_EMAIL,
+            scope: 'https://www.googleapis.com/auth/spreadsheets',
+            aud: 'https://oauth2.googleapis.com/token',
+            iat: now,
+            exp: now + 3600
+          };
+
+          const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
+          const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+
+          const privateKey = process.env.GOOGLE_SERVICE_PRIVATE_KEY
+            .replace(/\\n/g, '\n')
+            .replace(/"/g, '');
+
+          const signature = crypto.createSign('RSA-SHA256')
+            .update(`${encodedHeader}.${encodedPayload}`)
+            .sign(privateKey, 'base64url');
+
+          const jwt = `${encodedHeader}.${encodedPayload}.${signature}`;
+
+          // Получаем access token
+          const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
+          });
+
+          if (tokenResponse.ok) {
+            const tokenData = await tokenResponse.json();
+            
+            // Добавляем новую строку в Google Sheets
+            const newRow = [
+              paymentData.id,
+              amount,
+              currency,
+              'succeeded',
+              new Date(paymentData.created * 1000).toISOString(),
+              customer?.id || 'N/A',
+              customer?.email || 'N/A',
+              geo,
+              customer?.metadata?.utm_source || 'N/A',
+              customer?.metadata?.utm_medium || 'N/A',
+              customer?.metadata?.utm_campaign || 'N/A',
+              customer?.metadata?.utm_content || 'N/A',
+              customer?.metadata?.utm_term || 'N/A',
+              customer?.metadata?.ad_name || 'N/A',
+              customer?.metadata?.adset_name || 'N/A'
+            ];
+
+            const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:O:append?valueInputOption=RAW`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${tokenData.access_token}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({ values: [newRow] })
+            });
+
+            if (sheetsResponse.ok) {
+              console.log('✅ Google Sheets обновлен новой покупкой');
+            } else {
+              const errorText = await sheetsResponse.text();
+              console.log('❌ Ошибка обновления Google Sheets:', errorText);
+            }
+          }
+        } catch (error) {
+          console.log('❌ Ошибка Google Sheets:', error.message);
         }
-      } catch (error) {
-        console.log('❌ Ошибка вызова API для обновления Google Sheets:', error.message);
       }
       
       return res.json({ ok: true });
