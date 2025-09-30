@@ -111,6 +111,61 @@ app.get('/health', (req, res) => {
   res.status(200).send('ok');
 });
 
+// Test webhook data endpoint
+app.post('/api/test-webhook-data', async (req, res) => {
+  try {
+    console.log('🔍 Тестируем webhook данные...');
+    
+    // Получаем последние платежи
+    const payments = await stripe.paymentIntents.list({ limit: 5 });
+    console.log(`📊 Найдено: ${payments.data.length} платежей`);
+    
+    const results = [];
+    
+    for (const payment of payments.data) {
+      let customer = null;
+      if (payment.customer) {
+        customer = await stripe.customers.retrieve(payment.customer);
+      }
+      
+      const paymentData = {
+        payment_id: payment.id,
+        amount: payment.amount,
+        currency: payment.currency,
+        status: payment.status,
+        created: payment.created,
+        customer_id: payment.customer,
+        customer_email: customer?.email,
+        customer_metadata: customer?.metadata,
+        customer_address: customer?.address,
+        payment_metadata: payment.metadata
+      };
+      
+      results.push(paymentData);
+      console.log(`📝 Payment ${payment.id}:`, {
+        customer_email: customer?.email,
+        customer_metadata: customer?.metadata,
+        payment_metadata: payment.metadata
+      });
+    }
+    
+    return res.json({
+      success: true,
+      message: 'Webhook данные проанализированы',
+      payments_count: results.length,
+      payments: results
+    });
+    
+  } catch (error) {
+    console.log('❌ Ошибка тестирования webhook данных:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Ошибка тестирования',
+      error: error.message
+    });
+  }
+});
+
 // Test page
 app.get('/test', (req, res) => {
   res.send(`
