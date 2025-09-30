@@ -23,15 +23,33 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
   }
 
   try {
-    if (event.type === 'checkout.session.completed') {
-      const session = event.data.object;
-      console.log('🎉 Новая покупка через webhook:', session.id);
+    if (event.type === 'checkout.session.completed' || event.type === 'payment_intent.succeeded') {
+      let session, paymentIntent;
+      
+      if (event.type === 'checkout.session.completed') {
+        session = event.data.object;
+        console.log('🎉 Новая покупка через checkout.session.completed:', session.id);
+      } else if (event.type === 'payment_intent.succeeded') {
+        paymentIntent = event.data.object;
+        console.log('🎉 Новая покупка через payment_intent.succeeded:', paymentIntent.id);
+      }
       
       // Получаем полную информацию о клиенте
       let customer = null;
-      if (session.customer) {
-        customer = await stripe.customers.retrieve(session.customer);
-        console.log('👤 Customer data:', JSON.stringify(customer, null, 2));
+      let paymentData = null;
+      
+      if (session) {
+        if (session.customer) {
+          customer = await stripe.customers.retrieve(session.customer);
+          console.log('👤 Customer data from session:', JSON.stringify(customer, null, 2));
+        }
+        paymentData = session;
+      } else if (paymentIntent) {
+        if (paymentIntent.customer) {
+          customer = await stripe.customers.retrieve(paymentIntent.customer);
+          console.log('👤 Customer data from payment_intent:', JSON.stringify(customer, null, 2));
+        }
+        paymentData = paymentIntent;
       }
       
       // Получаем GEO данные
@@ -46,9 +64,9 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
       console.log('📊 Customer metadata:', customer?.metadata);
       
       // Формируем красивое уведомление
-      const orderId = session.id.substring(0, 9); // Берем первые 9 символов
-      const amount = (session.amount_total / 100).toFixed(2);
-      const currency = session.currency?.toUpperCase() || 'USD';
+      const orderId = paymentData.id.substring(0, 9); // Берем первые 9 символов
+      const amount = session ? (session.amount_total / 100).toFixed(2) : (paymentIntent.amount / 100).toFixed(2);
+      const currency = (session?.currency || paymentIntent?.currency)?.toUpperCase() || 'USD';
       const email = customer?.email || 'N/A';
       const country = customer?.metadata?.geo_country || 'N/A';
       const city = customer?.metadata?.geo_city || '';
