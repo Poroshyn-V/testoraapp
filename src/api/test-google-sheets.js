@@ -1,8 +1,10 @@
+import express from 'express';
 import fetch from 'node-fetch';
 import crypto from 'crypto';
 
-// Тестируем Google Sheets API напрямую
-async function testGoogleSheets() {
+const router = express.Router();
+
+router.post('/test-google-sheets', async (req, res) => {
   console.log('🔍 Тестируем Google Sheets API...');
   
   const GOOGLE_SHEETS_DOC_ID = process.env.GOOGLE_SHEETS_DOC_ID;
@@ -14,8 +16,15 @@ async function testGoogleSheets() {
   console.log('GOOGLE_SERVICE_PRIVATE_KEY:', GOOGLE_SERVICE_PRIVATE_KEY ? 'Настроен' : 'НЕ НАСТРОЕН');
   
   if (!GOOGLE_SHEETS_DOC_ID || !GOOGLE_SERVICE_EMAIL || !GOOGLE_SERVICE_PRIVATE_KEY) {
-    console.log('❌ Google Sheets не настроен полностью');
-    return;
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Google Sheets не настроен полностью',
+      details: {
+        GOOGLE_SHEETS_DOC_ID: !!GOOGLE_SHEETS_DOC_ID,
+        GOOGLE_SERVICE_EMAIL: !!GOOGLE_SERVICE_EMAIL,
+        GOOGLE_SERVICE_PRIVATE_KEY: !!GOOGLE_SERVICE_PRIVATE_KEY
+      }
+    });
   }
   
   try {
@@ -53,7 +62,11 @@ async function testGoogleSheets() {
     if (!tokenResponse.ok) {
       const errorText = await tokenResponse.text();
       console.log('❌ Ошибка получения токена:', errorText);
-      return;
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Ошибка получения токена',
+        error: errorText
+      });
     }
     
     const tokenData = await tokenResponse.json();
@@ -75,14 +88,29 @@ async function testGoogleSheets() {
     
     if (sheetsResponse.ok) {
       console.log('✅ Google Sheets тест успешен!');
+      return res.status(200).json({ 
+        success: true, 
+        message: 'Google Sheets тест успешен!',
+        sheet_url: `https://docs.google.com/spreadsheets/d/${GOOGLE_SHEETS_DOC_ID}`
+      });
     } else {
       const errorText = await sheetsResponse.text();
       console.log('❌ Google Sheets error:', errorText);
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Ошибка записи в Google Sheets',
+        error: errorText
+      });
     }
     
   } catch (error) {
     console.log('❌ Google Sheets error:', error.message);
+    return res.status(500).json({ 
+      success: false, 
+      message: 'Ошибка Google Sheets',
+      error: error.message
+    });
   }
-}
+});
 
-testGoogleSheets();
+export default router;
