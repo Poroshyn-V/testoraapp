@@ -1,0 +1,29 @@
+{
+  "name": "stripe-ops",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "render-postbuild": "npm run build"
+  },
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "google-auth-library": "^10.3.0",
+    "google-spreadsheet": "^4.1.4",
+    "node-fetch": "^3.3.2",
+    "pino": "^9.3.2",
+    "stripe": "^16.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.11.30",
+    "@vercel/node": "^3.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}
