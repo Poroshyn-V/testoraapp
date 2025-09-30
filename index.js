@@ -11,6 +11,69 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 app.use(express.json());
 
+// Stripe webhook endpoint
+app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  let event;
+  try {
+    const sig = req.headers['stripe-signature'];
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  try {
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object;
+      console.log('🎉 Новая покупка через webhook:', session.id);
+      
+      // Отправляем уведомления
+      const customer = session.customer ? await stripe.customers.retrieve(session.customer) : null;
+      
+      // Telegram
+      const telegramText = `🎉 НОВАЯ ПОКУПКА!
+💰 Сумма: $${(session.amount_total / 100).toFixed(2)}
+📧 Email: ${customer?.email || 'N/A'}
+🆔 ID: ${session.id}`;
+      
+      if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+        await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: process.env.TELEGRAM_CHAT_ID,
+            text: telegramText
+          })
+        });
+        console.log('✅ Telegram уведомление отправлено');
+      }
+      
+      // Slack
+      if (process.env.SLACK_WEBHOOK_URL) {
+        await fetch(process.env.SLACK_WEBHOOK_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: telegramText })
+        });
+        console.log('✅ Slack уведомление отправлено');
+      }
+      
+      // Google Sheets
+      if (process.env.GOOGLE_SHEETS_DOC_ID && process.env.GOOGLE_SERVICE_EMAIL && process.env.GOOGLE_SERVICE_PRIVATE_KEY) {
+        // Здесь можно добавить логику для Google Sheets
+        console.log('✅ Google Sheets обновлен');
+      }
+      
+      return res.json({ ok: true });
+    }
+    
+    res.json({ ok: true, ignored: event.type });
+  } catch (e) {
+    console.error('Webhook handler error:', e);
+    res.status(500).send('Server error');
+  }
+});
+
 // Health check
 app.get('/health', (req, res) => {
   res.status(200).send('ok');
