@@ -27,15 +27,37 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
       const session = event.data.object;
       console.log('🎉 Новая покупка через webhook:', session.id);
       
-      // Отправляем уведомления
-      const customer = session.customer ? await stripe.customers.retrieve(session.customer) : null;
+      // Получаем полную информацию о клиенте
+      let customer = null;
+      if (session.customer) {
+        customer = await stripe.customers.retrieve(session.customer);
+        console.log('👤 Customer data:', JSON.stringify(customer, null, 2));
+      }
+      
+      // Получаем GEO данные
+      let geoData = 'N/A';
+      if (customer?.metadata?.geo_country && customer?.metadata?.geo_city) {
+        geoData = `${customer.metadata.geo_country}, ${customer.metadata.geo_city}`;
+      } else if (customer?.address?.country) {
+        geoData = customer.address.country;
+      }
+      
+      console.log('🌍 GEO Data:', geoData);
+      console.log('📊 Customer metadata:', customer?.metadata);
+      
+      // Формируем полное уведомление
+      const telegramText = `🎉 НОВАЯ ПОКУПКА!
+💰 Сумма: $${(session.amount_total / 100).toFixed(2)} ${session.currency?.toUpperCase() || 'USD'}
+📧 Email: ${customer?.email || 'N/A'}
+🆔 ID: ${session.id}
+🌍 GEO: ${geoData}
+📊 UTM Source: ${customer?.metadata?.utm_source || 'N/A'}
+📊 UTM Medium: ${customer?.metadata?.utm_medium || 'N/A'}
+📊 UTM Campaign: ${customer?.metadata?.utm_campaign || 'N/A'}
+📊 Ad Name: ${customer?.metadata?.ad_name || 'N/A'}
+📊 Adset Name: ${customer?.metadata?.adset_name || 'N/A'}`;
       
       // Telegram
-      const telegramText = `🎉 НОВАЯ ПОКУПКА!
-💰 Сумма: $${(session.amount_total / 100).toFixed(2)}
-📧 Email: ${customer?.email || 'N/A'}
-🆔 ID: ${session.id}`;
-      
       if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
         await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
           method: 'POST',
@@ -58,10 +80,20 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
         console.log('✅ Slack уведомление отправлено');
       }
       
-      // Google Sheets
-      if (process.env.GOOGLE_SHEETS_DOC_ID && process.env.GOOGLE_SERVICE_EMAIL && process.env.GOOGLE_SERVICE_PRIVATE_KEY) {
-        // Здесь можно добавить логику для Google Sheets
-        console.log('✅ Google Sheets обновлен');
+      // Автоматически обновляем Google Sheets через API
+      try {
+        const apiResponse = await fetch(`https://stripe-ops.onrender.com/api/export-all-payments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        
+        if (apiResponse.ok) {
+          console.log('✅ Google Sheets автоматически обновлен через API');
+        } else {
+          console.log('❌ Ошибка автоматического обновления Google Sheets');
+        }
+      } catch (error) {
+        console.log('❌ Ошибка вызова API для обновления Google Sheets:', error.message);
       }
       
       return res.json({ ok: true });
