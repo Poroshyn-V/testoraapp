@@ -45,17 +45,32 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
       console.log('🌍 GEO Data:', geoData);
       console.log('📊 Customer metadata:', customer?.metadata);
       
-      // Формируем полное уведомление
-      const telegramText = `🎉 НОВАЯ ПОКУПКА!
-💰 Сумма: $${(session.amount_total / 100).toFixed(2)} ${session.currency?.toUpperCase() || 'USD'}
-📧 Email: ${customer?.email || 'N/A'}
-🆔 ID: ${session.id}
-🌍 GEO: ${geoData}
-📊 UTM Source: ${customer?.metadata?.utm_source || 'N/A'}
-📊 UTM Medium: ${customer?.metadata?.utm_medium || 'N/A'}
-📊 UTM Campaign: ${customer?.metadata?.utm_campaign || 'N/A'}
-📊 Ad Name: ${customer?.metadata?.ad_name || 'N/A'}
-📊 Adset Name: ${customer?.metadata?.adset_name || 'N/A'}`;
+      // Формируем красивое уведомление
+      const orderId = session.id.substring(0, 9); // Берем первые 9 символов
+      const amount = (session.amount_total / 100).toFixed(2);
+      const currency = session.currency?.toUpperCase() || 'USD';
+      const email = customer?.email || 'N/A';
+      const country = customer?.metadata?.geo_country || 'N/A';
+      const city = customer?.metadata?.geo_city || '';
+      const geo = city ? `${city}, ${country}` : country;
+      
+      const telegramText = `🟢 Order ${orderId} was processed!
+---------------------------
+💳 card
+💰 ${amount} ${currency}
+🏷️ N/A
+---------------------------
+📧 ${email}
+---------------------------
+🌪️ ${orderId}
+📍 ${country}
+🧍 N/A
+🔗 N/A
+${customer?.metadata?.utm_source || 'N/A'}
+${customer?.metadata?.utm_medium || 'N/A'}
+${customer?.metadata?.ad_name || 'N/A'}
+${customer?.metadata?.adset_name || 'N/A'}
+${customer?.metadata?.utm_campaign || 'N/A'}`;
       
       // Telegram
       if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
