@@ -3,6 +3,7 @@ import pino from 'pino';
 import webhookRouter from './api/stripe-webhook.js';
 import createCheckoutRouter from './api/create-checkout.js';
 import sendLastPaymentRouter from './api/send-last-payment.js';
+import syncPaymentsRouter from './api/sync-payments-endpoint.js';
 import { ENV } from './lib/env.js';
 const app = express();
 const logger = pino({ level: 'info' });
@@ -93,6 +94,12 @@ app.get('/test', (_req, res) => {
                 background: #ccc;
                 cursor: not-allowed;
             }
+            .button.sync {
+                background: #28a745;
+            }
+            .button.sync:hover {
+                background: #218838;
+            }
             .result {
                 margin-top: 20px;
                 padding: 15px;
@@ -113,9 +120,16 @@ app.get('/test', (_req, res) => {
     </head>
     <body>
         <div class="container">
-            <h1>🚀 Test API - Send Last Payment</h1>
-            <p>Нажмите кнопку ниже, чтобы отправить последнюю покупку в Telegram и Slack:</p>
+            <h1>🚀 Test API - Payment Operations</h1>
             
+            <p><strong>🔄 Полная синхронизация с Google Sheets:</strong></p>
+            <button id="syncButton" class="button sync" onclick="syncPayments()">
+                📊 Синхронизировать все покупки
+            </button>
+            
+            <hr style="margin: 30px 0;">
+            
+            <p><strong>📱 Отправить уведомление о последней покупке:</strong></p>
             <button id="sendButton" class="button" onclick="sendLastPayment()">
                 📱 Отправить последнюю покупку
             </button>
@@ -124,6 +138,52 @@ app.get('/test', (_req, res) => {
         </div>
 
         <script>
+            async function syncPayments() {
+                const button = document.getElementById('syncButton');
+                const result = document.getElementById('result');
+                
+                button.disabled = true;
+                button.textContent = '⏳ Синхронизация...';
+                result.innerHTML = '';
+                
+                try {
+                    const response = await fetch('/api/sync-payments', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        result.className = 'result success';
+                        let paymentsHtml = '';
+                        if (data.payments && data.payments.length > 0) {
+                            paymentsHtml = '\\n\\n📋 Обработанные покупки:\\n' + 
+                                data.payments.map(p => 
+                                    \`- \${p.session_id}: \${p.email} (\${p.amount} USD)\`
+                                ).join('\\n');
+                        }
+                        result.innerHTML = \`✅ СИНХРОНИЗАЦИЯ ЗАВЕРШЕНА!
+                        
+📊 Всего сессий: \${data.total_sessions}
+✨ Обработано: \${data.processed}\${paymentsHtml}
+
+🎉 Проверьте Google Sheets!\`;
+                    } else {
+                        result.className = 'result error';
+                        result.innerHTML = \`❌ ОШИБКА: \${data.message}\\n\${data.error || ''}\`;
+                    }
+                } catch (error) {
+                    result.className = 'result error';
+                    result.innerHTML = \`❌ ОШИБКА СЕТИ: \${error.message}\`;
+                } finally {
+                    button.disabled = false;
+                    button.textContent = '📊 Синхронизировать все покупки';
+                }
+            }
+        
             async function sendLastPayment() {
                 const button = document.getElementById('sendButton');
                 const result = document.getElementById('result');
@@ -174,6 +234,7 @@ app.use(express.json());
 app.use(webhookRouter);
 app.use('/api', createCheckoutRouter);
 app.use('/api', sendLastPaymentRouter);
+app.use('/api', syncPaymentsRouter);
 app.listen(ENV.PORT, () => {
     logger.info(`Server listening on port ${ENV.PORT}`);
 });
