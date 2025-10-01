@@ -1,5 +1,7 @@
 import express from 'express';
 import Stripe from 'stripe';
+import { GoogleSpreadsheet } from 'google-spreadsheet';
+import { JWT } from 'google-auth-library';
 import { ENV } from '../lib/env.js';
 import { sendTelegram } from '../lib/telegram.js';
 import { formatTelegram } from '../lib/format.js';
@@ -60,6 +62,26 @@ router.post('/sync-payments', async (req, res) => {
     
     console.log(`📊 Сгруппировано покупок: ${groupedPurchases.size}`);
     
+    // Инициализируем Google Sheets
+    const serviceAccountAuth = new JWT({
+      email: ENV.GOOGLE_SERVICE_EMAIL,
+      key: ENV.GOOGLE_SERVICE_PRIVATE_KEY,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+
+    const doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
+    await doc.loadInfo();
+    
+    let sheet = doc.sheetsByTitle['Testora'];
+    if (!sheet) {
+      console.error('❌ Sheet "Testora" not found!');
+      return res.status(500).json({ success: false, message: 'Sheet not found' });
+    }
+    
+    // Загружаем существующие строки
+    const rows = await sheet.getRows();
+    console.log(`📋 Existing rows in sheet: ${rows.length}`);
+    
     let newPurchases = 0;
     const processedPurchases: any[] = [];
     
@@ -71,6 +93,14 @@ router.post('/sync-payments', async (req, res) => {
         
         // Генерируем Purchase ID (как в старом коде!)
         const purchaseId = `purchase_${customer?.id}_${dateKey.split('_')[1]}`;
+        
+        // Проверяем существует ли уже эта покупка
+        const exists = rows.some((row: any) => row.get('Purchase ID') === purchaseId);
+        
+        if (exists) {
+          console.log(`⏭️  Purchase already exists: ${purchaseId}`);
+          continue;
+        }
         
         // Формируем GEO данные
         let geoData = 'N/A';
@@ -86,151 +116,85 @@ router.post('/sync-payments', async (req, res) => {
           .replace('T', ' ')
           .replace('Z', ' UTC+1');
         
-        // Проверяем существует ли уже эта покупка в Google Sheets
-        const sheetsCheckUrl = `https://sheets.googleapis.com/v4/spreadsheets/${ENV.GOOGLE_SHEETS_DOC_ID}/values/A:Q`;
-        
-        const tokenResponse = await fetch(
-          'https://oauth2.googleapis.com/token',
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              client_email: ENV.GOOGLE_SERVICE_EMAIL,
-              private_key: ENV.GOOGLE_SERVICE_PRIVATE_KEY.replace(/\\n/g, '\n'),
-              scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-              grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer'
-            })
-          }
-        );
-        
-        if (!tokenResponse.ok) {
-          console.error('❌ Error getting token');
-          continue;
-        }
-        
-        const tokenData: any = await tokenResponse.json();
-        
-        const checkResponse = await fetch(sheetsCheckUrl, {
-          headers: {
-            'Authorization': `Bearer ${tokenData.access_token}`
-          }
+        // Добавляем новую строку
+        await sheet.addRow({
+          'Purchase ID': purchaseId,
+          'Total Amount': (group.totalAmount / 100).toFixed(2),
+          'Currency': firstPayment.currency.toUpperCase(),
+          'Status': 'succeeded',
+          'Created UTC': utcTime,
+          'Created Local (UTC+1)': localTime,
+          'Customer ID': customer?.id || 'N/A',
+          'Customer Email': customer?.email || 'N/A',
+          'GEO': geoData,
+          'UTM Source': customer?.metadata?.utm_source || 'N/A',
+          'UTM Medium': customer?.metadata?.utm_medium || 'N/A',
+          'UTM Campaign': customer?.metadata?.utm_campaign || 'N/A',
+          'UTM Content': customer?.metadata?.utm_content || 'N/A',
+          'UTM Term': customer?.metadata?.utm_term || 'N/A',
+          'Ad Name': customer?.metadata?.ad_name || 'N/A',
+          'Adset Name': customer?.metadata?.adset_name || 'N/A',
+          'Payment Count': group.payments.length
         });
         
-        let exists = false;
-        if (checkResponse.ok) {
-          const existingData: any = await checkResponse.json();
-          const rows = existingData.values || [];
+        console.log(`✅ Added to Google Sheets: ${purchaseId}`);
+        
+        // Отправляем уведомления ТОЛЬКО для новых покупок
+        try {
+          // Конвертируем в формат для уведомлений
+          const sessionLike: any = {
+            id: purchaseId,
+            amount_total: group.totalAmount,
+            currency: firstPayment.currency,
+            created: firstPayment.created,
+            customer: customer?.id,
+            customer_details: {
+              email: customer?.email,
+              address: null
+            },
+            customer_email: customer?.email,
+            payment_method_types: ['card'],
+            payment_status: 'succeeded',
+            status: 'succeeded',
+            metadata: {
+              ...customer?.metadata,
+              payment_count: `${group.payments.length} payment${group.payments.length > 1 ? 's' : ''}`
+            },
+            mode: 'payment',
+            client_reference_id: null
+          };
           
-          // Проверяем существует ли purchaseId
-          for (let i = 1; i < rows.length; i++) {
-            if (rows[i][0] === purchaseId) {
-              exists = true;
-              break;
-            }
-          }
+          const text = formatTelegram(sessionLike, customer?.metadata || {});
+          await sendTelegram(text);
+          console.log('📱 Telegram notification sent');
+        } catch (error: any) {
+          console.error('Error sending Telegram:', error.message);
         }
         
-        if (exists) {
-          console.log(`⏭️  Purchase already exists: ${purchaseId}`);
-          continue;
+        try {
+          const sessionLike: any = {
+            id: purchaseId,
+            amount_total: group.totalAmount,
+            currency: firstPayment.currency,
+            customer_details: { email: customer?.email },
+            customer_email: customer?.email,
+            metadata: customer?.metadata
+          };
+          
+          const slackText = formatSlack(sessionLike, customer?.metadata || {});
+          await sendSlack(slackText);
+          console.log('💬 Slack notification sent');
+        } catch (error: any) {
+          console.error('Error sending Slack:', error.message);
         }
         
-        // Добавляем новую покупку в Google Sheets
-        const row = [
-          purchaseId,
-          (group.totalAmount / 100).toFixed(2),
-          firstPayment.currency.toUpperCase(),
-          'succeeded',
-          utcTime,
-          localTime,
-          customer?.id || 'N/A',
-          customer?.email || 'N/A',
-          geoData,
-          customer?.metadata?.utm_source || 'N/A',
-          customer?.metadata?.utm_medium || 'N/A',
-          customer?.metadata?.utm_campaign || 'N/A',
-          customer?.metadata?.utm_content || 'N/A',
-          customer?.metadata?.utm_term || 'N/A',
-          customer?.metadata?.ad_name || 'N/A',
-          customer?.metadata?.adset_name || 'N/A',
-          group.payments.length
-        ];
-        
-        const appendUrl = `https://sheets.googleapis.com/v4/spreadsheets/${ENV.GOOGLE_SHEETS_DOC_ID}/values/A:Q:append?valueInputOption=RAW`;
-        
-        const appendResponse = await fetch(appendUrl, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${tokenData.access_token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            values: [row]
-          })
+        newPurchases++;
+        processedPurchases.push({
+          purchase_id: purchaseId,
+          email: customer?.email || 'N/A',
+          amount: (group.totalAmount / 100).toFixed(2),
+          payments_count: group.payments.length
         });
-        
-        if (appendResponse.ok) {
-          console.log(`✅ Added to Google Sheets: ${purchaseId}`);
-          
-          // Отправляем уведомления ТОЛЬКО для новых покупок
-          try {
-            // Конвертируем в формат для уведомлений
-            const sessionLike: any = {
-              id: purchaseId,
-              amount_total: group.totalAmount,
-              currency: firstPayment.currency,
-              created: firstPayment.created,
-              customer: customer?.id,
-              customer_details: {
-                email: customer?.email,
-                address: null
-              },
-              customer_email: customer?.email,
-              payment_method_types: ['card'],
-              payment_status: 'succeeded',
-              status: 'succeeded',
-              metadata: {
-                ...customer?.metadata,
-                payment_count: `${group.payments.length} payment${group.payments.length > 1 ? 's' : ''}`
-              },
-              mode: 'payment',
-              client_reference_id: null
-            };
-            
-            const text = formatTelegram(sessionLike, customer?.metadata || {});
-            await sendTelegram(text);
-            console.log('📱 Telegram notification sent');
-          } catch (error: any) {
-            console.error('Error sending Telegram:', error.message);
-          }
-          
-          try {
-            const sessionLike: any = {
-              id: purchaseId,
-              amount_total: group.totalAmount,
-              currency: firstPayment.currency,
-              customer_details: { email: customer?.email },
-              customer_email: customer?.email,
-              metadata: customer?.metadata
-            };
-            
-            const slackText = formatSlack(sessionLike, customer?.metadata || {});
-            await sendSlack(slackText);
-            console.log('💬 Slack notification sent');
-          } catch (error: any) {
-            console.error('Error sending Slack:', error.message);
-          }
-          
-          newPurchases++;
-          processedPurchases.push({
-            purchase_id: purchaseId,
-            email: customer?.email || 'N/A',
-            amount: (group.totalAmount / 100).toFixed(2),
-            payments_count: group.payments.length
-          });
-        } else {
-          console.error(`❌ Failed to add to Sheets: ${purchaseId}`);
-        }
         
       } catch (error: any) {
         console.error(`Error processing purchase ${dateKey}:`, error.message);
