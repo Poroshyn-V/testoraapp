@@ -975,7 +975,22 @@ app.post('/api/export-all-payments', async (req, res) => {
     
     console.log(`📝 Подготовлено ${exportData.length} строк для экспорта`);
     
-    // Очищаем лист и записываем новые данные
+    // Сначала очищаем весь лист
+    const clearResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:Z:clear`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${tokenData.access_token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    if (clearResponse.ok) {
+      console.log('✅ Лист очищен');
+    } else {
+      console.log('⚠️ Не удалось очистить лист, продолжаем...');
+    }
+
+    // Теперь записываем новые данные
     const range = `A1:P${exportData.length}`;
     const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/${range}?valueInputOption=RAW`, {
       method: 'PUT',
