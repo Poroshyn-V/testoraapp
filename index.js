@@ -815,6 +815,9 @@ app.post('/api/export-all-payments', async (req, res) => {
   }
 });
 
+// Хранилище обработанных платежей
+const processedPayments = new Set();
+
 // API polling каждые 5 минут для Google Sheets
 setInterval(async () => {
   try {
@@ -827,8 +830,9 @@ setInterval(async () => {
     });
     
     for (const payment of payments.data) {
-      if (payment.status === 'succeeded' && payment.customer) {
+      if (payment.status === 'succeeded' && payment.customer && !processedPayments.has(payment.id)) {
         try {
+          processedPayments.add(payment.id);
           const customer = await stripe.customers.retrieve(payment.customer);
           
           // Проверяем, есть ли уже в Google Sheets
@@ -873,7 +877,11 @@ setInterval(async () => {
                 geoData = `${customer.metadata.geo_city}, ${customer.metadata.geo_country}`;
               } else if (customer?.address?.country) {
                 geoData = customer.address.country;
+              } else if (customer?.metadata?.geo_country) {
+                geoData = customer.metadata.geo_country;
               }
+
+              console.log('🔍 Customer metadata for Google Sheets:', JSON.stringify(customer?.metadata, null, 2));
 
               // Добавляем новую строку в Google Sheets
               const newRow = [
