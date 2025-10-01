@@ -848,31 +848,85 @@ app.get('/api/export-all-payments-now', async (req, res) => {
           exportData.push(row);
         }
         
-        // Записываем все данные
-        const range = `A1:Q${exportData.length}`;
-        const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/${range}?valueInputOption=RAW`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${tokenData.access_token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ values: exportData })
-        });
+    // Проверяем существующие данные в Google Sheets
+    const existingResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:Q?valueInputOption=RAW`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${tokenData.access_token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    let existingData = [];
+    if (existingResponse.ok) {
+      const existing = await existingResponse.json();
+      existingData = existing.values || [];
+      console.log(`📊 Найдено существующих строк: ${existingData.length}`);
+    }
+    
+    // Фильтруем только новые покупки (которых еще нет в Google Sheets)
+    const newRows = [];
+    const existingPurchaseIds = new Set();
+    
+    // Собираем существующие ID покупок
+    for (let i = 1; i < existingData.length; i++) {
+      const row = existingData[i];
+      if (row[0]) {
+        existingPurchaseIds.add(row[0]);
+      }
+    }
+    
+    // Добавляем только новые покупки
+    for (let i = 1; i < exportData.length; i++) {
+      const row = exportData[i];
+      const purchaseId = row[0];
+      if (!existingPurchaseIds.has(purchaseId)) {
+        newRows.push(row);
+        console.log(`🆕 Новая покупка: ${purchaseId}`);
+      } else {
+        console.log(`⏭️ Покупка уже существует: ${purchaseId}`);
+      }
+    }
+    
+    console.log(`📊 Новых покупок для добавления: ${newRows.length}`);
+    
+    // Добавляем только новые покупки вниз (append)
+    if (newRows.length > 0) {
+      const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:Q:append?valueInputOption=RAW`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${tokenData.access_token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ values: newRows })
+      });
         
-        if (sheetsResponse.ok) {
-          console.log('✅ ВСЕ ПОКУПКИ ВЫГРУЖЕНЫ В GOOGLE SHEETS:', exportData.length - 1, 'покупок');
-          res.json({
-            success: true,
-            message: `Выгружено ${exportData.length - 1} покупок в Google Sheets`,
-            totalPayments: allPayments.length,
-            successfulPayments: successfulPayments.length,
-            groupedPurchases: groupedPurchases.size,
-            exportData: exportData.slice(0, 3) // Показываем первые 3 строки для проверки
-          });
-        } else {
-          console.log('❌ Ошибка записи в Google Sheets:', await sheetsResponse.text());
-          res.status(500).json({ error: 'Ошибка записи в Google Sheets' });
-        }
+      if (sheetsResponse.ok) {
+        console.log('✅ НОВЫЕ ПОКУПКИ ДОБАВЛЕНЫ В GOOGLE SHEETS:', newRows.length, 'покупок');
+        res.json({
+          success: true,
+          message: `Добавлено ${newRows.length} новых покупок в Google Sheets`,
+          totalPayments: allPayments.length,
+          successfulPayments: successfulPayments.length,
+          groupedPurchases: groupedPurchases.size,
+          newPurchases: newRows.length,
+          exportData: newRows.slice(0, 3) // Показываем первые 3 новые строки
+        });
+      } else {
+        console.log('❌ Ошибка записи в Google Sheets:', await sheetsResponse.text());
+        res.status(500).json({ error: 'Ошибка записи в Google Sheets' });
+      }
+    } else {
+      console.log('📊 Нет новых покупок для добавления');
+      res.json({
+        success: true,
+        message: 'Нет новых покупок для добавления',
+        totalPayments: allPayments.length,
+        successfulPayments: successfulPayments.length,
+        groupedPurchases: groupedPurchases.size,
+        newPurchases: 0
+      });
+    }
       } else {
         console.log('❌ Ошибка получения токена Google Sheets');
         res.status(500).json({ error: 'Ошибка получения токена Google Sheets' });
