@@ -12,81 +12,109 @@ router.post('/sync-payments', async (req, res) => {
     try {
         console.log('🔄 Starting payment sync...');
         
-        // Получаем сессии за последние 24 часа
+        // Получаем PAYMENT INTENTS (не checkout sessions!) за последние 24 часа
         const oneDayAgo = Math.floor(Date.now() / 1000) - (24 * 60 * 60);
         
-        const sessions = await stripe.checkout.sessions.list({
+        const payments = await stripe.paymentIntents.list({
             limit: 100,
             created: {
-                gte: oneDayAgo  // только за последние 24 часа
+                gte: oneDayAgo
             }
         });
-        if (sessions.data.length === 0) {
+        if (payments.data.length === 0) {
             return res.json({
                 success: true,
-                message: 'No completed sessions found',
+                message: 'No payments found',
                 processed: 0
             });
         }
-        console.log(`📊 Found ${sessions.data.length} completed sessions`);
+        
+        // Фильтруем только успешные платежи
+        const successfulPayments = payments.data.filter(p => p.status === 'succeeded');
+        console.log(`📊 Found ${successfulPayments.length} successful payments`);
         let newPayments = 0;
         const processedPayments = [];
-        // Обрабатываем каждую сессию
-        for (const session of sessions.data) {
+        // Обрабатываем каждый платеж
+        for (const payment of successfulPayments) {
             try {
+                // Конвертируем PaymentIntent в формат похожий на CheckoutSession
+                const sessionLike = {
+                    id: payment.id,
+                    amount_total: payment.amount,
+                    currency: payment.currency,
+                    created: payment.created,
+                    customer: payment.customer,
+                    customer_details: {
+                        email: payment.receipt_email || null,
+                        address: null
+                    },
+                    customer_email: payment.receipt_email,
+                    payment_method_types: [payment.payment_method_types?.[0] || 'card'],
+                    payment_status: payment.status,
+                    status: payment.status,
+                    metadata: payment.metadata || {},
+                    mode: 'payment',
+                    client_reference_id: null
+                };
+                
                 // Получаем metadata клиента если есть
                 let customerMetadata = {};
-                if (session.customer) {
+                if (payment.customer) {
                     try {
-                        const customer = await stripe.customers.retrieve(session.customer);
+                        const customer = await stripe.customers.retrieve(payment.customer);
                         if (customer && !('deleted' in customer)) {
                             customerMetadata = customer.metadata || {};
+                            // Если нет email в payment, берем из customer
+                            if (!sessionLike.customer_email && customer.email) {
+                                sessionLike.customer_email = customer.email;
+                                sessionLike.customer_details.email = customer.email;
+                            }
                         }
                     }
                     catch (err) {
                         console.error('Error loading customer:', err);
                     }
                 }
+                
                 // Пытаемся добавить в Google Sheets (с проверкой на дубликаты внутри)
-                // appendPaymentRow вернет true если добавил, false если уже существует
-                const wasAdded = await appendPaymentRow(session);
+                const wasAdded = await appendPaymentRow(sessionLike);
                 
                 // Отправляем уведомления ТОЛЬКО для новых платежей
                 if (wasAdded) {
                     try {
-                        const text = formatTelegram(session, customerMetadata);
+                        const text = formatTelegram(sessionLike, customerMetadata);
                         await sendTelegram(text);
-                        console.log('📱 Telegram notification sent for:', session.id);
+                        console.log('📱 Telegram notification sent for:', payment.id);
                     }
                     catch (error) {
                         console.error('Error sending Telegram:', error.message);
                     }
                     try {
-                        const slackText = formatSlack(session);
+                        const slackText = formatSlack(sessionLike, customerMetadata);
                         await sendSlack(slackText);
-                        console.log('💬 Slack notification sent for:', session.id);
+                        console.log('💬 Slack notification sent for:', payment.id);
                     }
                     catch (error) {
                         console.error('Error sending Slack:', error.message);
                     }
                     newPayments++;
                     processedPayments.push({
-                        session_id: session.id,
-                        email: session.customer_details?.email || 'N/A',
-                        amount: (session.amount_total ?? 0) / 100
+                        session_id: payment.id,
+                        email: sessionLike.customer_email || 'N/A',
+                        amount: payment.amount / 100
                     });
                 } else {
-                    console.log('⏭️  Payment already exists, skipping notifications:', session.id);
+                    console.log('⏭️  Payment already exists, skipping notifications:', payment.id);
                 }
             }
             catch (error) {
-                console.error(`Error processing session ${session.id}:`, error.message);
+                console.error(`Error processing payment ${payment.id}:`, error.message);
             }
         }
         res.json({
             success: true,
             message: `Sync completed! Processed ${newPayments} payment(s)`,
-            total_sessions: sessions.data.length,
+            total_sessions: successfulPayments.length,
             processed: newPayments,
             payments: processedPayments
         });
