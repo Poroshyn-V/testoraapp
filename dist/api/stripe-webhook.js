@@ -28,7 +28,20 @@ router.post('/webhook/stripe', bodyParser.raw({ type: 'application/json' }), asy
             if (wasHandled(session.id)) {
                 return res.json({ ok: true, dedup: true });
             }
-            const text = formatTelegram(session);
+            // Получаем metadata клиента если есть
+            let customerMetadata = {};
+            if (session.customer) {
+                try {
+                    const customer = await stripe.customers.retrieve(session.customer);
+                    if (customer && !('deleted' in customer)) {
+                        customerMetadata = customer.metadata || {};
+                    }
+                }
+                catch (err) {
+                    logger.warn({ err }, 'Failed to retrieve customer metadata');
+                }
+            }
+            const text = formatTelegram(session, customerMetadata);
             await sendTelegram(text);
             // Send Slack notification
             const slackText = formatSlack(session);
