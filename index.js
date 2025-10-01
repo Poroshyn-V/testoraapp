@@ -923,6 +923,11 @@ app.post('/api/export-all-payments', async (req, res) => {
 const processedPayments = new Set();
 const notifiedPayments = new Set();
 
+// Очищаем хранилище при запуске
+console.log('🧹 Очищаем хранилище обработанных платежей');
+processedPayments.clear();
+notifiedPayments.clear();
+
 // API polling каждые 5 минут для Google Sheets
 setInterval(async () => {
   try {
@@ -1066,6 +1071,25 @@ ${customer?.metadata?.utm_campaign || 'N/A'}`;
                 });
                 console.log('✅ Slack уведомление отправлено через API polling');
               }
+              }
+
+              // Проверяем, есть ли уже этот платеж в Google Sheets
+              const checkResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:A?valueInputOption=RAW`, {
+                method: 'GET',
+                headers: {
+                  'Authorization': `Bearer ${tokenData.access_token}`,
+                  'Content-Type': 'application/json'
+                }
+              });
+
+              if (checkResponse.ok) {
+                const checkData = await checkResponse.json();
+                const existingIds = checkData.values?.flat() || [];
+                
+                if (existingIds.includes(payment.id)) {
+                  console.log(`⏭️ Платеж ${payment.id} уже есть в Google Sheets, пропускаем`);
+                  continue;
+                }
               }
 
               // Добавляем новую строку в Google Sheets
