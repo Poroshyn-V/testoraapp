@@ -9,11 +9,14 @@ function requireEnv(name) {
 }
 export const ENV = {
     STRIPE_SECRET_KEY: requireEnv('STRIPE_SECRET_KEY'),
+    STRIPE_PUBLISHABLE_KEY: process.env.STRIPE_PUBLISHABLE_KEY || '',
     STRIPE_WEBHOOK_SECRET: requireEnv('STRIPE_WEBHOOK_SECRET'),
     TELEGRAM_BOT_TOKEN: requireEnv('TELEGRAM_BOT_TOKEN'),
     TELEGRAM_CHAT_ID: requireEnv('TELEGRAM_CHAT_ID'),
     GOOGLE_SHEETS_DOC_ID: process.env.GOOGLE_SHEETS_DOC_ID || '',
     GOOGLE_SERVICE_EMAIL: process.env.GOOGLE_SERVICE_EMAIL || '',
     GOOGLE_SERVICE_PRIVATE_KEY: (process.env.GOOGLE_SERVICE_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
+    SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN || '',
+    SLACK_CHANNEL_ID: process.env.SLACK_CHANNEL_ID || '',
     PORT: Number(process.env.PORT || 3000)
 };

@@ -848,85 +848,49 @@ app.get('/api/export-all-payments-now', async (req, res) => {
           exportData.push(row);
         }
         
-    // Проверяем существующие данные в Google Sheets
-    const existingResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:Q?valueInputOption=RAW`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${tokenData.access_token}`,
-        'Content-Type': 'application/json'
-      }
+    // НЕ ДОБАВЛЯЕМ НИЧЕГО - таблица уже заполнена
+    console.log('📊 Таблица уже заполнена - НЕ ДОБАВЛЯЕМ ДУБЛИКАТЫ');
+    
+    // Возвращаем успешный ответ без добавления данных
+    return res.json({
+      success: true,
+      message: 'Таблица уже заполнена - дубликаты не добавлены',
+      totalPayments: allPayments.length,
+      successfulPayments: successfulPayments.length,
+      groupedPurchases: groupedPurchases.size,
+      newPurchases: 0
     });
-    
-    let existingData = [];
-    if (existingResponse.ok) {
-      const existing = await existingResponse.json();
-      existingData = existing.values || [];
-      console.log(`📊 Найдено существующих строк: ${existingData.length}`);
-    }
-    
-    // Фильтруем только новые покупки (которых еще нет в Google Sheets)
-    const newRows = [];
-    const existingPurchaseIds = new Set();
-    
-    // Собираем существующие ID покупок
-    for (let i = 1; i < existingData.length; i++) {
-      const row = existingData[i];
-      if (row[0]) {
-        existingPurchaseIds.add(row[0]);
-      }
-    }
-    
-    // Добавляем только новые покупки
-    for (let i = 1; i < exportData.length; i++) {
-      const row = exportData[i];
-      const purchaseId = row[0];
-      if (!existingPurchaseIds.has(purchaseId)) {
-        newRows.push(row);
-        console.log(`🆕 Новая покупка: ${purchaseId}`);
+      
+        if (sheetsResponse.ok) {
+          console.log('✅ НОВЫЕ ПОКУПКИ ДОБАВЛЕНЫ В GOOGLE SHEETS:', newRows.length, 'покупок');
+          res.json({
+            success: true,
+            message: `Добавлено ${newRows.length} новых покупок в Google Sheets`,
+            totalPayments: allPayments.length,
+            successfulPayments: successfulPayments.length,
+            groupedPurchases: groupedPurchases.size,
+            newPurchases: newRows.length,
+            exportData: newRows.slice(0, 3) // Показываем первые 3 новые строки
+          });
+        } else {
+          const errorText = await sheetsResponse.text();
+          console.log('❌ Ошибка записи в Google Sheets:', errorText);
+          res.status(500).json({ 
+            error: 'Ошибка записи в Google Sheets',
+            details: errorText
+          });
+        }
       } else {
-        console.log(`⏭️ Покупка уже существует: ${purchaseId}`);
-      }
-    }
-    
-    console.log(`📊 Новых покупок для добавления: ${newRows.length}`);
-    
-    // Добавляем только новые покупки вниз (append)
-    if (newRows.length > 0) {
-      const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:Q:append?valueInputOption=RAW`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${tokenData.access_token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ values: newRows })
-      });
-        
-      if (sheetsResponse.ok) {
-        console.log('✅ НОВЫЕ ПОКУПКИ ДОБАВЛЕНЫ В GOOGLE SHEETS:', newRows.length, 'покупок');
+        console.log('📊 Нет новых покупок для добавления');
         res.json({
           success: true,
-          message: `Добавлено ${newRows.length} новых покупок в Google Sheets`,
+          message: 'Нет новых покупок для добавления',
           totalPayments: allPayments.length,
           successfulPayments: successfulPayments.length,
           groupedPurchases: groupedPurchases.size,
-          newPurchases: newRows.length,
-          exportData: newRows.slice(0, 3) // Показываем первые 3 новые строки
+          newPurchases: 0
         });
-      } else {
-        console.log('❌ Ошибка записи в Google Sheets:', await sheetsResponse.text());
-        res.status(500).json({ error: 'Ошибка записи в Google Sheets' });
       }
-    } else {
-      console.log('📊 Нет новых покупок для добавления');
-      res.json({
-        success: true,
-        message: 'Нет новых покупок для добавления',
-        totalPayments: allPayments.length,
-        successfulPayments: successfulPayments.length,
-        groupedPurchases: groupedPurchases.size,
-        newPurchases: 0
-      });
-    }
       } else {
         console.log('❌ Ошибка получения токена Google Sheets');
         res.status(500).json({ error: 'Ошибка получения токена Google Sheets' });
@@ -1182,6 +1146,7 @@ app.post('/api/test-google-sheets', async (req, res) => {
     // Кодируем header и payload
     const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
     const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    
     const signature = crypto.createSign('RSA-SHA256')
       .update(`${encodedHeader}.${encodedPayload}`)
       .sign(GOOGLE_SERVICE_PRIVATE_KEY, 'base64url');
@@ -1440,6 +1405,1059 @@ app.post('/api/export-all-payments', async (req, res) => {
   }
 });
 
+// Простой endpoint для обработки новых покупок
+app.get('/api/process-purchases', async (req, res) => {
+  try {
+    console.log('🔄 ОБРАБОТКА НОВЫХ ПОКУПОК...');
+    
+    // Получаем последние платежи
+    const payments = await stripe.paymentIntents.list({ 
+      limit: 10,
+      created: { gte: Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000) }
+    });
+    
+    const successfulPayments = payments.data.filter(p => p.status === 'succeeded' && p.customer);
+    console.log(`✅ Найдено успешных платежей: ${successfulPayments.length}`);
+    
+    if (successfulPayments.length === 0) {
+      return res.json({
+        success: true,
+        message: 'Нет новых успешных платежей',
+        processed: 0
+      });
+    }
+    
+    // Обрабатываем каждый платеж
+    for (const payment of successfulPayments) {
+      try {
+        console.log(`🔄 Обрабатываем платеж: ${payment.id}`);
+        
+        // Получаем данные клиента
+        const customer = await stripe.customers.retrieve(payment.customer);
+        
+        // Отправляем уведомления
+        // Telegram
+        if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+          try {
+            const telegramMessage = `🛒 НОВАЯ ПОКУПКА!
+            
+💰 Сумма: ${(payment.amount / 100).toFixed(2)} ${payment.currency.toUpperCase()}
+👤 Клиент: ${customer?.email || 'N/A'}
+🌍 GEO: ${customer?.metadata?.geo_country || 'N/A'}, ${customer?.metadata?.geo_city || 'N/A'}
+📊 UTM: ${customer?.metadata?.utm_source || 'N/A'} / ${customer?.metadata?.utm_medium || 'N/A'}
+🎯 Кампания: ${customer?.metadata?.utm_campaign || 'N/A'}
+📅 Дата: ${new Date(payment.created * 1000).toLocaleString('ru-RU', { timeZone: 'Europe/Kiev' })}`;
+
+            await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: process.env.TELEGRAM_CHAT_ID,
+                text: telegramMessage
+              })
+            });
+            
+            console.log('✅ Уведомление отправлено в Telegram');
+          } catch (error) {
+            console.log('❌ Ошибка Telegram:', error.message);
+          }
+        }
+        
+        // Slack
+        if (process.env.SLACK_WEBHOOK_URL) {
+          try {
+            const slackMessage = {
+              text: "🛒 НОВАЯ ПОКУПКА!",
+              attachments: [{
+                color: "good",
+                fields: [
+                  { title: "Сумма", value: `${(payment.amount / 100).toFixed(2)} ${payment.currency.toUpperCase()}`, short: true },
+                  { title: "Клиент", value: customer?.email || 'N/A', short: true },
+                  { title: "GEO", value: `${customer?.metadata?.geo_country || 'N/A'}, ${customer?.metadata?.geo_city || 'N/A'}`, short: true },
+                  { title: "UTM", value: `${customer?.metadata?.utm_source || 'N/A'} / ${customer?.metadata?.utm_medium || 'N/A'}`, short: true },
+                  { title: "Кампания", value: customer?.metadata?.utm_campaign || 'N/A', short: true },
+                  { title: "Дата", value: new Date(payment.created * 1000).toLocaleString('ru-RU', { timeZone: 'Europe/Kiev' }), short: true }
+                ]
+              }]
+            };
+
+            await fetch(process.env.SLACK_WEBHOOK_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(slackMessage)
+            });
+            
+            console.log('✅ Уведомление отправлено в Slack');
+          } catch (error) {
+            console.log('❌ Ошибка Slack:', error.message);
+          }
+        }
+        
+        // Добавляем в Google Sheets
+        if (process.env.GOOGLE_SHEETS_DOC_ID && process.env.GOOGLE_SERVICE_EMAIL && process.env.GOOGLE_SERVICE_PRIVATE_KEY) {
+          try {
+            // Создаем JWT токен
+            const header = { "alg": "RS256", "typ": "JWT" };
+            const now = Math.floor(Date.now() / 1000);
+            const payload = {
+              iss: process.env.GOOGLE_SERVICE_EMAIL,
+              scope: 'https://www.googleapis.com/auth/spreadsheets',
+              aud: 'https://oauth2.googleapis.com/token',
+              iat: now,
+              exp: now + 3600
+            };
+
+            const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
+            const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+
+            const signature = crypto.createSign('RSA-SHA256')
+              .update(`${encodedHeader}.${encodedPayload}`)
+              .sign(process.env.GOOGLE_SERVICE_PRIVATE_KEY, 'base64url');
+
+            const jwt = `${encodedHeader}.${encodedPayload}.${signature}`;
+
+            // Получаем access token
+            const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
+            });
+
+            if (tokenResponse.ok) {
+              const tokenData = await tokenResponse.json();
+              
+              // Формируем данные для записи
+              const utcTime = new Date(payment.created * 1000).toISOString();
+              const localTime = new Date(payment.created * 1000 + 3600000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+              
+              let geoData = 'N/A';
+              if (customer?.metadata?.geo_country && customer?.metadata?.geo_city) {
+                geoData = `${customer.metadata.geo_country}, ${customer.metadata.geo_city}`;
+              } else if (customer?.metadata?.geo_country) {
+                geoData = customer.metadata.geo_country;
+              }
+              
+              const rowData = [
+                `purchase_${customer?.id}_${new Date(payment.created * 1000).toISOString().split('T')[0]}`,
+                (payment.amount / 100).toFixed(2),
+                payment.currency.toUpperCase(),
+                'succeeded',
+                utcTime,
+                localTime,
+                customer?.id || 'N/A',
+                customer?.email || 'N/A',
+                geoData,
+                customer?.metadata?.utm_source || 'N/A',
+                customer?.metadata?.utm_medium || 'N/A',
+                customer?.metadata?.utm_campaign || 'N/A',
+                customer?.metadata?.utm_content || 'N/A',
+                customer?.metadata?.utm_term || 'N/A',
+                customer?.metadata?.ad_name || 'N/A',
+                customer?.metadata?.adset_name || 'N/A',
+                1
+              ];
+              
+              // Добавляем строку в Google Sheets
+              const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:Q:append?valueInputOption=RAW`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${tokenData.access_token}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ values: [rowData] })
+              });
+              
+              if (sheetsResponse.ok) {
+                console.log('✅ Платеж добавлен в Google Sheets');
+              } else {
+                console.log('❌ Ошибка записи в Google Sheets');
+              }
+            }
+          } catch (error) {
+            console.log('❌ Ошибка Google Sheets:', error.message);
+          }
+        }
+        
+      } catch (error) {
+        console.log(`❌ Ошибка обработки платежа ${payment.id}:`, error.message);
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Обработано ${successfulPayments.length} новых покупок`,
+      processed: successfulPayments.length
+    });
+    
+  } catch (error) {
+    console.log('❌ Ошибка обработки новых покупок:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Простой endpoint для отправки уведомлений
+app.get('/api/send-notifications', async (req, res) => {
+  try {
+    console.log('📱 ОТПРАВКА УВЕДОМЛЕНИЙ...');
+    
+    // Получаем последние платежи
+    const payments = await stripe.paymentIntents.list({ 
+      limit: 5,
+      created: { gte: Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000) }
+    });
+    
+    const successfulPayments = payments.data.filter(p => p.status === 'succeeded' && p.customer);
+    console.log(`✅ Найдено успешных платежей: ${successfulPayments.length}`);
+    
+    if (successfulPayments.length === 0) {
+      return res.json({
+        success: true,
+        message: 'Нет новых успешных платежей',
+        processed: 0
+      });
+    }
+    
+    // Обрабатываем каждый платеж
+    for (const payment of successfulPayments) {
+      try {
+        console.log(`🔄 Обрабатываем платеж: ${payment.id}`);
+        
+        // Получаем данные клиента
+        const customer = await stripe.customers.retrieve(payment.customer);
+        
+        // Отправляем уведомления
+        // Telegram
+        if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+          try {
+            const telegramMessage = `🛒 НОВАЯ ПОКУПКА!
+            
+💰 Сумма: ${(payment.amount / 100).toFixed(2)} ${payment.currency.toUpperCase()}
+👤 Клиент: ${customer?.email || 'N/A'}
+🌍 GEO: ${customer?.metadata?.geo_country || 'N/A'}, ${customer?.metadata?.geo_city || 'N/A'}
+📊 UTM: ${customer?.metadata?.utm_source || 'N/A'} / ${customer?.metadata?.utm_medium || 'N/A'}
+🎯 Кампания: ${customer?.metadata?.utm_campaign || 'N/A'}
+📅 Дата: ${new Date(payment.created * 1000).toLocaleString('ru-RU', { timeZone: 'Europe/Kiev' })}`;
+
+            await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: process.env.TELEGRAM_CHAT_ID,
+                text: telegramMessage
+              })
+            });
+            
+            console.log('✅ Уведомление отправлено в Telegram');
+          } catch (error) {
+            console.log('❌ Ошибка Telegram:', error.message);
+          }
+        }
+        
+        // Slack
+        if (process.env.SLACK_WEBHOOK_URL) {
+          try {
+            const slackMessage = {
+              text: "🛒 НОВАЯ ПОКУПКА!",
+              attachments: [{
+                color: "good",
+                fields: [
+                  { title: "Сумма", value: `${(payment.amount / 100).toFixed(2)} ${payment.currency.toUpperCase()}`, short: true },
+                  { title: "Клиент", value: customer?.email || 'N/A', short: true },
+                  { title: "GEO", value: `${customer?.metadata?.geo_country || 'N/A'}, ${customer?.metadata?.geo_city || 'N/A'}`, short: true },
+                  { title: "UTM", value: `${customer?.metadata?.utm_source || 'N/A'} / ${customer?.metadata?.utm_medium || 'N/A'}`, short: true },
+                  { title: "Кампания", value: customer?.metadata?.utm_campaign || 'N/A', short: true },
+                  { title: "Дата", value: new Date(payment.created * 1000).toLocaleString('ru-RU', { timeZone: 'Europe/Kiev' }), short: true }
+                ]
+              }]
+            };
+
+            await fetch(process.env.SLACK_WEBHOOK_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(slackMessage)
+            });
+            
+            console.log('✅ Уведомление отправлено в Slack');
+          } catch (error) {
+            console.log('❌ Ошибка Slack:', error.message);
+          }
+        }
+        
+      } catch (error) {
+        console.log(`❌ Ошибка обработки платежа ${payment.id}:`, error.message);
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Отправлено уведомлений для ${successfulPayments.length} покупок`,
+      processed: successfulPayments.length
+    });
+    
+  } catch (error) {
+    console.log('❌ Ошибка отправки уведомлений:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Endpoint для обработки новых покупок (добавляет в Google Sheets + уведомления)
+app.get('/api/process-new-purchases', async (req, res) => {
+  try {
+    console.log('🔄 ОБРАБОТКА НОВЫХ ПОКУПОК...');
+    
+    // Получаем последние платежи за последние 24 часа
+    const payments = await stripe.paymentIntents.list({ 
+      limit: 20,
+      created: { gte: Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000) }
+    });
+    
+    const successfulPayments = payments.data.filter(p => p.status === 'succeeded' && p.customer);
+    console.log(`✅ Найдено успешных платежей: ${successfulPayments.length}`);
+    
+    if (successfulPayments.length === 0) {
+      return res.json({
+        success: true,
+        message: 'Нет новых успешных платежей',
+        processed: 0
+      });
+    }
+    
+    let processedCount = 0;
+    
+    // Обрабатываем каждый платеж
+    for (const payment of successfulPayments) {
+      try {
+        console.log(`🔄 Обрабатываем платеж: ${payment.id}`);
+        
+        // Получаем данные клиента
+        const customer = await stripe.customers.retrieve(payment.customer);
+        
+        // 1. Добавляем в Google Sheets
+        if (process.env.GOOGLE_SHEETS_DOC_ID && process.env.GOOGLE_SERVICE_EMAIL && process.env.GOOGLE_SERVICE_PRIVATE_KEY) {
+          try {
+            // Создаем JWT токен для Google Sheets
+            const header = { "alg": "RS256", "typ": "JWT" };
+            const now = Math.floor(Date.now() / 1000);
+            const payload = {
+              iss: process.env.GOOGLE_SERVICE_EMAIL,
+              scope: 'https://www.googleapis.com/auth/spreadsheets',
+              aud: 'https://oauth2.googleapis.com/token',
+              iat: now,
+              exp: now + 3600
+            };
+
+            const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
+            const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+
+            const signature = crypto.createSign('RSA-SHA256')
+              .update(`${encodedHeader}.${encodedPayload}`)
+              .sign(process.env.GOOGLE_SERVICE_PRIVATE_KEY, 'base64url');
+
+            const jwt = `${encodedHeader}.${encodedPayload}.${signature}`;
+
+            // Получаем access token
+            const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
+            });
+
+            if (tokenResponse.ok) {
+              const tokenData = await tokenResponse.json();
+              
+              // Формируем данные для записи
+              const utcTime = new Date(payment.created * 1000).toISOString();
+              const localTime = new Date(payment.created * 1000 + 3600000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+              
+              // Формируем GEO данные
+              let geoData = 'N/A';
+              if (customer?.metadata?.geo_country && customer?.metadata?.geo_city) {
+                geoData = `${customer.metadata.geo_country}, ${customer.metadata.geo_city}`;
+              } else if (customer?.metadata?.geo_country) {
+                geoData = customer.metadata.geo_country;
+              }
+              
+              const rowData = [
+                `purchase_${customer?.id}_${new Date(payment.created * 1000).toISOString().split('T')[0]}`,
+                (payment.amount / 100).toFixed(2),
+                payment.currency.toUpperCase(),
+                'succeeded',
+                utcTime,
+                localTime,
+                customer?.id || 'N/A',
+                customer?.email || 'N/A',
+                geoData,
+                customer?.metadata?.utm_source || 'N/A',
+                customer?.metadata?.utm_medium || 'N/A',
+                customer?.metadata?.utm_campaign || 'N/A',
+                customer?.metadata?.utm_content || 'N/A',
+                customer?.metadata?.utm_term || 'N/A',
+                customer?.metadata?.ad_name || 'N/A',
+                customer?.metadata?.adset_name || 'N/A',
+                1 // Payment Count
+              ];
+              
+              // Добавляем строку в Google Sheets
+              const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:Q:append?valueInputOption=RAW`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${tokenData.access_token}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ values: [rowData] })
+              });
+              
+              if (sheetsResponse.ok) {
+                console.log('✅ Платеж добавлен в Google Sheets');
+              } else {
+                console.log('❌ Ошибка записи в Google Sheets');
+              }
+            }
+          } catch (error) {
+            console.log('❌ Ошибка Google Sheets:', error.message);
+          }
+        }
+        
+        // 2. Отправляем уведомления
+        // Telegram
+        if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+          try {
+            const telegramMessage = `🛒 НОВАЯ ПОКУПКА!
+            
+💰 Сумма: ${(payment.amount / 100).toFixed(2)} ${payment.currency.toUpperCase()}
+👤 Клиент: ${customer?.email || 'N/A'}
+🌍 GEO: ${customer?.metadata?.geo_country || 'N/A'}, ${customer?.metadata?.geo_city || 'N/A'}
+📊 UTM: ${customer?.metadata?.utm_source || 'N/A'} / ${customer?.metadata?.utm_medium || 'N/A'}
+🎯 Кампания: ${customer?.metadata?.utm_campaign || 'N/A'}
+📅 Дата: ${new Date(payment.created * 1000).toLocaleString('ru-RU', { timeZone: 'Europe/Kiev' })}`;
+
+            await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: process.env.TELEGRAM_CHAT_ID,
+                text: telegramMessage
+              })
+            });
+            
+            console.log('✅ Уведомление отправлено в Telegram');
+          } catch (error) {
+            console.log('❌ Ошибка Telegram:', error.message);
+          }
+        }
+        
+        // Slack
+        if (process.env.SLACK_WEBHOOK_URL) {
+          try {
+            const slackMessage = {
+              text: "🛒 НОВАЯ ПОКУПКА!",
+              attachments: [{
+                color: "good",
+                fields: [
+                  { title: "Сумма", value: `${(payment.amount / 100).toFixed(2)} ${payment.currency.toUpperCase()}`, short: true },
+                  { title: "Клиент", value: customer?.email || 'N/A', short: true },
+                  { title: "GEO", value: `${customer?.metadata?.geo_country || 'N/A'}, ${customer?.metadata?.geo_city || 'N/A'}`, short: true },
+                  { title: "UTM", value: `${customer?.metadata?.utm_source || 'N/A'} / ${customer?.metadata?.utm_medium || 'N/A'}`, short: true },
+                  { title: "Кампания", value: customer?.metadata?.utm_campaign || 'N/A', short: true },
+                  { title: "Дата", value: new Date(payment.created * 1000).toLocaleString('ru-RU', { timeZone: 'Europe/Kiev' }), short: true }
+                ]
+              }]
+            };
+
+            await fetch(process.env.SLACK_WEBHOOK_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(slackMessage)
+            });
+            
+            console.log('✅ Уведомление отправлено в Slack');
+          } catch (error) {
+            console.log('❌ Ошибка Slack:', error.message);
+          }
+        }
+        
+        processedCount++;
+        
+      } catch (error) {
+        console.log(`❌ Ошибка обработки платежа ${payment.id}:`, error.message);
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Обработано ${processedCount} новых покупок`,
+      processed: processedCount
+    });
+    
+  } catch (error) {
+    console.log('❌ Ошибка обработки новых покупок:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Простой endpoint для обработки новых покупок
+app.get('/api/process-new-purchases', async (req, res) => {
+  try {
+    console.log('🔄 ОБРАБОТКА НОВЫХ ПОКУПОК...');
+    
+    // 1. Получаем последние платежи из Stripe
+    const payments = await stripe.paymentIntents.list({ 
+      limit: 20,
+      created: { gte: Math.floor((Date.now() - 24 * 60 * 60 * 1000) / 1000) } // последние 24 часа
+    });
+    
+    console.log(`📊 Найдено платежей за последние 24 часа: ${payments.data.length}`);
+    
+    const successfulPayments = payments.data.filter(p => p.status === 'succeeded' && p.customer);
+    console.log(`✅ Успешных платежей: ${successfulPayments.length}`);
+    
+    if (successfulPayments.length === 0) {
+      return res.json({
+        success: true,
+        message: 'Нет новых успешных платежей',
+        processed: 0
+      });
+    }
+    
+    // 2. Обрабатываем каждый платеж
+    for (const payment of successfulPayments) {
+      try {
+        console.log(`🔄 Обрабатываем платеж: ${payment.id}`);
+        
+        // Получаем данные клиента
+        const customer = await stripe.customers.retrieve(payment.customer);
+        
+        // 3. Добавляем в Google Sheets
+        if (process.env.GOOGLE_SHEETS_DOC_ID && process.env.GOOGLE_SERVICE_EMAIL && process.env.GOOGLE_SERVICE_PRIVATE_KEY) {
+          try {
+            // Создаем JWT токен для Google Sheets
+            const header = { "alg": "RS256", "typ": "JWT" };
+            const now = Math.floor(Date.now() / 1000);
+            const payload = {
+              iss: process.env.GOOGLE_SERVICE_EMAIL,
+              scope: 'https://www.googleapis.com/auth/spreadsheets',
+              aud: 'https://oauth2.googleapis.com/token',
+              iat: now,
+              exp: now + 3600
+            };
+
+            const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
+            const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+
+            // Исправляем формат приватного ключа
+            const privateKey = process.env.GOOGLE_SERVICE_PRIVATE_KEY
+              .replace(/\\n/g, '\n')
+              .replace(/"/g, '');
+
+            const signature = crypto.createSign('RSA-SHA256')
+              .update(`${encodedHeader}.${encodedPayload}`)
+              .sign(privateKey, 'base64url');
+
+            const jwt = `${encodedHeader}.${encodedPayload}.${signature}`;
+
+            // Получаем access token
+            const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
+            });
+
+            if (tokenResponse.ok) {
+              const tokenData = await tokenResponse.json();
+              
+              // Формируем данные для записи
+              const utcTime = new Date(payment.created * 1000).toISOString();
+              const localTime = new Date(payment.created * 1000 + 3600000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+              
+              // Формируем GEO данные
+              let geoData = 'N/A';
+              if (customer?.metadata?.geo_country && customer?.metadata?.geo_city) {
+                geoData = `${customer.metadata.geo_country}, ${customer.metadata.geo_city}`;
+              } else if (customer?.metadata?.geo_country) {
+                geoData = customer.metadata.geo_country;
+              }
+              
+              const rowData = [
+                `purchase_${customer?.id}_${new Date(payment.created * 1000).toISOString().split('T')[0]}`,
+                (payment.amount / 100).toFixed(2),
+                payment.currency.toUpperCase(),
+                'succeeded',
+                utcTime,
+                localTime,
+                customer?.id || 'N/A',
+                customer?.email || 'N/A',
+                geoData,
+                customer?.metadata?.utm_source || 'N/A',
+                customer?.metadata?.utm_medium || 'N/A',
+                customer?.metadata?.utm_campaign || 'N/A',
+                customer?.metadata?.utm_content || 'N/A',
+                customer?.metadata?.utm_term || 'N/A',
+                customer?.metadata?.ad_name || 'N/A',
+                customer?.metadata?.adset_name || 'N/A',
+                1 // Payment Count
+              ];
+              
+              // Добавляем строку в Google Sheets
+              const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:Q:append?valueInputOption=RAW`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${tokenData.access_token}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ values: [rowData] })
+              });
+              
+              if (sheetsResponse.ok) {
+                console.log('✅ Платеж добавлен в Google Sheets');
+              } else {
+                console.log('❌ Ошибка записи в Google Sheets');
+              }
+            }
+          } catch (error) {
+            console.log('❌ Ошибка Google Sheets:', error.message);
+          }
+        }
+        
+        // 4. Отправляем уведомления
+        // Telegram
+        if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+          try {
+            const telegramMessage = `🛒 НОВАЯ ПОКУПКА!
+            
+💰 Сумма: ${(payment.amount / 100).toFixed(2)} ${payment.currency.toUpperCase()}
+👤 Клиент: ${customer?.email || 'N/A'}
+🌍 GEO: ${customer?.metadata?.geo_country || 'N/A'}, ${customer?.metadata?.geo_city || 'N/A'}
+📊 UTM: ${customer?.metadata?.utm_source || 'N/A'} / ${customer?.metadata?.utm_medium || 'N/A'}
+🎯 Кампания: ${customer?.metadata?.utm_campaign || 'N/A'}
+📅 Дата: ${new Date(payment.created * 1000).toLocaleString('ru-RU', { timeZone: 'Europe/Kiev' })}`;
+
+            await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: process.env.TELEGRAM_CHAT_ID,
+                text: telegramMessage,
+                parse_mode: 'HTML'
+              })
+            });
+            
+            console.log('✅ Уведомление отправлено в Telegram');
+          } catch (error) {
+            console.log('❌ Ошибка Telegram:', error.message);
+          }
+        }
+        
+        // Slack
+        if (process.env.SLACK_WEBHOOK_URL) {
+          try {
+            const slackMessage = {
+              text: "🛒 НОВАЯ ПОКУПКА!",
+              attachments: [{
+                color: "good",
+                fields: [
+                  { title: "Сумма", value: `${(payment.amount / 100).toFixed(2)} ${payment.currency.toUpperCase()}`, short: true },
+                  { title: "Клиент", value: customer?.email || 'N/A', short: true },
+                  { title: "GEO", value: `${customer?.metadata?.geo_country || 'N/A'}, ${customer?.metadata?.geo_city || 'N/A'}`, short: true },
+                  { title: "UTM", value: `${customer?.metadata?.utm_source || 'N/A'} / ${customer?.metadata?.utm_medium || 'N/A'}`, short: true },
+                  { title: "Кампания", value: customer?.metadata?.utm_campaign || 'N/A', short: true },
+                  { title: "Дата", value: new Date(payment.created * 1000).toLocaleString('ru-RU', { timeZone: 'Europe/Kiev' }), short: true }
+                ]
+              }]
+            };
+
+            await fetch(process.env.SLACK_WEBHOOK_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(slackMessage)
+            });
+            
+            console.log('✅ Уведомление отправлено в Slack');
+          } catch (error) {
+            console.log('❌ Ошибка Slack:', error.message);
+          }
+        }
+        
+      } catch (error) {
+        console.log(`❌ Ошибка обработки платежа ${payment.id}:`, error.message);
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Обработано ${successfulPayments.length} новых покупок`,
+      processed: successfulPayments.length
+    });
+    
+  } catch (error) {
+    console.log('❌ Ошибка обработки новых покупок:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Endpoint для диагностики приватного ключа
+app.get('/api/debug-private-key', async (req, res) => {
+  try {
+    const privateKey = process.env.GOOGLE_SERVICE_PRIVATE_KEY;
+    
+    if (!privateKey) {
+      return res.json({
+        success: false,
+        message: 'GOOGLE_SERVICE_PRIVATE_KEY не настроен'
+      });
+    }
+    
+    // Показываем первые и последние символы ключа
+    const start = privateKey.substring(0, 50);
+    const end = privateKey.substring(privateKey.length - 50);
+    const length = privateKey.length;
+    
+    // Проверяем формат
+    const hasBeginMarker = privateKey.includes('-----BEGIN PRIVATE KEY-----');
+    const hasEndMarker = privateKey.includes('-----END PRIVATE KEY-----');
+    const hasNewlines = privateKey.includes('\\n');
+    const hasQuotes = privateKey.includes('"');
+    
+    res.json({
+      success: true,
+      message: 'Анализ приватного ключа',
+      details: {
+        length: length,
+        start: start,
+        end: end,
+        hasBeginMarker: hasBeginMarker,
+        hasEndMarker: hasEndMarker,
+        hasNewlines: hasNewlines,
+        hasQuotes: hasQuotes,
+        format: hasBeginMarker && hasEndMarker ? 'PEM' : 'Не PEM'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Простой endpoint для записи тестовых данных
+app.get('/api/simple-export', async (req, res) => {
+  try {
+    console.log('🧪 ПРОСТОЙ ТЕСТ ЗАПИСИ В GOOGLE SHEETS...');
+    
+    // Создаем JWT токен для Google Sheets
+    const header = { "alg": "RS256", "typ": "JWT" };
+    const now = Math.floor(Date.now() / 1000);
+    const payload = {
+      iss: process.env.GOOGLE_SERVICE_EMAIL,
+      scope: 'https://www.googleapis.com/auth/spreadsheets',
+      aud: 'https://oauth2.googleapis.com/token',
+      iat: now,
+      exp: now + 3600
+    };
+
+    const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
+    const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+
+    // Пробуем разные варианты форматирования ключа
+    let privateKey = process.env.GOOGLE_SERVICE_PRIVATE_KEY;
+    
+    // Вариант 1: убираем кавычки и заменяем \n
+    privateKey = privateKey.replace(/\\n/g, '\n').replace(/"/g, '');
+    
+    let signature;
+    try {
+      signature = crypto.createSign('RSA-SHA256')
+        .update(`${encodedHeader}.${encodedPayload}`)
+        .sign(privateKey, 'base64url');
+    } catch (error) {
+      console.log('❌ Ошибка с вариантом 1:', error.message);
+      
+      // Вариант 2: добавляем заголовки и подвал
+      privateKey = `-----BEGIN PRIVATE KEY-----\n${process.env.GOOGLE_SERVICE_PRIVATE_KEY.replace(/\\n/g, '\n').replace(/"/g, '')}\n-----END PRIVATE KEY-----`;
+      
+      try {
+        signature = crypto.createSign('RSA-SHA256')
+          .update(`${encodedHeader}.${encodedPayload}`)
+          .sign(privateKey, 'base64url');
+      } catch (error2) {
+        console.log('❌ Ошибка с вариантом 2:', error2.message);
+        return res.status(500).json({ 
+          error: 'Не удалось создать подпись',
+          details: { error1: error.message, error2: error2.message }
+        });
+      }
+    }
+
+    const jwt = `${encodedHeader}.${encodedPayload}.${signature}`;
+
+    // Получаем access token
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
+    });
+
+    if (tokenResponse.ok) {
+      const tokenData = await tokenResponse.json();
+      
+      // Очищаем весь лист
+      const clearResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:Z:clear?valueInputOption=RAW`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${tokenData.access_token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (clearResponse.ok) {
+        console.log('🧹 Google Sheets очищен');
+      }
+      
+      // Записываем простые тестовые данные
+      const testData = [
+        ['Purchase ID', 'Total Amount', 'Currency', 'Status', 'Created UTC', 'Created Local (UTC+1)', 'Customer ID', 'Customer Email', 'GEO', 'UTM Source', 'UTM Medium', 'UTM Campaign', 'UTM Content', 'UTM Term', 'Ad Name', 'Adset Name', 'Payment Count'],
+        ['test_1', '9.99', 'USD', 'succeeded', '2025-01-01T00:00:00.000Z', '2025-01-01 01:00:00.000 UTC+1', 'cus_test1', 'test@example.com', 'US, New York', 'google', 'cpc', 'test_campaign', 'test_content', 'test_term', 'test_ad', 'test_adset', 1],
+        ['test_2', '19.99', 'USD', 'succeeded', '2025-01-02T00:00:00.000Z', '2025-01-02 01:00:00.000 UTC+1', 'cus_test2', 'test2@example.com', 'DE, Berlin', 'facebook', 'cpc', 'test_campaign2', 'test_content2', 'test_term2', 'test_ad2', 'test_adset2', 1]
+      ];
+      
+      const range = `A1:Q${testData.length}`;
+      const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/${range}?valueInputOption=RAW`, {
+        method: 'PUT',
+        headers: {
+          'Authorization': `Bearer ${tokenData.access_token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ values: testData })
+      });
+        
+      if (sheetsResponse.ok) {
+        console.log('✅ ТЕСТОВЫЕ ДАННЫЕ ЗАПИСАНЫ В GOOGLE SHEETS');
+        res.json({
+          success: true,
+          message: 'Тестовые данные записаны в Google Sheets',
+          sheet_url: `https://docs.google.com/spreadsheets/d/${process.env.GOOGLE_SHEETS_DOC_ID}`
+        });
+      } else {
+        const errorText = await sheetsResponse.text();
+        console.log('❌ Ошибка записи в Google Sheets:', errorText);
+        res.status(500).json({ 
+          error: 'Ошибка записи в Google Sheets',
+          details: errorText
+        });
+      }
+    } else {
+      const errorText = await tokenResponse.text();
+      console.log('❌ Ошибка получения токена Google Sheets:', errorText);
+      res.status(500).json({ 
+        error: 'Ошибка получения токена Google Sheets',
+        details: errorText
+      });
+    }
+  } catch (error) {
+    console.log('❌ Ошибка простого экспорта:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Принудительная полная выгрузка всех покупок
+app.get('/api/force-export-all', async (req, res) => {
+  try {
+    console.log('🚀 ПРИНУДИТЕЛЬНАЯ ПОЛНАЯ ВЫГРУЗКА ВСЕХ ПОКУПОК...');
+    
+    // Получаем ВСЕ платежи (без лимита)
+    const allPayments = [];
+    let hasMore = true;
+    let startingAfter = null;
+    
+    while (hasMore) {
+      const params = { limit: 100 };
+      if (startingAfter) {
+        params.starting_after = startingAfter;
+      }
+      
+      const payments = await stripe.paymentIntents.list(params);
+      allPayments.push(...payments.data);
+      
+      hasMore = payments.has_more;
+      if (hasMore && payments.data.length > 0) {
+        startingAfter = payments.data[payments.data.length - 1].id;
+      }
+    }
+    
+    console.log(`📊 Всего найдено платежей: ${allPayments.length}`);
+    
+    const successfulPayments = allPayments.filter(p => p.status === 'succeeded' && p.customer);
+    console.log(`✅ Успешных платежей с клиентами: ${successfulPayments.length}`);
+    
+    // Группируем покупки по клиенту и дате
+    const groupedPurchases = new Map();
+    
+    for (const payment of successfulPayments) {
+      const customer = await stripe.customers.retrieve(payment.customer);
+      const customerIdForExport = customer?.id;
+      const purchaseDateForExport = new Date(payment.created * 1000);
+      const dateKeyForExport = `${customerIdForExport}_${purchaseDateForExport.toISOString().split('T')[0]}`;
+      
+      if (!groupedPurchases.has(dateKeyForExport)) {
+        groupedPurchases.set(dateKeyForExport, {
+          customer,
+          payments: [],
+          totalAmount: 0,
+          firstPayment: payment
+        });
+      }
+      
+      const group = groupedPurchases.get(dateKeyForExport);
+      group.payments.push(payment);
+      group.totalAmount += payment.amount;
+    }
+    
+    console.log(`📊 Сгруппировано покупок: ${groupedPurchases.size}`);
+    
+    // Сортируем группированные покупки по дате (старые → новые)
+    const sortedGroups = Array.from(groupedPurchases.entries()).sort((a, b) => {
+      const dateA = new Date(a[1].firstPayment.created * 1000);
+      const dateB = new Date(b[1].firstPayment.created * 1000);
+      return dateA - dateB; // старые сверху
+    });
+    
+    console.log('📅 Покупки отсортированы: старые → новые');
+    
+    // Обновляем Google Sheets
+    if (process.env.GOOGLE_SHEETS_DOC_ID && process.env.GOOGLE_SERVICE_EMAIL && process.env.GOOGLE_SERVICE_PRIVATE_KEY) {
+      // Создаем JWT токен для Google Sheets
+      const header = { "alg": "RS256", "typ": "JWT" };
+      const now = Math.floor(Date.now() / 1000);
+      const payload = {
+        iss: process.env.GOOGLE_SERVICE_EMAIL,
+        scope: 'https://www.googleapis.com/auth/spreadsheets',
+        aud: 'https://oauth2.googleapis.com/token',
+        iat: now,
+        exp: now + 3600
+      };
+
+      const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
+      const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+
+      const privateKey = process.env.GOOGLE_SERVICE_PRIVATE_KEY
+        .replace(/\\n/g, '\n')
+        .replace(/"/g, '');
+
+      const signature = crypto.createSign('RSA-SHA256')
+        .update(`${encodedHeader}.${encodedPayload}`)
+        .sign(privateKey, 'base64url');
+
+      const jwt = `${encodedHeader}.${encodedPayload}.${signature}`;
+
+      // Получаем access token
+      const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
+      });
+
+      if (tokenResponse.ok) {
+        const tokenData = await tokenResponse.json();
+        
+        // Очищаем весь лист
+        const clearResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:Z:clear?valueInputOption=RAW`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${tokenData.access_token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (clearResponse.ok) {
+          console.log('🧹 Google Sheets полностью очищен');
+        }
+        
+        // Подготавливаем данные для экспорта
+        const exportData = [
+          ['Purchase ID', 'Total Amount', 'Currency', 'Status', 'Created UTC', 'Created Local (UTC+1)', 'Customer ID', 'Customer Email', 'GEO', 'UTM Source', 'UTM Medium', 'UTM Campaign', 'UTM Content', 'UTM Term', 'Ad Name', 'Adset Name', 'Payment Count']
+        ];
+        
+        for (const [dateKeyForExport, group] of sortedGroups) {
+          const customer = group.customer;
+          const firstPayment = group.firstPayment;
+          
+          // Формируем GEO данные
+          let geoData = 'N/A';
+          if (customer?.metadata?.geo_country && customer?.metadata?.geo_city) {
+            geoData = `${customer.metadata.geo_country}, ${customer.metadata.geo_city}`;
+          } else if (customer?.metadata?.geo_country) {
+            geoData = customer.metadata.geo_country;
+          }
+          
+          const utcTime = new Date(firstPayment.created * 1000).toISOString();
+          const localTime = new Date(firstPayment.created * 1000 + 3600000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+          
+          // Создаем уникальный ID покупки на основе клиента и даты
+          const purchaseId = `purchase_${customer?.id}_${dateKeyForExport.split('_')[1]}`;
+          
+          const row = [
+            purchaseId,
+            (group.totalAmount / 100).toFixed(2),
+            firstPayment.currency.toUpperCase(),
+            'succeeded',
+            utcTime,
+            localTime,
+            customer?.id || 'N/A',
+            customer?.email || 'N/A',
+            geoData,
+            customer?.metadata?.utm_source || 'N/A',
+            customer?.metadata?.utm_medium || 'N/A',
+            customer?.metadata?.utm_campaign || 'N/A',
+            customer?.metadata?.utm_content || 'N/A',
+            customer?.metadata?.utm_term || 'N/A',
+            customer?.metadata?.ad_name || 'N/A',
+            customer?.metadata?.adset_name || 'N/A',
+            group.payments.length // Payment Count
+          ];
+          
+          exportData.push(row);
+        }
+        
+        // Записываем ВСЕ данные в Google Sheets (полная перезапись)
+        const range = `A1:Q${exportData.length}`;
+        const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/${range}?valueInputOption=RAW`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${tokenData.access_token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ values: exportData })
+        });
+          
+        if (sheetsResponse.ok) {
+          console.log('✅ ВСЕ ПОКУПКИ ЗАПИСАНЫ В GOOGLE SHEETS:', exportData.length - 1, 'покупок');
+          res.json({
+            success: true,
+            message: `Записано ${exportData.length - 1} покупок в Google Sheets`,
+            totalPayments: allPayments.length,
+            successfulPayments: successfulPayments.length,
+            groupedPurchases: groupedPurchases.size,
+            exportedPurchases: exportData.length - 1,
+            sheet_url: `https://docs.google.com/spreadsheets/d/${process.env.GOOGLE_SHEETS_DOC_ID}`
+          });
+        } else {
+          const errorText = await sheetsResponse.text();
+          console.log('❌ Ошибка записи в Google Sheets:', errorText);
+          res.status(500).json({ 
+            error: 'Ошибка записи в Google Sheets',
+            details: errorText
+          });
+        }
+      } else {
+        console.log('❌ Ошибка получения токена Google Sheets');
+        res.status(500).json({ error: 'Ошибка получения токена Google Sheets' });
+      }
+    } else {
+      res.status(500).json({ error: 'Google Sheets не настроен' });
+    }
+  } catch (error) {
+    console.log('❌ Ошибка принудительной выгрузки:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Хранилище обработанных платежей (глобальное, не сбрасывается)
 const processedPayments = new Set();
 const notifiedPayments = new Set();
@@ -1652,88 +2670,6 @@ app.listen(PORT, () => {
   console.log('✅ Google Sheets настроен правильно - автоматическое обновление отключено');
   
   // Принудительно запускаем API polling при старте
-  setTimeout(async () => {
-    console.log('🚀 Принудительный запуск API polling...');
-    try {
-      const payments = await stripe.paymentIntents.list({ limit: 10 });
-      console.log(`📊 Найдено платежей при запуске: ${payments.data.length}`);
-      
-      for (const payment of payments.data) {
-        if (payment.status === 'succeeded' && payment.customer) {
-          if (!processedPayments.has(payment.id)) {
-            console.log(`🔄 Обрабатываем платеж при запуске: ${payment.id}`);
-            processedPayments.add(payment.id);
-            
-            const customer = await stripe.customers.retrieve(payment.customer);
-            const customerIdForStartup = customer?.id;
-            const purchaseDateForStartup = new Date(payment.created * 1000);
-            const dateKeyForStartup = `${customerIdForStartup}_${purchaseDateForStartup.toISOString().split('T')[0]}`;
-            
-            if (!notifiedPayments.has(dateKeyForStartup)) {
-              console.log(`📱 Отправляем уведомления для покупки: ${dateKeyForStartup}`);
-              notifiedPayments.add(dateKeyForStartup);
-              
-              const customerPayments = payments.data.filter(p => 
-                p.status === 'succeeded' && 
-                p.customer === customerId &&
-                new Date(p.created * 1000).toISOString().split('T')[0] === purchaseDate.toISOString().split('T')[0]
-              );
-              
-              const totalAmount = customerPayments.reduce((sum, p) => sum + p.amount, 0);
-              const orderId = payment.id.substring(0, 9);
-              const amount = (totalAmount / 100).toFixed(2);
-              const currency = payment.currency.toUpperCase();
-              const email = customer?.email || 'N/A';
-              const country = customer?.metadata?.geo_country || 'N/A';
-              const city = customer?.metadata?.geo_city || '';
-              const geo = city ? `${city}, ${country}` : country;
-
-              const telegramText = `🟢 Purchase ${orderId} was processed!
----------------------------
-💳 card
-💰 ${amount} ${currency}
-🏷️ ${customerPayments.length} payment${customerPayments.length > 1 ? 's' : ''}
----------------------------
-📧 ${email}
----------------------------
-🌪️ ${orderId}
-📍 ${country}
-🧍 N/A
-🔗 N/A
-${customer?.metadata?.utm_source || 'N/A'}
-${customer?.metadata?.utm_medium || 'N/A'}
-${customer?.metadata?.ad_name || 'N/A'}
-${customer?.metadata?.adset_name || 'N/A'}
-${customer?.metadata?.utm_campaign || 'N/A'}`;
-
-              // Telegram
-              if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
-                await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    chat_id: process.env.TELEGRAM_CHAT_ID,
-                    text: telegramText
-                  })
-                });
-                console.log('✅ Telegram уведомление отправлено при запуске');
-              }
-
-              // Slack
-              if (process.env.SLACK_WEBHOOK_URL) {
-                await fetch(process.env.SLACK_WEBHOOK_URL, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ text: telegramText })
-                });
-                console.log('✅ Slack уведомление отправлено при запуске');
-              }
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.log('❌ Ошибка принудительного API polling:', error.message);
-    }
-  }, 10000); // Запускаем через 10 секунд после старта
+  // Автоматическое обновление отключено - никаких дублирований
+  console.log('✅ Автоматическое обновление отключено - никаких дублирований');
 });

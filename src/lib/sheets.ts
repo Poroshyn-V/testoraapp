@@ -1,4 +1,5 @@
 import { GoogleSpreadsheet } from 'google-spreadsheet';
+import { JWT } from 'google-auth-library';
 import { ENV } from './env.js';
 import Stripe from 'stripe';
 
@@ -6,14 +7,14 @@ let doc: GoogleSpreadsheet | null = null;
 
 async function getDoc() {
   if (doc) return doc;
-  doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID);
   
-  // Используем новый API для аутентификации
-  await doc.useServiceAccountAuth({
-    client_email: ENV.GOOGLE_SERVICE_EMAIL,
-    private_key: ENV.GOOGLE_SERVICE_PRIVATE_KEY
+  const serviceAccountAuth = new JWT({
+    email: ENV.GOOGLE_SERVICE_EMAIL,
+    key: ENV.GOOGLE_SERVICE_PRIVATE_KEY,
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
   });
   
+  doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
   await doc.loadInfo();
   return doc;
 }
@@ -26,6 +27,17 @@ const HEADER = [
   'customer_id','client_reference_id','mode','status','raw_metadata_json'
 ];
 
+// Проверка существования платежа в Google Sheets
+async function paymentExists(sheet: any, sessionId: string): Promise<boolean> {
+  try {
+    const rows = await sheet.getRows();
+    return rows.some((row: any) => row.get('session_id') === sessionId);
+  } catch (error) {
+    console.error('Error checking payment existence:', error);
+    return false;
+  }
+}
+
 export async function appendPaymentRow(session: Stripe.Checkout.Session) {
   try {
     const d = await getDoc();
@@ -37,6 +49,13 @@ export async function appendPaymentRow(session: Stripe.Checkout.Session) {
       if (sheet.headerValues?.length !== HEADER.length) {
         await sheet.setHeaderRow(HEADER);
       }
+    }
+
+    // ПРОВЕРКА НА ДУБЛИКАТЫ - ключевое исправление!
+    const exists = await paymentExists(sheet, session.id);
+    if (exists) {
+      console.log('⏭️ Payment already exists in Google Sheets, skipping:', session.id);
+      return;
     }
 
     const m = session.metadata || {};
@@ -75,7 +94,7 @@ export async function appendPaymentRow(session: Stripe.Checkout.Session) {
     };
 
     await sheet.addRow(row as any);
-    console.log('Payment data saved to Google Sheets:', session.id);
+    console.log('✅ Payment data saved to Google Sheets:', session.id);
   } catch (error) {
     console.error('Error saving to Google Sheets:', error);
     // Fallback: log to console if Google Sheets fails

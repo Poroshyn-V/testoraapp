@@ -6,6 +6,7 @@ import { ENV } from '../lib/env.js';
 import { sendTelegram } from '../lib/telegram.js';
 import { formatTelegram } from '../lib/format.js';
 import { appendPaymentRow } from '../lib/sheets.js';
+import { sendSlack, formatSlack } from '../lib/slack.js';
 import { wasHandled, markHandled } from '../lib/store.js';
 const logger = pino({ level: 'info' });
 const router = express.Router();
@@ -29,6 +30,9 @@ router.post('/webhook/stripe', bodyParser.raw({ type: 'application/json' }), asy
             }
             const text = formatTelegram(session);
             await sendTelegram(text);
+            // Send Slack notification
+            const slackText = formatSlack(session);
+            await sendSlack(slackText);
             await appendPaymentRow(session);
             markHandled(session.id);
             return res.json({ ok: true });

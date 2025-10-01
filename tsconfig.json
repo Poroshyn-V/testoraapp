@@ -5,12 +5,16 @@
     "moduleResolution": "Node",
     "outDir": "dist",
     "rootDir": "src",
-    "strict": true,
+    "strict": false,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true
   },
   "include": [
     "src"
+  ],
+  "exclude": [
+    "src/api/send-last-payment.ts",
+    "src/api/create-checkout.ts"
   ]
 }

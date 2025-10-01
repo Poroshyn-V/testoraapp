@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Force Export All Payments</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            white-space: pre-wrap;
+        }
+        .success {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
+        }
+        .error {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
+        }
+        .info {
+            background: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Принудительная выгрузка всех покупок</h1>
+        <p>Этот инструмент принудительно очистит Google Sheets и запишет все покупки заново.</p>
+        
+        <button onclick="forceExportAll()" id="exportBtn">
+            🔄 Принудительно выгрузить ВСЕ покупки
+        </button>
+        
+        <button onclick="checkPayments()" id="checkBtn">
+            📊 Проверить статистику платежей
+        </button>
+        
+        <div id="result"></div>
+    </div>
+
+    <script>
+        async function forceExportAll() {
+            const exportBtn = document.getElementById('exportBtn');
+            const resultDiv = document.getElementById('result');
+            
+            exportBtn.disabled = true;
+            exportBtn.textContent = '⏳ Выгружаем...';
+            resultDiv.innerHTML = '<div class="info">🔄 Начинаем принудительную выгрузку всех покупок...</div>';
+            
+            try {
+                const response = await fetch('/api/export-all-payments-now', {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    resultDiv.innerHTML = `
+                        <div class="success">
+                            ✅ УСПЕШНО! Выгрузка завершена
+                            
+📊 Статистика:
+• Всего платежей: ${data.totalPayments || 'N/A'}
+• Успешных платежей: ${data.successfulPayments || 'N/A'}
+• Сгруппировано покупок: ${data.groupedPurchases || 'N/A'}
+• Добавлено новых покупок: ${data.newPurchases || 'N/A'}
+
+🔗 Ссылка на Google Sheets: 
+https://docs.google.com/spreadsheets/d/${getGoogleSheetsId()}
+
+📝 Первые 3 покупки:
+${JSON.stringify(data.exportData || [], null, 2)}
+                        </div>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="error">
+                            ❌ ОШИБКА: ${data.message || 'Неизвестная ошибка'}
+                            ${data.error ? '\n\nДетали ошибки: ' + data.error : ''}
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        ❌ ОШИБКА СЕТИ: ${error.message}
+                    </div>
+                `;
+            } finally {
+                exportBtn.disabled = false;
+                exportBtn.textContent = '🔄 Принудительно выгрузить ВСЕ покупки';
+            }
+        }
+        
+        async function checkPayments() {
+            const checkBtn = document.getElementById('checkBtn');
+            const resultDiv = document.getElementById('result');
+            
+            checkBtn.disabled = true;
+            checkBtn.textContent = '⏳ Проверяем...';
+            resultDiv.innerHTML = '<div class="info">📊 Проверяем статистику платежей...</div>';
+            
+            try {
+                const response = await fetch('/api/check-all-payments', {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (data) {
+                    resultDiv.innerHTML = `
+                        <div class="info">
+                            📊 СТАТИСТИКА ПЛАТЕЖЕЙ:
+                            
+• Всего платежей: ${data.totalPayments || 'N/A'}
+• Успешных платежей: ${data.successfulPayments || 'N/A'}
+• Платежей с клиентами: ${data.paymentsWithCustomer || 'N/A'}
+• Уникальных клиентов: ${data.uniqueCustomers || 'N/A'}
+
+📝 Последние 5 платежей:
+${JSON.stringify(data.recentPayments || [], null, 2)}
+                        </div>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `
+                        <div class="error">
+                            ❌ ОШИБКА: Не удалось получить статистику
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `
+                    <div class="error">
+                        ❌ ОШИБКА СЕТИ: ${error.message}
+                    </div>
+                `;
+            } finally {
+                checkBtn.disabled = false;
+                checkBtn.textContent = '📊 Проверить статистику платежей';
+            }
+        }
+        
+        function getGoogleSheetsId() {
+            // Попробуем получить ID из URL или использовать placeholder
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get('sheet_id') || 'YOUR_GOOGLE_SHEETS_ID';
+        }
+    </script>
+</body>
+</html>
+
+
