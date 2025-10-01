@@ -819,7 +819,7 @@ app.post('/api/export-all-payments', async (req, res) => {
   }
 });
 
-// Хранилище обработанных платежей
+// Хранилище обработанных платежей (глобальное, не сбрасывается)
 const processedPayments = new Set();
 const notifiedPayments = new Set();
 
@@ -835,11 +835,26 @@ setInterval(async () => {
     });
     
     for (const payment of payments.data) {
-      if (payment.status === 'succeeded' && payment.customer && !processedPayments.has(payment.id)) {
+      if (payment.status === 'succeeded' && payment.customer) {
+        // Проверяем, не обрабатывали ли уже этот платеж
+        if (processedPayments.has(payment.id)) {
+          console.log(`⏭️ Платеж ${payment.id} уже обработан, пропускаем`);
+          continue;
+        }
+        
         try {
-          console.log(`🔄 Обрабатываем платеж: ${payment.id}`);
+          console.log(`🔄 Обрабатываем новый платеж: ${payment.id}`);
           processedPayments.add(payment.id);
           const customer = await stripe.customers.retrieve(payment.customer);
+          
+          console.log('🔍 Данные клиента:', {
+            id: customer?.id,
+            email: customer?.email,
+            metadata_keys: Object.keys(customer?.metadata || {}),
+            geo_country: customer?.metadata?.geo_country,
+            geo_city: customer?.metadata?.geo_city,
+            utm_source: customer?.metadata?.utm_source
+          });
           
           // Проверяем, есть ли уже в Google Sheets
           if (process.env.GOOGLE_SHEETS_DOC_ID && process.env.GOOGLE_SERVICE_EMAIL && process.env.GOOGLE_SERVICE_PRIVATE_KEY) {
@@ -891,6 +906,7 @@ setInterval(async () => {
 
               // Отправляем уведомления для новой покупки (только если еще не отправляли)
               if (!notifiedPayments.has(payment.id)) {
+                console.log(`📱 Отправляем уведомления для платежа: ${payment.id}`);
                 notifiedPayments.add(payment.id);
                 
                 const orderId = payment.id.substring(0, 9);
