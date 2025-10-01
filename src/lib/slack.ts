@@ -34,18 +34,27 @@ export async function sendSlack(text: string) {
   }
 }
 
-export function formatSlack(session: Stripe.Checkout.Session): string {
+export function formatSlack(session: Stripe.Checkout.Session, customerMetadata: any = {}): string {
+  const m = { ...session.metadata, ...customerMetadata };
   const amount = (session.amount_total ?? 0) / 100;
   const currency = (session.currency || 'usd').toUpperCase();
   const email = session.customer_details?.email || session.customer_email || 'N/A';
+  const orderId = session.id.slice(3, 14);
+  const country = m.geo_country || m.country || session.customer_details?.address?.country || 'N/A';
+  const product_tag = m.product_tag || 'N/A';
+  const utm_campaign = m.campaign_name || m.utm_campaign || 'N/A';
   
-  return `💰 *New Payment Received!*
-  
-💳 *Amount:* ${amount} ${currency}
-📧 *Email:* ${email}
-🆔 *Session ID:* \`${session.id}\`
-📅 *Date:* ${new Date().toLocaleString()}
-🌍 *Country:* ${session.customer_details?.address?.country || 'N/A'}
+  return `🟢 *Order ${orderId} was processed!*
+
+💳 card
+💰 ${amount} ${currency}
+🏷️ ${product_tag}
+
+📧 ${email}
+
+🌪️ ${orderId}
+📍 ${country}
+🎯 ${utm_campaign}
 
 ✅ Payment processed successfully!`;
 }

@@ -20,8 +20,12 @@ export function formatTelegram(session: Stripe.Checkout.Session, customerMetadat
   const pm = session.payment_method_types?.[0] || 'card';
   const email = session.customer_details?.email || session.customer_email || '';
 
-  const product_tag = m.product_tag || 'N/A';
-  const orderId = session.id.slice(3, 14);
+  // Используем полный ID платежа
+  const paymentId = session.id;
+  
+  // Определяем количество платежей (если есть в metadata)
+  const paymentCount = m.payment_count || '1 payment';
+  
   const country = m.geo_country || m.country || session.customer_details?.address?.country || 'N/A';
   const gender = m.gender || 'N/A';
   const age = m.age || 'N/A';
@@ -33,17 +37,17 @@ export function formatTelegram(session: Stripe.Checkout.Session, customerMetadat
   const campaign_name = m.campaign_name || m.utm_campaign || 'N/A';
 
   const lines = [
-    `🟢 Order ${orderId} was processed!`,
+    `🟢 Purchase ${paymentId} was processed!`,
     `---------------------------`,
     `💳 ${pm}`,
     `💰 ${amount} ${currency}`,
-    `🏷️ ${product_tag}`,
+    `🏷️ ${paymentCount}`,
     `---------------------------`,
     `📧 ${email}`,
     `---------------------------`,
-    `🌪️ ${orderId}`,
+    `🌪️ ${paymentId}`,
     `📍 ${country}`,
-    `🧍${gender} ${age}`,
+    `🧍 ${gender}`,
     `🔗 ${creative_link}`,
     utm_source,
     platform_placement,

@@ -44,7 +44,7 @@ router.post('/webhook/stripe', bodyParser.raw({ type: 'application/json' }), asy
             const text = formatTelegram(session, customerMetadata);
             await sendTelegram(text);
             // Send Slack notification
-            const slackText = formatSlack(session);
+            const slackText = formatSlack(session, customerMetadata);
             await sendSlack(slackText);
             await appendPaymentRow(session);
             markHandled(session.id);
