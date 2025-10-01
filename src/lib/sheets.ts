@@ -58,11 +58,28 @@ export async function appendPaymentRow(session: Stripe.Checkout.Session) {
       return;
     }
 
-    const m = session.metadata || {};
+    // Получаем metadata клиента если есть
+    let customerMetadata: any = {};
+    if (session.customer) {
+      try {
+        const Stripe = (await import('stripe')).default;
+        const stripe = new Stripe(ENV.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
+        const customer = await stripe.customers.retrieve(session.customer as string);
+        if (customer && !('deleted' in customer)) {
+          customerMetadata = customer.metadata || {};
+        }
+      } catch (err) {
+        console.error('Failed to retrieve customer metadata:', err);
+      }
+    }
+
+    const m = { ...session.metadata, ...customerMetadata };
     const email = session.customer_details?.email || session.customer_email || '';
     const amount = (session.amount_total ?? 0) / 100;
     const currency = (session.currency || 'usd').toUpperCase();
-    const country = m.country || session.customer_details?.address?.country || '';
+    const geoCountry = m.geo_country || m.country || session.customer_details?.address?.country || '';
+    const geoCity = m.geo_city || '';
+    const country = geoCity ? `${geoCity}, ${geoCountry}` : geoCountry;
 
     const row = {
       created_at: new Date((session.created || Math.floor(Date.now()/1000)) * 1000).toISOString(),

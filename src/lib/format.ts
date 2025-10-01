@@ -13,45 +13,43 @@ export function shortId(id: string): string {
   return id.slice(0, 7) + '...';
 }
 
-export function formatTelegram(session: Stripe.Checkout.Session) {
-  const m = session.metadata || {};
+export function formatTelegram(session: Stripe.Checkout.Session, customerMetadata: any = {}) {
+  const m = { ...session.metadata, ...customerMetadata };
   const amount = ((session.amount_total ?? 0) / 100).toFixed(2);
   const currency = (session.currency || 'usd').toUpperCase();
   const pm = session.payment_method_types?.[0] || 'card';
   const email = session.customer_details?.email || session.customer_email || '';
-  const masked = maskEmail(email);
 
-  const product_tag = m.product_tag || '';
-  const utm_campaign = m.utm_campaign || '-';
-  const country = m.country || session.customer_details?.address?.country || '-';
-  const genderAge = [m.gender || '', m.age || ''].filter(Boolean).join(' ') || '-';
-  const creative_link = m.creative_link || '-';
-  const platform_placement = m.platform_placement || '-';
-  const ad_name = m.ad_name || '-';
-  const adset_name = m.adset_name || '-';
-  const campaign_name = m.campaign_name || '-';
-  const web_campaign = m.web_campaign || '-';
+  const product_tag = m.product_tag || 'N/A';
+  const orderId = session.id.slice(3, 14);
+  const country = m.geo_country || m.country || session.customer_details?.address?.country || 'N/A';
+  const gender = m.gender || 'N/A';
+  const age = m.age || 'N/A';
+  const creative_link = m.creative_link || 'N/A';
+  const utm_source = m.utm_source || 'N/A';
+  const platform_placement = m.platform_placement || 'N/A';
+  const ad_name = m.ad_name || 'N/A';
+  const adset_name = m.adset_name || 'N/A';
+  const campaign_name = m.campaign_name || m.utm_campaign || 'N/A';
 
   const lines = [
-    `🟢 Order ${shortId(session.id)} processed!`,
+    `🟢 Order ${orderId} was processed!`,
     `---------------------------`,
     `💳 ${pm}`,
     `💰 ${amount} ${currency}`,
     `🏷️ ${product_tag}`,
     `---------------------------`,
-    `📧 ${masked}`,
+    `📧 ${email}`,
     `---------------------------`,
-    `🌪️ ${utm_campaign}`,
+    `🌪️ ${orderId}`,
     `📍 ${country}`,
-    `🧍 ${genderAge}`,
+    `🧍${gender} ${age}`,
     `🔗 ${creative_link}`,
-    `fb`,
+    `${utm_source}`,
     `${platform_placement}`,
     `${ad_name}`,
     `${adset_name}`,
-    `${campaign_name}`,
-    // В исходном примере дальше не выводили web_campaign; при желании добавь:
-    // `${web_campaign}`
+    `${campaign_name}`
   ];
 
   let text = lines.join('\n');

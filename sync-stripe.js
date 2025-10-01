@@ -47,42 +47,38 @@ async function paymentExists(sheet, sessionId) {
 }
 
 // Форматирование сообщения для Telegram
-function formatTelegram(session) {
-  const m = session.metadata || {};
+function formatTelegram(session, customerMetadata = {}) {
+  const m = { ...session.metadata, ...customerMetadata };
   const amount = ((session.amount_total ?? 0) / 100).toFixed(2);
   const currency = (session.currency || 'usd').toUpperCase();
   const pm = session.payment_method_types?.[0] || 'card';
   const email = session.customer_details?.email || session.customer_email || '';
   
-  // Маскируем email
-  const [u, d] = (email || '-').split('@');
-  const masked = d ? `${u[0]}${'*'.repeat(Math.max(1, u.length - 1))}@${d}` : '-';
+  const product_tag = m.product_tag || 'N/A';
+  const orderId = session.id.slice(3, 14);
+  const country = m.geo_country || m.country || session.customer_details?.address?.country || 'N/A';
+  const gender = m.gender || 'N/A';
+  const age = m.age || 'N/A';
+  const creative_link = m.creative_link || 'N/A';
+  const utm_source = m.utm_source || 'N/A';
+  const platform_placement = m.platform_placement || 'N/A';
+  const ad_name = m.ad_name || 'N/A';
+  const adset_name = m.adset_name || 'N/A';
+  const campaign_name = m.campaign_name || m.utm_campaign || 'N/A';
 
-  const product_tag = m.product_tag || '';
-  const utm_campaign = m.utm_campaign || '-';
-  const country = m.country || session.customer_details?.address?.country || '-';
-  const genderAge = [m.gender || '', m.age || ''].filter(Boolean).join(' ') || '-';
-  const creative_link = m.creative_link || '-';
-  const platform_placement = m.platform_placement || '-';
-  const ad_name = m.ad_name || '-';
-  const adset_name = m.adset_name || '-';
-  const campaign_name = m.campaign_name || '-';
-  
-  const sessionShort = session.id.slice(0, 7) + '...';
-
-  return `🟢 Order ${sessionShort} processed!
+  return `🟢 Order ${orderId} was processed!
 ---------------------------
 💳 ${pm}
 💰 ${amount} ${currency}
 🏷️ ${product_tag}
 ---------------------------
-📧 ${masked}
+📧 ${email}
 ---------------------------
-🌪️ ${utm_campaign}
+🌪️ ${orderId}
 📍 ${country}
-🧍 ${genderAge}
+🧍${gender} ${age}
 🔗 ${creative_link}
-fb
+${utm_source}
 ${platform_placement}
 ${ad_name}
 ${adset_name}
@@ -114,15 +110,17 @@ async function sendTelegram(text) {
 }
 
 // Отправка в Slack
-async function sendSlack(session) {
+async function sendSlack(session, customerMetadata = {}) {
   if (!process.env.SLACK_BOT_TOKEN || !process.env.SLACK_CHANNEL_ID) {
     console.log('Slack not configured, skipping');
     return;
   }
   
+  const m = { ...session.metadata, ...customerMetadata };
   const amount = ((session.amount_total ?? 0) / 100).toFixed(2);
   const currency = (session.currency || 'usd').toUpperCase();
   const email = session.customer_details?.email || session.customer_email || 'N/A';
+  const country = m.geo_country || m.country || session.customer_details?.address?.country || 'N/A';
   
   const text = `💰 *New Payment Received!*
   
@@ -130,7 +128,9 @@ async function sendSlack(session) {
 📧 *Email:* ${email}
 🆔 *Session ID:* \`${session.id}\`
 📅 *Date:* ${new Date().toLocaleString()}
-🌍 *Country:* ${session.customer_details?.address?.country || 'N/A'}
+🌍 *Country:* ${country}
+🎯 *Campaign:* ${m.campaign_name || m.utm_campaign || 'N/A'}
+📱 *Source:* ${m.utm_source || 'N/A'}
 
 ✅ Payment processed successfully!`;
 
@@ -190,16 +190,41 @@ async function syncPayments() {
       console.log(`✨ New payment found: ${session.id}`);
       newPayments++;
       
-      // Добавляем в Google Sheets
-      const m = session.metadata || {};
+      // Получаем данные клиента для metadata
+      let customerMetadata = {};
+      if (session.customer) {
+        try {
+          const customer = await stripe.customers.retrieve(session.customer);
+          if (customer && !customer.deleted) {
+            customerMetadata = customer.metadata || {};
+            console.log(`📋 Customer metadata loaded for: ${session.customer}`);
+          }
+        } catch (error) {
+          console.error('Error loading customer:', error.message);
+        }
+      }
+      
+      // Объединяем metadata из session и customer
+      const m = { ...session.metadata, ...customerMetadata };
+      
+      // Получаем GEO данные
+      const geoCountry = m.geo_country || m.country || session.customer_details?.address?.country || 'N/A';
+      const geoCity = m.geo_city || '';
+      const geoData = geoCity ? `${geoCity}, ${geoCountry}` : geoCountry;
+      
+      // Формируем данные для Google Sheets в правильном формате
+      const createdDate = new Date((session.created || Math.floor(Date.now()/1000)) * 1000);
+      const createdUTC = createdDate.toISOString();
+      const createdLocal = new Date(createdDate.getTime() + 3600000).toISOString().replace('T', ' ').replace(/\.\d{3}Z$/, ' UTC+1');
+      
       const row = {
-        created_at: new Date((session.created || Math.floor(Date.now()/1000)) * 1000).toISOString(),
+        created_at: createdUTC,
         session_id: session.id,
-        payment_status: session.payment_status || '',
+        payment_status: session.payment_status || 'paid',
         amount: (session.amount_total ?? 0) / 100,
         currency: (session.currency || 'usd').toUpperCase(),
         email: session.customer_details?.email || session.customer_email || '',
-        country: m.country || session.customer_details?.address?.country || '',
+        country: geoData,
         gender: m.gender || '',
         age: m.age || '',
         product_tag: m.product_tag || '',
@@ -226,7 +251,7 @@ async function syncPayments() {
       
       // Отправляем уведомления
       try {
-        const telegramText = formatTelegram(session);
+        const telegramText = formatTelegram(session, customerMetadata);
         await sendTelegram(telegramText);
         console.log('📱 Telegram notification sent');
       } catch (error) {
@@ -234,7 +259,7 @@ async function syncPayments() {
       }
       
       try {
-        await sendSlack(session);
+        await sendSlack(session, customerMetadata);
         console.log('💬 Slack notification sent');
       } catch (error) {
         console.error('Error sending Slack:', error.message);
