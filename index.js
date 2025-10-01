@@ -212,11 +212,10 @@ app.post('/api/test-api-polling', async (req, res) => {
     
     // Получаем последние платежи
     const payments = await stripe.paymentIntents.list({ 
-      limit: 5,
-      created: { gte: Math.floor(Date.now() / 1000) - 1800 } // последние 30 минут
+      limit: 5
     });
     
-    console.log(`📊 Найдено платежей за последние 30 минут: ${payments.data.length}`);
+    console.log(`📊 Найдено платежей: ${payments.data.length}`);
     
     const results = [];
     for (const payment of payments.data) {
@@ -931,8 +930,7 @@ setInterval(async () => {
     
     // Получаем последние платежи
     const payments = await stripe.paymentIntents.list({ 
-      limit: 10,
-      created: { gte: Math.floor(Date.now() / 1000) - 1800 } // последние 30 минут
+      limit: 10
     });
     
     for (const payment of payments.data) {
