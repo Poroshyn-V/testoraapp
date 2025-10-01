@@ -938,9 +938,9 @@ app.post('/api/export-all-payments', async (req, res) => {
     for (const payment of payments.data) {
       if (payment.status === 'succeeded' && payment.customer) {
         const customer = await stripe.customers.retrieve(payment.customer);
-        const customerId = customer?.id;
+        const customerIdForNotification = customer?.id;
         const purchaseDate = new Date(payment.created * 1000);
-        const dateKey = `${customerId}_${purchaseDate.toISOString().split('T')[0]}`; // Группируем по клиенту и дню
+        const dateKey = `${customerIdForNotification}_${purchaseDate.toISOString().split('T')[0]}`; // Группируем по клиенту и дню
         
         if (!groupedPurchases.has(dateKey)) {
           groupedPurchases.set(dateKey, {
@@ -1152,9 +1152,9 @@ notifiedPayments.clear();
               console.log('🔍 Customer metadata for Google Sheets:', JSON.stringify(customer?.metadata, null, 2));
 
                      // Группируем уведомления по клиенту и дате
-                     const customerId = customer?.id;
+                     const customerIdForNotification2 = customer?.id;
                      const purchaseDate = new Date(payment.created * 1000);
-                     const dateKey = `${customerId}_${purchaseDate.toISOString().split('T')[0]}`;
+                     const dateKey = `${customerIdForNotification2}_${purchaseDate.toISOString().split('T')[0]}`;
                      
                      if (!notifiedPayments.has(dateKey)) {
                        console.log(`📱 Отправляем уведомления для покупки: ${dateKey}`);
@@ -1356,9 +1356,9 @@ setInterval(async () => {
     for (const payment of payments.data) {
       if (payment.status === 'succeeded' && payment.customer) {
         const customer = await stripe.customers.retrieve(payment.customer);
-        const customerId = customer?.id;
+        const customerIdForExport = customer?.id;
         const purchaseDate = new Date(payment.created * 1000);
-        const dateKey = `${customerId}_${purchaseDate.toISOString().split('T')[0]}`;
+        const dateKey = `${customerIdForExport}_${purchaseDate.toISOString().split('T')[0]}`;
         
         if (!groupedPurchases.has(dateKey)) {
           groupedPurchases.set(dateKey, {
@@ -1511,9 +1511,9 @@ app.listen(PORT, () => {
             processedPayments.add(payment.id);
             
             const customer = await stripe.customers.retrieve(payment.customer);
-            const customerId = customer?.id;
+            const customerIdForStartup = customer?.id;
             const purchaseDate = new Date(payment.created * 1000);
-            const dateKey = `${customerId}_${purchaseDate.toISOString().split('T')[0]}`;
+            const dateKey = `${customerIdForStartup}_${purchaseDate.toISOString().split('T')[0]}`;
             
             if (!notifiedPayments.has(dateKey)) {
               console.log(`📱 Отправляем уведомления для покупки: ${dateKey}`);
