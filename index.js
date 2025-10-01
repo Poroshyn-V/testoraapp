@@ -205,6 +205,102 @@ app.get('/health', (req, res) => {
   res.status(200).send('ok');
 });
 
+// Force process all payments endpoint
+app.post('/api/force-process-payments', async (req, res) => {
+  try {
+    console.log('🔄 Принудительная обработка всех платежей...');
+    
+    // Получаем все платежи
+    const payments = await stripe.paymentIntents.list({ limit: 100 });
+    console.log(`📊 Найдено платежей: ${payments.data.length}`);
+    
+    let processed = 0;
+    let notified = 0;
+    
+    for (const payment of payments.data) {
+      if (payment.status === 'succeeded' && payment.customer) {
+        try {
+          const customer = await stripe.customers.retrieve(payment.customer);
+          
+          // Отправляем уведомления
+          if (!notifiedPayments.has(payment.id)) {
+            const orderId = payment.id.substring(0, 9);
+            const amount = (payment.amount / 100).toFixed(2);
+            const currency = payment.currency.toUpperCase();
+            const email = customer?.email || 'N/A';
+            const country = customer?.metadata?.geo_country || 'N/A';
+            const city = customer?.metadata?.geo_city || '';
+            const geo = city ? `${city}, ${country}` : country;
+
+            const telegramText = `🟢 Order ${orderId} was processed!
+---------------------------
+💳 card
+💰 ${amount} ${currency}
+🏷️ N/A
+---------------------------
+📧 ${email}
+---------------------------
+🌪️ ${orderId}
+📍 ${country}
+🧍 N/A
+🔗 N/A
+${customer?.metadata?.utm_source || 'N/A'}
+${customer?.metadata?.utm_medium || 'N/A'}
+${customer?.metadata?.ad_name || 'N/A'}
+${customer?.metadata?.adset_name || 'N/A'}
+${customer?.metadata?.utm_campaign || 'N/A'}`;
+
+            // Telegram
+            if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+              await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  chat_id: process.env.TELEGRAM_CHAT_ID,
+                  text: telegramText
+                })
+              });
+              notifiedPayments.add(payment.id);
+              notified++;
+            }
+
+            // Slack
+            if (process.env.SLACK_WEBHOOK_URL) {
+              await fetch(process.env.SLACK_WEBHOOK_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: telegramText })
+              });
+            }
+          }
+          
+          processedPayments.add(payment.id);
+          processed++;
+          
+        } catch (error) {
+          console.log(`❌ Ошибка обработки платежа ${payment.id}:`, error.message);
+        }
+      }
+    }
+    
+    return res.json({
+      success: true,
+      message: 'Принудительная обработка завершена',
+      total_payments: payments.data.length,
+      processed: processed,
+      notified: notified
+    });
+    
+  } catch (error) {
+    console.log('❌ Ошибка принудительной обработки:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Ошибка обработки',
+      error: error.message
+    });
+  }
+});
+
 // Test API polling endpoint
 app.post('/api/test-api-polling', async (req, res) => {
   try {
@@ -937,6 +1033,8 @@ setInterval(async () => {
     const payments = await stripe.paymentIntents.list({ 
       limit: 10
     });
+    
+    console.log(`📊 Найдено платежей: ${payments.data.length}`);
     
     for (const payment of payments.data) {
       if (payment.status === 'succeeded' && payment.customer) {
