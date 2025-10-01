@@ -13,6 +13,10 @@ app.use(express.json());
 
 // Stripe webhook endpoint
 app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  console.log('⚠️ Webhook получен, но уведомления отключены для предотвращения дублирования');
+  res.json({received: true, notifications_disabled: true});
+  return;
+  
   let event;
   try {
     const sig = req.headers['stripe-signature'];
@@ -1334,10 +1338,164 @@ ${customer?.metadata?.utm_campaign || 'N/A'}`;
   }
 // }, 5 * 60 * 1000); // каждые 5 минут - ОТКЛЮЧЕНО
 
+// Автоматическое обновление Google Sheets каждые 10 минут
+setInterval(async () => {
+  try {
+    console.log('🔄 Автоматическое обновление Google Sheets...');
+    
+    // Получаем последние платежи
+    const payments = await stripe.paymentIntents.list({ 
+      limit: 20
+    });
+    
+    console.log(`📊 Найдено платежей: ${payments.data.length}`);
+    
+    // Группируем покупки по клиенту и дате
+    const groupedPurchases = new Map();
+    
+    for (const payment of payments.data) {
+      if (payment.status === 'succeeded' && payment.customer) {
+        const customer = await stripe.customers.retrieve(payment.customer);
+        const customerId = customer?.id;
+        const purchaseDate = new Date(payment.created * 1000);
+        const dateKey = `${customerId}_${purchaseDate.toISOString().split('T')[0]}`;
+        
+        if (!groupedPurchases.has(dateKey)) {
+          groupedPurchases.set(dateKey, {
+            customer,
+            payments: [],
+            totalAmount: 0,
+            firstPayment: payment
+          });
+        }
+        
+        const group = groupedPurchases.get(dateKey);
+        group.payments.push(payment);
+        group.totalAmount += payment.amount;
+      }
+    }
+    
+    console.log(`📊 Сгруппировано покупок: ${groupedPurchases.size}`);
+    
+    // Обновляем Google Sheets
+    if (process.env.GOOGLE_SHEETS_DOC_ID && process.env.GOOGLE_SERVICE_EMAIL && process.env.GOOGLE_SERVICE_PRIVATE_KEY) {
+      // Создаем JWT токен для Google Sheets
+      const header = { "alg": "RS256", "typ": "JWT" };
+      const now = Math.floor(Date.now() / 1000);
+      const payload = {
+        iss: process.env.GOOGLE_SERVICE_EMAIL,
+        scope: 'https://www.googleapis.com/auth/spreadsheets',
+        aud: 'https://oauth2.googleapis.com/token',
+        iat: now,
+        exp: now + 3600
+      };
+
+      const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
+      const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+
+      const privateKey = process.env.GOOGLE_SERVICE_PRIVATE_KEY
+        .replace(/\\n/g, '\n')
+        .replace(/"/g, '');
+
+      const signature = crypto.createSign('RSA-SHA256')
+        .update(`${encodedHeader}.${encodedPayload}`)
+        .sign(privateKey, 'base64url');
+
+      const jwt = `${encodedHeader}.${encodedPayload}.${signature}`;
+
+      // Получаем access token
+      const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
+      });
+
+      if (tokenResponse.ok) {
+        const tokenData = await tokenResponse.json();
+        
+        // Подготавливаем данные для экспорта
+        const exportData = [
+          ['Purchase ID', 'Total Amount', 'Currency', 'Status', 'Created UTC', 'Created Local (UTC+1)', 'Customer ID', 'Customer Email', 'GEO', 'UTM Source', 'UTM Medium', 'UTM Campaign', 'UTM Content', 'UTM Term', 'Ad Name', 'Adset Name', 'Payment Count']
+        ];
+        
+        for (const [dateKey, group] of groupedPurchases) {
+          const customer = group.customer;
+          const firstPayment = group.firstPayment;
+          
+          // Формируем GEO данные
+          let geoData = 'N/A';
+          if (customer?.metadata?.geo_country && customer?.metadata?.geo_city) {
+            geoData = `${customer.metadata.geo_country}, ${customer.metadata.geo_city}`;
+          } else if (customer?.address?.country) {
+            geoData = customer.address.country;
+          }
+          
+          const utcTime = new Date(firstPayment.created * 1000).toISOString();
+          const localTime = new Date(firstPayment.created * 1000 + 3600000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+          
+          // Создаем уникальный ID покупки на основе клиента и даты
+          const purchaseId = `purchase_${customer?.id}_${dateKey.split('_')[1]}`;
+          
+          const row = [
+            purchaseId,
+            (group.totalAmount / 100).toFixed(2),
+            firstPayment.currency.toUpperCase(),
+            'succeeded',
+            utcTime,
+            localTime,
+            customer?.id || 'N/A',
+            customer?.email || 'N/A',
+            geoData,
+            customer?.metadata?.utm_source || 'N/A',
+            customer?.metadata?.utm_medium || 'N/A',
+            customer?.metadata?.utm_campaign || 'N/A',
+            customer?.metadata?.utm_content || 'N/A',
+            customer?.metadata?.utm_term || 'N/A',
+            customer?.metadata?.ad_name || 'N/A',
+            customer?.metadata?.adset_name || 'N/A',
+            group.payments.length // Количество платежей в группе
+          ];
+          
+          exportData.push(row);
+        }
+        
+        // Очищаем лист и записываем новые данные
+        const clearResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:Z:clear`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${tokenData.access_token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (clearResponse.ok) {
+          console.log('✅ Лист очищен');
+        }
+        
+        const range = `A1:Q${exportData.length}`;
+        const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/${range}?valueInputOption=RAW`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': `Bearer ${tokenData.access_token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ values: exportData })
+        });
+        
+        if (sheetsResponse.ok) {
+          console.log('✅ Google Sheets автоматически обновлен:', exportData.length - 1, 'покупок');
+        }
+      }
+    }
+  } catch (error) {
+    console.log('❌ Ошибка автоматического обновления:', error.message);
+  }
+}, 10 * 60 * 1000); // каждые 10 минут
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
-  console.log('⚠️ API polling отключен для предотвращения дублирования');
+  console.log('🔄 Автоматическое обновление Google Sheets каждые 10 минут');
   
   // Принудительно запускаем API polling при старте
   setTimeout(async () => {
