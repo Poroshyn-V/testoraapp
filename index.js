@@ -815,7 +815,111 @@ app.post('/api/export-all-payments', async (req, res) => {
   }
 });
 
+// API polling каждые 5 минут для Google Sheets
+setInterval(async () => {
+  try {
+    console.log('🔄 Проверяем новые покупки...');
+    
+    // Получаем последние платежи
+    const payments = await stripe.paymentIntents.list({ 
+      limit: 10,
+      created: { gte: Math.floor(Date.now() / 1000) - 300 } // последние 5 минут
+    });
+    
+    for (const payment of payments.data) {
+      if (payment.status === 'succeeded' && payment.customer) {
+        try {
+          const customer = await stripe.customers.retrieve(payment.customer);
+          
+          // Проверяем, есть ли уже в Google Sheets
+          if (process.env.GOOGLE_SHEETS_DOC_ID && process.env.GOOGLE_SERVICE_EMAIL && process.env.GOOGLE_SERVICE_PRIVATE_KEY) {
+            // Создаем JWT токен для Google Sheets
+            const header = { "alg": "RS256", "typ": "JWT" };
+            const now = Math.floor(Date.now() / 1000);
+            const payload = {
+              iss: process.env.GOOGLE_SERVICE_EMAIL,
+              scope: 'https://www.googleapis.com/auth/spreadsheets',
+              aud: 'https://oauth2.googleapis.com/token',
+              iat: now,
+              exp: now + 3600
+            };
+
+            const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
+            const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+
+            const privateKey = process.env.GOOGLE_SERVICE_PRIVATE_KEY
+              .replace(/\\n/g, '\n')
+              .replace(/"/g, '');
+
+            const signature = crypto.createSign('RSA-SHA256')
+              .update(`${encodedHeader}.${encodedPayload}`)
+              .sign(privateKey, 'base64url');
+
+            const jwt = `${encodedHeader}.${encodedPayload}.${signature}`;
+
+            // Получаем access token
+            const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
+            });
+
+            if (tokenResponse.ok) {
+              const tokenData = await tokenResponse.json();
+
+              // Получаем GEO данные
+              let geoData = 'N/A';
+              if (customer?.metadata?.geo_country && customer?.metadata?.geo_city) {
+                geoData = `${customer.metadata.geo_city}, ${customer.metadata.geo_country}`;
+              } else if (customer?.address?.country) {
+                geoData = customer.address.country;
+              }
+
+              // Добавляем новую строку в Google Sheets
+              const newRow = [
+                payment.id,
+                (payment.amount / 100).toFixed(2),
+                payment.currency.toUpperCase(),
+                'succeeded',
+                new Date(payment.created * 1000).toISOString(),
+                customer?.id || 'N/A',
+                customer?.email || 'N/A',
+                geoData,
+                customer?.metadata?.utm_source || 'N/A',
+                customer?.metadata?.utm_medium || 'N/A',
+                customer?.metadata?.utm_campaign || 'N/A',
+                customer?.metadata?.utm_content || 'N/A',
+                customer?.metadata?.utm_term || 'N/A',
+                customer?.metadata?.ad_name || 'N/A',
+                customer?.metadata?.adset_name || 'N/A'
+              ];
+
+              const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:O:append?valueInputOption=RAW`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${tokenData.access_token}`,
+                  'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ values: [newRow] })
+              });
+
+              if (sheetsResponse.ok) {
+                console.log('✅ Новая покупка добавлена в Google Sheets:', payment.id);
+              }
+            }
+          }
+        } catch (error) {
+          console.log('❌ Ошибка обработки платежа:', error.message);
+        }
+      }
+    }
+  } catch (error) {
+    console.log('❌ Ошибка API polling:', error.message);
+  }
+}, 5 * 60 * 1000); // каждые 5 минут
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
+  console.log('🔄 API polling запущен (каждые 5 минут)');
 });
