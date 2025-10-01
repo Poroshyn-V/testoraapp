@@ -205,6 +205,57 @@ app.get('/health', (req, res) => {
   res.status(200).send('ok');
 });
 
+// Test API polling endpoint
+app.post('/api/test-api-polling', async (req, res) => {
+  try {
+    console.log('🔍 Тестируем API polling...');
+    
+    // Получаем последние платежи
+    const payments = await stripe.paymentIntents.list({ 
+      limit: 5,
+      created: { gte: Math.floor(Date.now() / 1000) - 300 } // последние 5 минут
+    });
+    
+    console.log(`📊 Найдено платежей за последние 5 минут: ${payments.data.length}`);
+    
+    const results = [];
+    for (const payment of payments.data) {
+      if (payment.status === 'succeeded' && payment.customer) {
+        const customer = await stripe.customers.retrieve(payment.customer);
+        results.push({
+          payment_id: payment.id,
+          amount: (payment.amount / 100).toFixed(2),
+          currency: payment.currency,
+          email: customer?.email || 'N/A',
+          geo_country: customer?.metadata?.geo_country || 'N/A',
+          geo_city: customer?.metadata?.geo_city || 'N/A',
+          utm_source: customer?.metadata?.utm_source || 'N/A',
+          utm_medium: customer?.metadata?.utm_medium || 'N/A',
+          ad_name: customer?.metadata?.ad_name || 'N/A',
+          processed: processedPayments.has(payment.id),
+          notified: notifiedPayments.has(payment.id)
+        });
+      }
+    }
+    
+    return res.json({
+      success: true,
+      message: 'API polling тест завершен',
+      payments_found: payments.data.length,
+      successful_payments: results.length,
+      results: results
+    });
+    
+  } catch (error) {
+    console.log('❌ Ошибка тестирования API polling:', error.message);
+    return res.status(500).json({
+      success: false,
+      message: 'Ошибка тестирования',
+      error: error.message
+    });
+  }
+});
+
 // Test webhook simulation endpoint
 app.post('/api/test-webhook-simulation', async (req, res) => {
   try {
@@ -361,6 +412,10 @@ app.get('/test', (req, res) => {
             📱 Отправить последнюю покупку
         </button>
         
+        <button id="testPollingButton" class="button" onclick="testApiPolling()">
+            🔍 Тест API Polling
+        </button>
+        
         <div id="result"></div>
 
         <script>
@@ -401,6 +456,52 @@ app.get('/test', (req, res) => {
                 } finally {
                     button.disabled = false;
                     button.textContent = '📱 Отправить последнюю покупку';
+                }
+            }
+            
+            async function testApiPolling() {
+                const button = document.getElementById('testPollingButton');
+                const result = document.getElementById('result');
+                
+                button.disabled = true;
+                button.textContent = '⏳ Тестируем...';
+                result.innerHTML = '';
+                
+                try {
+                    const response = await fetch('/api/test-api-polling', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        result.className = 'result success';
+                        result.innerHTML = \`✅ API POLLING ТЕСТ ЗАВЕРШЕН!
+                        
+📊 Найдено платежей: \${data.payments_found}
+✅ Успешных платежей: \${data.successful_payments}
+
+\${data.results.map(p => \`
+💳 \${p.payment_id}
+💰 \${p.amount} \${p.currency}
+📧 \${p.email}
+🌍 \${p.geo_city}, \${p.geo_country}
+📱 \${p.utm_source} / \${p.utm_medium}
+🎯 \${p.ad_name}
+🔄 Обработан: \${p.processed ? 'ДА' : 'НЕТ'}
+📱 Уведомлен: \${p.notified ? 'ДА' : 'НЕТ'}
+---\`).join('')}\`;
+                    } else {
+                        result.className = 'result error';
+                        result.innerHTML = \`❌ ОШИБКА: \${data.message}\`;
+                    }
+                } catch (error) {
+                    result.className = 'result error';
+                    result.innerHTML = \`❌ ОШИБКА: \${error.message}\`;
+                } finally {
+                    button.disabled = false;
+                    button.textContent = '🔍 Тест API Polling';
                 }
             }
         </script>
