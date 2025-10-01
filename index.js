@@ -837,6 +837,7 @@ setInterval(async () => {
     for (const payment of payments.data) {
       if (payment.status === 'succeeded' && payment.customer && !processedPayments.has(payment.id)) {
         try {
+          console.log(`🔄 Обрабатываем платеж: ${payment.id}`);
           processedPayments.add(payment.id);
           const customer = await stripe.customers.retrieve(payment.customer);
           
@@ -899,6 +900,16 @@ setInterval(async () => {
               const country = customer?.metadata?.geo_country || 'N/A';
               const city = customer?.metadata?.geo_city || '';
               const geo = city ? `${city}, ${country}` : country;
+
+              console.log('🔍 Данные для уведомления:', {
+                email,
+                country,
+                city,
+                geo,
+                utm_source: customer?.metadata?.utm_source,
+                utm_medium: customer?.metadata?.utm_medium,
+                ad_name: customer?.metadata?.ad_name
+              });
 
               const telegramText = `🟢 Order ${orderId} was processed!
 ---------------------------
