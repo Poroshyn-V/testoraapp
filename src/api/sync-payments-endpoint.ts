@@ -14,10 +14,14 @@ router.post('/sync-payments', async (req, res) => {
   try {
     console.log('🔄 Starting payment sync...');
     
-    // Получаем последние успешные checkout сессии
+    // Получаем сессии за последние 24 часа
+    const oneDayAgo = Math.floor(Date.now() / 1000) - (24 * 60 * 60);
+    
     const sessions = await stripe.checkout.sessions.list({
-      limit: 20,
-      status: 'complete'
+      limit: 100,
+      created: {
+        gte: oneDayAgo  // только за последние 24 часа
+      }
     });
     
     if (sessions.data.length === 0) {
