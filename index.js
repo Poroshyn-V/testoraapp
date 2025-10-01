@@ -1250,9 +1250,9 @@ ${customer?.metadata?.utm_campaign || 'N/A'}`;
               }
 
               // Группируем покупки по клиенту и дате для Google Sheets
-              const customerId = customer?.id;
+              const customerIdForGrouping = customer?.id;
               const purchaseDate = new Date(payment.created * 1000);
-              const dateKey = `${customerId}_${purchaseDate.toISOString().split('T')[0]}`;
+              const dateKey = `${customerIdForGrouping}_${purchaseDate.toISOString().split('T')[0]}`;
               
               // Проверяем, есть ли уже покупка этого клиента за этот день
               const existingPurchaseResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:Q?valueInputOption=RAW`, {
@@ -1273,7 +1273,7 @@ ${customer?.metadata?.utm_campaign || 'N/A'}`;
                 // Ищем существующую покупку этого клиента за этот день
                 for (let i = 1; i < rows.length; i++) {
                   const row = rows[i];
-                  if (row[6] === customerId && row[4]?.includes(dateKey.split('_')[1])) {
+                  if (row[6] === customerIdForGrouping && row[4]?.includes(dateKey.split('_')[1])) {
                     // Найдена существующая покупка - обновляем ее
                     existingRowIndex = i;
                     shouldAddPurchase = false;
@@ -1287,7 +1287,7 @@ ${customer?.metadata?.utm_campaign || 'N/A'}`;
                 const utcTime = new Date(payment.created * 1000).toISOString();
                 const localTime = new Date(payment.created * 1000 + 3600000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
                 
-                const purchaseId = `purchase_${customerId}_${dateKey.split('_')[1]}`;
+                const purchaseId = `purchase_${customerIdForGrouping}_${dateKey.split('_')[1]}`;
                 
                 const newRow = [
                   purchaseId,
@@ -1323,7 +1323,7 @@ ${customer?.metadata?.utm_campaign || 'N/A'}`;
                 }
               } else {
                 // Обновляем существующую покупку
-                console.log('🔄 Обновляем существующую покупку для клиента:', customerId);
+                console.log('🔄 Обновляем существующую покупку для клиента:', customerIdForGrouping);
                 // Здесь можно добавить логику обновления существующей покупки
               }
             }
