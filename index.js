@@ -734,7 +734,7 @@ app.post('/api/export-all-payments', async (req, res) => {
     
     // Подготавливаем данные для экспорта
     const exportData = [
-      ['Payment ID', 'Amount', 'Currency', 'Status', 'Created', 'Customer ID', 'Customer Email', 'GEO', 'UTM Source', 'UTM Medium', 'UTM Campaign', 'UTM Content', 'UTM Term', 'Ad Name', 'Adset Name']
+      ['Payment ID', 'Amount', 'Currency', 'Status', 'Created UTC', 'Created Local (UTC+1)', 'Customer ID', 'Customer Email', 'GEO', 'UTM Source', 'UTM Medium', 'UTM Campaign', 'UTM Content', 'UTM Term', 'Ad Name', 'Adset Name']
     ];
     
     for (const payment of payments.data) {
@@ -752,12 +752,16 @@ app.post('/api/export-all-payments', async (req, res) => {
         geoData = customer.address.country;
       }
       
+      const utcTime = new Date(payment.created * 1000).toISOString();
+      const localTime = new Date(payment.created * 1000 + 3600000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+      
       const row = [
         payment.id,
         (payment.amount / 100).toFixed(2),
         payment.currency.toUpperCase(),
         payment.status,
-        new Date(payment.created * 1000).toISOString(),
+        utcTime,
+        localTime,
         customer?.id || 'N/A',
         customer?.email || 'N/A',
         geoData,
@@ -776,7 +780,7 @@ app.post('/api/export-all-payments', async (req, res) => {
     console.log(`📝 Подготовлено ${exportData.length} строк для экспорта`);
     
     // Очищаем лист и записываем новые данные
-    const range = `A1:O${exportData.length}`;
+    const range = `A1:P${exportData.length}`;
     const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/${range}?valueInputOption=RAW`, {
       method: 'PUT',
       headers: {
@@ -939,12 +943,16 @@ ${customer?.metadata?.utm_campaign || 'N/A'}`;
               }
 
               // Добавляем новую строку в Google Sheets
+              const utcTime = new Date(payment.created * 1000).toISOString();
+              const localTime = new Date(payment.created * 1000 + 3600000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+              
               const newRow = [
                 payment.id,
                 (payment.amount / 100).toFixed(2),
                 payment.currency.toUpperCase(),
                 'succeeded',
-                new Date(payment.created * 1000).toISOString(),
+                utcTime,
+                localTime,
                 customer?.id || 'N/A',
                 customer?.email || 'N/A',
                 geoData,
@@ -957,7 +965,7 @@ ${customer?.metadata?.utm_campaign || 'N/A'}`;
                 customer?.metadata?.adset_name || 'N/A'
               ];
 
-              const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:O:append?valueInputOption=RAW`, {
+              const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:P:append?valueInputOption=RAW`, {
                 method: 'POST',
                 headers: {
                   'Authorization': `Bearer ${tokenData.access_token}`,
