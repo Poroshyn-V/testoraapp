@@ -62,6 +62,8 @@ app.post('/api/stripe-webhook', express.raw({ type: 'application/json' }), async
       
       console.log('🌍 GEO Data:', geoData);
       console.log('📊 Customer metadata:', customer?.metadata);
+      console.log('🔍 Full customer object:', JSON.stringify(customer, null, 2));
+      console.log('🔍 Payment data:', JSON.stringify(paymentData, null, 2));
       
       // Формируем красивое уведомление
       const orderId = paymentData.id.substring(0, 9); // Берем первые 9 символов
