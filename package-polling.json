@@ -1,0 +1,14 @@
+{
+  "name": "stripe-auto-polling",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "node auto-polling.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "node-fetch": "^3.3.2",
+    "stripe": "^16.0.0"
+  }
+}

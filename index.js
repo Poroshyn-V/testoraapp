@@ -1245,40 +1245,82 @@ ${customer?.metadata?.utm_campaign || 'N/A'}`;
                 }
               }
 
-              // Добавляем новую строку в Google Sheets
-              const utcTime = new Date(payment.created * 1000).toISOString();
-              const localTime = new Date(payment.created * 1000 + 3600000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+              // Группируем покупки по клиенту и дате для Google Sheets
+              const customerId = customer?.id;
+              const purchaseDate = new Date(payment.created * 1000);
+              const dateKey = `${customerId}_${purchaseDate.toISOString().split('T')[0]}`;
               
-              const newRow = [
-                payment.id,
-                (payment.amount / 100).toFixed(2),
-                payment.currency.toUpperCase(),
-                'succeeded',
-                utcTime,
-                localTime,
-                customer?.id || 'N/A',
-                customer?.email || 'N/A',
-                geoData,
-                customer?.metadata?.utm_source || 'N/A',
-                customer?.metadata?.utm_medium || 'N/A',
-                customer?.metadata?.utm_campaign || 'N/A',
-                customer?.metadata?.utm_content || 'N/A',
-                customer?.metadata?.utm_term || 'N/A',
-                customer?.metadata?.ad_name || 'N/A',
-                customer?.metadata?.adset_name || 'N/A'
-              ];
-
-              const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:P:append?valueInputOption=RAW`, {
-                method: 'POST',
+              // Проверяем, есть ли уже покупка этого клиента за этот день
+              const existingPurchaseResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:Q?valueInputOption=RAW`, {
+                method: 'GET',
                 headers: {
                   'Authorization': `Bearer ${tokenData.access_token}`,
                   'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ values: [newRow] })
+                }
               });
-
-              if (sheetsResponse.ok) {
-                console.log('✅ Новая покупка добавлена в Google Sheets:', payment.id);
+              
+              let shouldAddPurchase = true;
+              let existingRowIndex = -1;
+              
+              if (existingPurchaseResponse.ok) {
+                const existingData = await existingPurchaseResponse.json();
+                const rows = existingData.values || [];
+                
+                // Ищем существующую покупку этого клиента за этот день
+                for (let i = 1; i < rows.length; i++) {
+                  const row = rows[i];
+                  if (row[6] === customerId && row[4]?.includes(dateKey.split('_')[1])) {
+                    // Найдена существующая покупка - обновляем ее
+                    existingRowIndex = i;
+                    shouldAddPurchase = false;
+                    break;
+                  }
+                }
+              }
+              
+              if (shouldAddPurchase) {
+                // Добавляем новую покупку
+                const utcTime = new Date(payment.created * 1000).toISOString();
+                const localTime = new Date(payment.created * 1000 + 3600000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+                
+                const purchaseId = `purchase_${customerId}_${dateKey.split('_')[1]}`;
+                
+                const newRow = [
+                  purchaseId,
+                  (payment.amount / 100).toFixed(2),
+                  payment.currency.toUpperCase(),
+                  'succeeded',
+                  utcTime,
+                  localTime,
+                  customer?.id || 'N/A',
+                  customer?.email || 'N/A',
+                  geoData,
+                  customer?.metadata?.utm_source || 'N/A',
+                  customer?.metadata?.utm_medium || 'N/A',
+                  customer?.metadata?.utm_campaign || 'N/A',
+                  customer?.metadata?.utm_content || 'N/A',
+                  customer?.metadata?.utm_term || 'N/A',
+                  customer?.metadata?.ad_name || 'N/A',
+                  customer?.metadata?.adset_name || 'N/A',
+                  1 // Payment Count
+                ];
+                
+                const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:Q:append?valueInputOption=RAW`, {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${tokenData.access_token}`,
+                    'Content-Type': 'application/json'
+                  },
+                  body: JSON.stringify({ values: [newRow] })
+                });
+                
+                if (sheetsResponse.ok) {
+                  console.log('✅ Новая покупка добавлена в Google Sheets:', purchaseId);
+                }
+              } else {
+                // Обновляем существующую покупку
+                console.log('🔄 Обновляем существующую покупку для клиента:', customerId);
+                // Здесь можно добавить логику обновления существующей покупки
               }
             }
           }
