@@ -817,6 +817,7 @@ app.post('/api/export-all-payments', async (req, res) => {
 
 // Хранилище обработанных платежей
 const processedPayments = new Set();
+const notifiedPayments = new Set();
 
 // API polling каждые 5 минут для Google Sheets
 setInterval(async () => {
@@ -882,6 +883,60 @@ setInterval(async () => {
               }
 
               console.log('🔍 Customer metadata for Google Sheets:', JSON.stringify(customer?.metadata, null, 2));
+
+              // Отправляем уведомления для новой покупки (только если еще не отправляли)
+              if (!notifiedPayments.has(payment.id)) {
+                notifiedPayments.add(payment.id);
+                
+                const orderId = payment.id.substring(0, 9);
+              const amount = (payment.amount / 100).toFixed(2);
+              const currency = payment.currency.toUpperCase();
+              const email = customer?.email || 'N/A';
+              const country = customer?.metadata?.geo_country || 'N/A';
+              const city = customer?.metadata?.geo_city || '';
+              const geo = city ? `${city}, ${country}` : country;
+
+              const telegramText = `🟢 Order ${orderId} was processed!
+---------------------------
+💳 card
+💰 ${amount} ${currency}
+🏷️ N/A
+---------------------------
+📧 ${email}
+---------------------------
+🌪️ ${orderId}
+📍 ${country}
+🧍 N/A
+🔗 N/A
+${customer?.metadata?.utm_source || 'N/A'}
+${customer?.metadata?.utm_medium || 'N/A'}
+${customer?.metadata?.ad_name || 'N/A'}
+${customer?.metadata?.adset_name || 'N/A'}
+${customer?.metadata?.utm_campaign || 'N/A'}`;
+
+              // Telegram
+              if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+                await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    chat_id: process.env.TELEGRAM_CHAT_ID,
+                    text: telegramText
+                  })
+                });
+                console.log('✅ Telegram уведомление отправлено через API polling');
+              }
+
+              // Slack
+              if (process.env.SLACK_WEBHOOK_URL) {
+                await fetch(process.env.SLACK_WEBHOOK_URL, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ text: telegramText })
+                });
+                console.log('✅ Slack уведомление отправлено через API polling');
+              }
+              }
 
               // Добавляем новую строку в Google Sheets
               const newRow = [
