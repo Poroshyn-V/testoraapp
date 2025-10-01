@@ -52,7 +52,7 @@ export async function appendPaymentRow(session) {
         const exists = await paymentExists(sheet, session.id);
         if (exists) {
             console.log('⏭️ Payment already exists in Google Sheets, skipping:', session.id);
-            return;
+            return false; // возвращаем false = не добавили
         }
         // Получаем metadata клиента если есть
         let customerMetadata = {};
@@ -106,6 +106,7 @@ export async function appendPaymentRow(session) {
         };
         await sheet.addRow(row);
         console.log('✅ Payment data saved to Google Sheets:', session.id);
+        return true; // возвращаем true = успешно добавили
     }
     catch (error) {
         console.error('Error saving to Google Sheets:', error);
@@ -116,5 +117,6 @@ export async function appendPaymentRow(session) {
             currency: session.currency,
             email: session.customer_details?.email || session.customer_email
         });
+        return false; // возвращаем false при ошибке
     }
 }

@@ -48,30 +48,36 @@ router.post('/sync-payments', async (req, res) => {
                     }
                 }
                 // Пытаемся добавить в Google Sheets (с проверкой на дубликаты внутри)
-                await appendPaymentRow(session);
-                // Отправляем уведомления только для новых платежей
-                try {
-                    const text = formatTelegram(session, customerMetadata);
-                    await sendTelegram(text);
-                    console.log('📱 Telegram notification sent for:', session.id);
+                // appendPaymentRow вернет true если добавил, false если уже существует
+                const wasAdded = await appendPaymentRow(session);
+                
+                // Отправляем уведомления ТОЛЬКО для новых платежей
+                if (wasAdded) {
+                    try {
+                        const text = formatTelegram(session, customerMetadata);
+                        await sendTelegram(text);
+                        console.log('📱 Telegram notification sent for:', session.id);
+                    }
+                    catch (error) {
+                        console.error('Error sending Telegram:', error.message);
+                    }
+                    try {
+                        const slackText = formatSlack(session);
+                        await sendSlack(slackText);
+                        console.log('💬 Slack notification sent for:', session.id);
+                    }
+                    catch (error) {
+                        console.error('Error sending Slack:', error.message);
+                    }
+                    newPayments++;
+                    processedPayments.push({
+                        session_id: session.id,
+                        email: session.customer_details?.email || 'N/A',
+                        amount: (session.amount_total ?? 0) / 100
+                    });
+                } else {
+                    console.log('⏭️  Payment already exists, skipping notifications:', session.id);
                 }
-                catch (error) {
-                    console.error('Error sending Telegram:', error.message);
-                }
-                try {
-                    const slackText = formatSlack(session);
-                    await sendSlack(slackText);
-                    console.log('💬 Slack notification sent for:', session.id);
-                }
-                catch (error) {
-                    console.error('Error sending Slack:', error.message);
-                }
-                newPayments++;
-                processedPayments.push({
-                    session_id: session.id,
-                    email: session.customer_details?.email || 'N/A',
-                    amount: (session.amount_total ?? 0) / 100
-                });
             }
             catch (error) {
                 console.error(`Error processing session ${session.id}:`, error.message);
