@@ -1065,8 +1065,8 @@ console.log('🧹 Очищаем хранилище обработанных п�
 processedPayments.clear();
 notifiedPayments.clear();
 
-// API polling каждые 5 минут для Google Sheets
-setInterval(async () => {
+// API polling отключен для предотвращения дублирования
+// setInterval(async () => {
   try {
     console.log('🔄 Проверяем новые покупки...');
     
@@ -1332,12 +1332,12 @@ ${customer?.metadata?.utm_campaign || 'N/A'}`;
   } catch (error) {
     console.log('❌ Ошибка API polling:', error.message);
   }
-}, 5 * 60 * 1000); // каждые 5 минут
+// }, 5 * 60 * 1000); // каждые 5 минут - ОТКЛЮЧЕНО
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
-  console.log('🔄 API polling запущен (каждые 5 минут)');
+  console.log('⚠️ API polling отключен для предотвращения дублирования');
   
   // Принудительно запускаем API polling при старте
   setTimeout(async () => {
