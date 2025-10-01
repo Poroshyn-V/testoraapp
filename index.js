@@ -1578,34 +1578,66 @@ setInterval(async () => {
           exportData.push(row);
         }
         
-        // Очищаем лист и записываем новые данные
-        const clearResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:Z:clear`, {
-          method: 'POST',
+        // Проверяем существующие данные в Google Sheets
+        const existingResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:Q?valueInputOption=RAW`, {
+          method: 'GET',
           headers: {
             'Authorization': `Bearer ${tokenData.access_token}`,
             'Content-Type': 'application/json'
           }
         });
         
-        if (clearResponse.ok) {
-          console.log('✅ Лист очищен');
+        let existingData = [];
+        if (existingResponse.ok) {
+          const existing = await existingResponse.json();
+          existingData = existing.values || [];
+          console.log(`📊 Найдено существующих строк: ${existingData.length}`);
         }
         
-        const range = `A1:Q${exportData.length}`;
-        const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/${range}?valueInputOption=RAW`, {
-          method: 'PUT',
-          headers: {
-            'Authorization': `Bearer ${tokenData.access_token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ values: exportData })
-        });
+        // Фильтруем только новые покупки (которых еще нет в Google Sheets)
+        const newRows = [];
+        const existingPurchaseIds = new Set();
         
-        if (sheetsResponse.ok) {
-          console.log('✅ Google Sheets автоматически обновлен:', exportData.length - 1, 'покупок');
-          console.log('📊 Данные отправлены в Google Sheets:', JSON.stringify(exportData.slice(0, 3), null, 2));
+        // Собираем существующие ID покупок
+        for (let i = 1; i < existingData.length; i++) {
+          const row = existingData[i];
+          if (row[0]) {
+            existingPurchaseIds.add(row[0]);
+          }
+        }
+        
+        // Добавляем только новые покупки
+        for (let i = 1; i < exportData.length; i++) {
+          const row = exportData[i];
+          const purchaseId = row[0];
+          if (!existingPurchaseIds.has(purchaseId)) {
+            newRows.push(row);
+            console.log(`🆕 Новая покупка: ${purchaseId}`);
+          } else {
+            console.log(`⏭️ Покупка уже существует: ${purchaseId}`);
+          }
+        }
+        
+        console.log(`📊 Новых покупок для добавления: ${newRows.length}`);
+        
+        // Добавляем только новые покупки вниз (append)
+        if (newRows.length > 0) {
+          const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:Q:append?valueInputOption=RAW`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${tokenData.access_token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ values: newRows })
+          });
+        
+          if (sheetsResponse.ok) {
+            console.log('✅ НОВЫЕ ПОКУПКИ ДОБАВЛЕНЫ В GOOGLE SHEETS:', newRows.length, 'покупок');
+          } else {
+            console.log('❌ Ошибка добавления в Google Sheets:', await sheetsResponse.text());
+          }
         } else {
-          console.log('❌ Ошибка обновления Google Sheets:', await sheetsResponse.text());
+          console.log('📊 Нет новых покупок для добавления');
         }
       }
     }
