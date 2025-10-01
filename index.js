@@ -515,6 +515,10 @@ app.get('/test', (req, res) => {
             🔍 Тест API Polling
         </button>
         
+        <button id="checkPaymentsButton" class="button" onclick="checkAllPayments()">
+            📊 Проверить все платежи
+        </button>
+        
         <div id="result"></div>
 
         <script>
@@ -603,10 +607,95 @@ app.get('/test', (req, res) => {
                     button.textContent = '🔍 Тест API Polling';
                 }
             }
+            
+            async function checkAllPayments() {
+                const button = document.getElementById('checkPaymentsButton');
+                const result = document.getElementById('result');
+                
+                button.disabled = true;
+                button.textContent = '⏳ Проверяем...';
+                result.innerHTML = '';
+                
+                try {
+                    const response = await fetch('/api/check-all-payments');
+                    const data = await response.json();
+                    
+                    if (response.ok) {
+                        result.className = 'result success';
+                        result.innerHTML = \`✅ ПРОВЕРКА ПЛАТЕЖЕЙ ЗАВЕРШЕНА!
+                        
+📊 Всего платежей: \${data.totalPayments}
+✅ Успешных платежей: \${data.successfulPayments}
+👥 Платежей с клиентами: \${data.paymentsWithCustomer}
+👥 Уникальных клиентов: \${data.uniqueCustomers}
+
+📋 Последние 10 платежей:
+\${data.recentPayments.map(p => \`• \${p.id} - \${(p.amount/100).toFixed(2)} \${p.currency.toUpperCase()} - \${new Date(p.created).toLocaleString()}\`).join('\\n')}\`;
+                    } else {
+                        result.className = 'result error';
+                        result.innerHTML = \`❌ ОШИБКА: \${data.error}\`;
+                    }
+                } catch (error) {
+                    result.className = 'result error';
+                    result.innerHTML = \`❌ ОШИБКА СЕТИ: \${error.message}\`;
+                } finally {
+                    button.disabled = false;
+                    button.textContent = '📊 Проверить все платежи';
+                }
+            }
         </script>
     </body>
     </html>
   `);
+});
+
+// Endpoint для проверки всех платежей
+app.get('/api/check-all-payments', async (req, res) => {
+  try {
+    console.log('🔍 Проверяем все платежи...');
+    
+    // Получаем все платежи
+    const payments = await stripe.paymentIntents.list({ 
+      limit: 100
+    });
+    
+    const successfulPayments = payments.data.filter(p => p.status === 'succeeded');
+    const paymentsWithCustomer = successfulPayments.filter(p => p.customer);
+    
+    console.log(`📊 Всего платежей: ${payments.data.length}`);
+    console.log(`✅ Успешных платежей: ${successfulPayments.length}`);
+    console.log(`👥 Платежей с клиентами: ${paymentsWithCustomer.length}`);
+    
+    // Группируем по клиентам
+    const customerGroups = new Map();
+    for (const payment of paymentsWithCustomer) {
+      const customerId = payment.customer;
+      if (!customerGroups.has(customerId)) {
+        customerGroups.set(customerId, []);
+      }
+      customerGroups.get(customerId).push(payment);
+    }
+    
+    console.log(`👥 Уникальных клиентов: ${customerGroups.size}`);
+    
+    res.json({
+      totalPayments: payments.data.length,
+      successfulPayments: successfulPayments.length,
+      paymentsWithCustomer: paymentsWithCustomer.length,
+      uniqueCustomers: customerGroups.size,
+      recentPayments: successfulPayments.slice(0, 10).map(p => ({
+        id: p.id,
+        amount: p.amount,
+        currency: p.currency,
+        created: new Date(p.created * 1000).toISOString(),
+        customer: p.customer,
+        status: p.status
+      }))
+    });
+  } catch (error) {
+    console.log('❌ Ошибка проверки платежей:', error.message);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // API endpoint для отправки последней покупки
@@ -1336,7 +1425,7 @@ ${customer?.metadata?.utm_campaign || 'N/A'}`;
   } catch (error) {
     console.log('❌ Ошибка API polling:', error.message);
   }
-// }, 5 * 60 * 1000); // каждые 5 минут - ОТКЛЮЧЕНО
+}, 5 * 60 * 1000); // каждые 5 минут
 
 // Автоматическое обновление Google Sheets каждые 10 минут
 setInterval(async () => {
@@ -1345,20 +1434,26 @@ setInterval(async () => {
     
     // Получаем последние платежи
     const payments = await stripe.paymentIntents.list({ 
-      limit: 20
+      limit: 100
     });
     
     console.log(`📊 Найдено платежей: ${payments.data.length}`);
+    
+    // Подсчитываем успешные платежи
+    const successfulPayments = payments.data.filter(p => p.status === 'succeeded');
+    console.log(`✅ Успешных платежей: ${successfulPayments.length}`);
     
     // Группируем покупки по клиенту и дате
     const groupedPurchases = new Map();
     
     for (const payment of payments.data) {
       if (payment.status === 'succeeded' && payment.customer) {
+        console.log(`🔄 Обрабатываем платеж: ${payment.id}, клиент: ${payment.customer}`);
         const customer = await stripe.customers.retrieve(payment.customer);
         const customerIdForExport = customer?.id;
         const purchaseDateForExport = new Date(payment.created * 1000);
         const dateKeyForExport = `${customerIdForExport}_${purchaseDateForExport.toISOString().split('T')[0]}`;
+        console.log(`📅 Дата покупки: ${purchaseDateForExport.toISOString().split('T')[0]}, ключ: ${dateKeyForExport}`);
         
         if (!groupedPurchases.has(dateKeyForExport)) {
           groupedPurchases.set(dateKeyForExport, {
@@ -1484,6 +1579,9 @@ setInterval(async () => {
         
         if (sheetsResponse.ok) {
           console.log('✅ Google Sheets автоматически обновлен:', exportData.length - 1, 'покупок');
+          console.log('📊 Данные отправлены в Google Sheets:', JSON.stringify(exportData.slice(0, 3), null, 2));
+        } else {
+          console.log('❌ Ошибка обновления Google Sheets:', await sheetsResponse.text());
         }
       }
     }
