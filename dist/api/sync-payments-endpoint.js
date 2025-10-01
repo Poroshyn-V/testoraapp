@@ -13,8 +13,7 @@ router.post('/sync-payments', async (req, res) => {
         console.log('🔄 Starting payment sync...');
         // Получаем последние успешные checkout сессии
         const sessions = await stripe.checkout.sessions.list({
-            limit: 20,
-            status: 'complete'
+            limit: 20
         });
         if (sessions.data.length === 0) {
             return res.json({
