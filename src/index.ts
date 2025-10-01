@@ -185,4 +185,37 @@ app.use('/api', syncPaymentsRouter);
 
 app.listen(ENV.PORT, () => {
   logger.info(`Server listening on port ${ENV.PORT}`);
+  
+  // Запускаем автоматическую синхронизацию каждые 5 минут
+  logger.info('🔄 Starting automatic sync every 5 minutes...');
+  
+  // Первый запуск через 30 секунд после старта
+  setTimeout(async () => {
+    try {
+      logger.info('🚀 Running initial sync...');
+      const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const result = await response.json();
+      logger.info({ result }, 'Initial sync completed');
+    } catch (error: any) {
+      logger.error({ error }, 'Initial sync failed');
+    }
+  }, 30000);
+  
+  // Затем каждые 5 минут
+  setInterval(async () => {
+    try {
+      logger.info('🔄 Running scheduled sync...');
+      const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const result = await response.json();
+      logger.info({ result }, 'Scheduled sync completed');
+    } catch (error: any) {
+      logger.error({ error }, 'Scheduled sync failed');
+    }
+  }, 5 * 60 * 1000); // 5 минут
 });
