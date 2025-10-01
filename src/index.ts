@@ -3,6 +3,7 @@ import pino from 'pino';
 import webhookRouter from './api/stripe-webhook.js';
 import createCheckoutRouter from './api/create-checkout.js';
 import sendLastPaymentRouter from './api/send-last-payment.js';
+import syncPaymentsRouter from './api/sync-payments-endpoint.js';
 import { ENV } from './lib/env.js';
 
 const app = express();
@@ -180,6 +181,7 @@ app.use(express.json());
 app.use(webhookRouter);
 app.use('/api', createCheckoutRouter);
 app.use('/api', sendLastPaymentRouter);
+app.use('/api', syncPaymentsRouter);
 
 app.listen(ENV.PORT, () => {
   logger.info(`Server listening on port ${ENV.PORT}`);
