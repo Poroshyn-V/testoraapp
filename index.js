@@ -744,14 +744,14 @@ app.get('/api/export-all-payments-now', async (req, res) => {
     
     console.log(`📊 Сгруппировано покупок: ${groupedPurchases.size}`);
     
-    // Сортируем группированные покупки по дате (новые → старые)
+    // Сортируем группированные покупки по дате (старые → новые)
     const sortedGroups = Array.from(groupedPurchases.entries()).sort((a, b) => {
       const dateA = new Date(a[1].firstPayment.created * 1000);
       const dateB = new Date(b[1].firstPayment.created * 1000);
-      return dateB - dateA; // новые сверху
+      return dateA - dateB; // старые сверху
     });
     
-    console.log('📅 Покупки отсортированы: новые → старые');
+    console.log('📅 Покупки отсортированы: старые → новые');
     
     // Обновляем Google Sheets
     if (process.env.GOOGLE_SHEETS_DOC_ID && process.env.GOOGLE_SERVICE_EMAIL && process.env.GOOGLE_SERVICE_PRIVATE_KEY) {
@@ -1205,8 +1205,8 @@ app.post('/api/export-all-payments', async (req, res) => {
     console.log(`📊 Найдено: ${payments.data.length} платежей`);
     
     // Сортируем платежи по дате создания (старые → новые)
-    payments.data.sort((a, b) => b.created - a.created);
-    console.log('📅 Платежи отсортированы: новые → старые');
+    payments.data.sort((a, b) => a.created - b.created);
+    console.log('📅 Платежи отсортированы: старые → новые');
     
     // Создаем правильный JWT токен
     const header = {
