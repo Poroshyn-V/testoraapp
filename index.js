@@ -928,17 +928,39 @@ app.post('/api/export-all-payments', async (req, res) => {
     const tokenData = await tokenResponse.json();
     console.log('✅ Токен получен успешно');
     
-    // Подготавливаем данные для экспорта
-    const exportData = [
-      ['Payment ID', 'Amount', 'Currency', 'Status', 'Created UTC', 'Created Local (UTC+1)', 'Customer ID', 'Customer Email', 'GEO', 'UTM Source', 'UTM Medium', 'UTM Campaign', 'UTM Content', 'UTM Term', 'Ad Name', 'Adset Name']
-    ];
+    // Группируем покупки по клиенту и дате (в пределах 1 часа)
+    const groupedPurchases = new Map();
     
     for (const payment of payments.data) {
-      // Получаем данные клиента
-      let customer = null;
-      if (payment.customer) {
-        customer = await stripe.customers.retrieve(payment.customer);
+      if (payment.status === 'succeeded' && payment.customer) {
+        const customer = await stripe.customers.retrieve(payment.customer);
+        const customerId = customer?.id;
+        const purchaseDate = new Date(payment.created * 1000);
+        const dateKey = `${customerId}_${purchaseDate.toISOString().split('T')[0]}`; // Группируем по клиенту и дню
+        
+        if (!groupedPurchases.has(dateKey)) {
+          groupedPurchases.set(dateKey, {
+            customer,
+            payments: [],
+            totalAmount: 0,
+            firstPayment: payment
+          });
+        }
+        
+        const group = groupedPurchases.get(dateKey);
+        group.payments.push(payment);
+        group.totalAmount += payment.amount;
       }
+    }
+    
+    // Подготавливаем данные для экспорта
+    const exportData = [
+      ['Purchase ID', 'Total Amount', 'Currency', 'Status', 'Created UTC', 'Created Local (UTC+1)', 'Customer ID', 'Customer Email', 'GEO', 'UTM Source', 'UTM Medium', 'UTM Campaign', 'UTM Content', 'UTM Term', 'Ad Name', 'Adset Name', 'Payment Count']
+    ];
+    
+    for (const [dateKey, group] of groupedPurchases) {
+      const customer = group.customer;
+      const firstPayment = group.firstPayment;
       
       // Формируем GEO данные
       let geoData = 'N/A';
@@ -948,14 +970,17 @@ app.post('/api/export-all-payments', async (req, res) => {
         geoData = customer.address.country;
       }
       
-      const utcTime = new Date(payment.created * 1000).toISOString();
-      const localTime = new Date(payment.created * 1000 + 3600000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+      const utcTime = new Date(firstPayment.created * 1000).toISOString();
+      const localTime = new Date(firstPayment.created * 1000 + 3600000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+      
+      // Создаем уникальный ID покупки на основе клиента и даты
+      const purchaseId = `purchase_${customer?.id}_${dateKey.split('_')[1]}`;
       
       const row = [
-        payment.id,
-        (payment.amount / 100).toFixed(2),
-        payment.currency.toUpperCase(),
-        payment.status,
+        purchaseId,
+        (group.totalAmount / 100).toFixed(2),
+        firstPayment.currency.toUpperCase(),
+        'succeeded',
         utcTime,
         localTime,
         customer?.id || 'N/A',
@@ -967,7 +992,8 @@ app.post('/api/export-all-payments', async (req, res) => {
         customer?.metadata?.utm_content || 'N/A',
         customer?.metadata?.utm_term || 'N/A',
         customer?.metadata?.ad_name || 'N/A',
-        customer?.metadata?.adset_name || 'N/A'
+        customer?.metadata?.adset_name || 'N/A',
+        group.payments.length // Количество платежей в группе
       ];
       
       exportData.push(row);
@@ -991,7 +1017,7 @@ app.post('/api/export-all-payments', async (req, res) => {
     }
 
     // Теперь записываем новые данные
-    const range = `A1:P${exportData.length}`;
+    const range = `A1:Q${exportData.length}`;
     const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/${range}?valueInputOption=RAW`, {
       method: 'PUT',
       headers: {
