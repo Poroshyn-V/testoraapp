@@ -1147,34 +1147,48 @@ setInterval(async () => {
 
               console.log('🔍 Customer metadata for Google Sheets:', JSON.stringify(customer?.metadata, null, 2));
 
-              // Отправляем уведомления для новой покупки (только если еще не отправляли)
-              if (!notifiedPayments.has(payment.id)) {
-                console.log(`📱 Отправляем уведомления для платежа: ${payment.id}`);
-                notifiedPayments.add(payment.id);
-                
-                const orderId = payment.id.substring(0, 9);
-              const amount = (payment.amount / 100).toFixed(2);
-              const currency = payment.currency.toUpperCase();
-              const email = customer?.email || 'N/A';
-              const country = customer?.metadata?.geo_country || 'N/A';
-              const city = customer?.metadata?.geo_city || '';
-              const geo = city ? `${city}, ${country}` : country;
+                     // Группируем уведомления по клиенту и дате
+                     const customerId = customer?.id;
+                     const purchaseDate = new Date(payment.created * 1000);
+                     const dateKey = `${customerId}_${purchaseDate.toISOString().split('T')[0]}`;
+                     
+                     if (!notifiedPayments.has(dateKey)) {
+                       console.log(`📱 Отправляем уведомления для покупки: ${dateKey}`);
+                       notifiedPayments.add(dateKey);
+                       
+                       // Получаем все платежи этого клиента за этот день
+                       const customerPayments = payments.data.filter(p => 
+                         p.status === 'succeeded' && 
+                         p.customer === customerId &&
+                         new Date(p.created * 1000).toISOString().split('T')[0] === purchaseDate.toISOString().split('T')[0]
+                       );
+                       
+                       const totalAmount = customerPayments.reduce((sum, p) => sum + p.amount, 0);
+                       const orderId = payment.id.substring(0, 9);
+                       const amount = (totalAmount / 100).toFixed(2);
+                       const currency = payment.currency.toUpperCase();
+                       const email = customer?.email || 'N/A';
+                       const country = customer?.metadata?.geo_country || 'N/A';
+                       const city = customer?.metadata?.geo_city || '';
+                       const geo = city ? `${city}, ${country}` : country;
 
-              console.log('🔍 Данные для уведомления:', {
-                email,
-                country,
-                city,
-                geo,
-                utm_source: customer?.metadata?.utm_source,
-                utm_medium: customer?.metadata?.utm_medium,
-                ad_name: customer?.metadata?.ad_name
-              });
+                       console.log('🔍 Данные для уведомления:', {
+                         email,
+                         country,
+                         city,
+                         geo,
+                         totalAmount: amount,
+                         paymentCount: customerPayments.length,
+                         utm_source: customer?.metadata?.utm_source,
+                         utm_medium: customer?.metadata?.utm_medium,
+                         ad_name: customer?.metadata?.ad_name
+                       });
 
-              const telegramText = `🟢 Order ${orderId} was processed!
+                       const telegramText = `🟢 Purchase ${orderId} was processed!
 ---------------------------
 💳 card
 💰 ${amount} ${currency}
-🏷️ N/A
+🏷️ ${customerPayments.length} payment${customerPayments.length > 1 ? 's' : ''}
 ---------------------------
 📧 ${email}
 ---------------------------
@@ -1188,29 +1202,29 @@ ${customer?.metadata?.ad_name || 'N/A'}
 ${customer?.metadata?.adset_name || 'N/A'}
 ${customer?.metadata?.utm_campaign || 'N/A'}`;
 
-              // Telegram
-              if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
-                await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    chat_id: process.env.TELEGRAM_CHAT_ID,
-                    text: telegramText
-                  })
-                });
-                console.log('✅ Telegram уведомление отправлено через API polling');
-              }
+                       // Telegram
+                       if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+                         await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                           method: 'POST',
+                           headers: { 'Content-Type': 'application/json' },
+                           body: JSON.stringify({
+                             chat_id: process.env.TELEGRAM_CHAT_ID,
+                             text: telegramText
+                           })
+                         });
+                         console.log('✅ Telegram уведомление отправлено через API polling');
+                       }
 
-              // Slack
-              if (process.env.SLACK_WEBHOOK_URL) {
-                await fetch(process.env.SLACK_WEBHOOK_URL, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ text: telegramText })
-                });
-                console.log('✅ Slack уведомление отправлено через API polling');
-              }
-              }
+                       // Slack
+                       if (process.env.SLACK_WEBHOOK_URL) {
+                         await fetch(process.env.SLACK_WEBHOOK_URL, {
+                           method: 'POST',
+                           headers: { 'Content-Type': 'application/json' },
+                           body: JSON.stringify({ text: telegramText })
+                         });
+                         console.log('✅ Slack уведомление отправлено через API polling');
+                       }
+                     }
 
               // Проверяем, есть ли уже этот платеж в Google Sheets
               const checkResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${process.env.GOOGLE_SHEETS_DOC_ID}/values/A:A?valueInputOption=RAW`, {
