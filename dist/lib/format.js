@@ -42,11 +42,11 @@ export function formatTelegram(session, customerMetadata = {}) {
         `📍 ${country}`,
         `🧍${gender} ${age}`,
         `🔗 ${creative_link}`,
-        `${utm_source}`,
-        `${platform_placement}`,
-        `${ad_name}`,
-        `${adset_name}`,
-        `${campaign_name}`
+        utm_source,
+        platform_placement,
+        ad_name,
+        adset_name,
+        campaign_name
     ];
     let text = lines.join('\n');
     if (text.length > 4096)

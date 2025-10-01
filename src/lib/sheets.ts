@@ -45,9 +45,12 @@ export async function appendPaymentRow(session: Stripe.Checkout.Session) {
     if (!sheet) {
       sheet = await d.addSheet({ title: 'payments', headerValues: HEADER });
     } else {
+      // ВАЖНО: загружаем headers перед проверкой
+      await sheet.loadHeaderRow();
       // ensure headers at least once
       if (sheet.headerValues?.length !== HEADER.length) {
         await sheet.setHeaderRow(HEADER);
+        await sheet.loadHeaderRow(); // перезагружаем после установки
       }
     }
 
