@@ -1296,4 +1296,90 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
   console.log('🔄 API polling запущен (каждые 5 минут)');
+  
+  // Принудительно запускаем API polling при старте
+  setTimeout(async () => {
+    console.log('🚀 Принудительный запуск API polling...');
+    try {
+      const payments = await stripe.paymentIntents.list({ limit: 10 });
+      console.log(`📊 Найдено платежей при запуске: ${payments.data.length}`);
+      
+      for (const payment of payments.data) {
+        if (payment.status === 'succeeded' && payment.customer) {
+          if (!processedPayments.has(payment.id)) {
+            console.log(`🔄 Обрабатываем платеж при запуске: ${payment.id}`);
+            processedPayments.add(payment.id);
+            
+            const customer = await stripe.customers.retrieve(payment.customer);
+            const customerId = customer?.id;
+            const purchaseDate = new Date(payment.created * 1000);
+            const dateKey = `${customerId}_${purchaseDate.toISOString().split('T')[0]}`;
+            
+            if (!notifiedPayments.has(dateKey)) {
+              console.log(`📱 Отправляем уведомления для покупки: ${dateKey}`);
+              notifiedPayments.add(dateKey);
+              
+              const customerPayments = payments.data.filter(p => 
+                p.status === 'succeeded' && 
+                p.customer === customerId &&
+                new Date(p.created * 1000).toISOString().split('T')[0] === purchaseDate.toISOString().split('T')[0]
+              );
+              
+              const totalAmount = customerPayments.reduce((sum, p) => sum + p.amount, 0);
+              const orderId = payment.id.substring(0, 9);
+              const amount = (totalAmount / 100).toFixed(2);
+              const currency = payment.currency.toUpperCase();
+              const email = customer?.email || 'N/A';
+              const country = customer?.metadata?.geo_country || 'N/A';
+              const city = customer?.metadata?.geo_city || '';
+              const geo = city ? `${city}, ${country}` : country;
+
+              const telegramText = `🟢 Purchase ${orderId} was processed!
+---------------------------
+💳 card
+💰 ${amount} ${currency}
+🏷️ ${customerPayments.length} payment${customerPayments.length > 1 ? 's' : ''}
+---------------------------
+📧 ${email}
+---------------------------
+🌪️ ${orderId}
+📍 ${country}
+🧍 N/A
+🔗 N/A
+${customer?.metadata?.utm_source || 'N/A'}
+${customer?.metadata?.utm_medium || 'N/A'}
+${customer?.metadata?.ad_name || 'N/A'}
+${customer?.metadata?.adset_name || 'N/A'}
+${customer?.metadata?.utm_campaign || 'N/A'}`;
+
+              // Telegram
+              if (process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) {
+                await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    chat_id: process.env.TELEGRAM_CHAT_ID,
+                    text: telegramText
+                  })
+                });
+                console.log('✅ Telegram уведомление отправлено при запуске');
+              }
+
+              // Slack
+              if (process.env.SLACK_WEBHOOK_URL) {
+                await fetch(process.env.SLACK_WEBHOOK_URL, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ text: telegramText })
+                });
+                console.log('✅ Slack уведомление отправлено при запуске');
+              }
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.log('❌ Ошибка принудительного API polling:', error.message);
+    }
+  }, 10000); // Запускаем через 10 секунд после старта
 });
