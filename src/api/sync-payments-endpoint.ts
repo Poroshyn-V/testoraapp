@@ -72,11 +72,13 @@ router.post('/sync-payments', async (req, res) => {
     const doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
     await doc.loadInfo();
     
-    let sheet = doc.sheetsByTitle['Testora'];
+    // Используем первый лист (главный)
+    let sheet = doc.sheetsByIndex[0];
     if (!sheet) {
-      console.error('❌ Sheet "Testora" not found!');
+      console.error('❌ No sheets found in document!');
       return res.status(500).json({ success: false, message: 'Sheet not found' });
     }
+    console.log(`📄 Using sheet: "${sheet.title}"`);
     
     // Загружаем существующие строки
     const rows = await sheet.getRows();
