@@ -47,6 +47,16 @@ app.get('/api/test', (req, res) => {
   });
 });
 
+// GET endpoint for sync-payments (for testing)
+app.get('/api/sync-payments', (req, res) => {
+  res.json({ 
+    message: 'Sync endpoint available - use POST method for actual sync',
+    timestamp: new Date().toISOString(),
+    method: req.method,
+    note: 'Use POST /api/sync-payments to trigger sync'
+  });
+});
+
 // Stripe webhook endpoint
 app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
   let event;
