@@ -283,6 +283,19 @@ app.post('/api/sync-payments', async (req, res) => {
       });
     }
 
+    // ПОЛНАЯ ОСТАНОВКА: НЕ ОБРАБАТЫВАЕМ НИЧЕГО
+    console.log('🛑 COMPLETE STOP - No processing allowed');
+    return res.json({
+      success: true,
+      message: 'SYNC COMPLETELY STOPPED - No processing allowed',
+      debug: {
+        existingPurchases: existingPurchases.size,
+        rows: rows.length,
+        stripe: groupedPurchases.size
+      },
+      action: 'COMPLETE_STOP'
+    });
+
     // ПРОСТАЯ ЛОГИКА: проверяем каждую покупку из Stripe (только если Google Sheets пустой)
     for (const [dateKey, group] of groupedPurchases.entries()) {
       try {
