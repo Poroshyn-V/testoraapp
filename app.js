@@ -147,7 +147,7 @@ app.post('/api/sync-payments', async (req, res) => {
     let newPurchases = 0;
     const processedPurchases = [];
 
-    // Initialize Google Sheets (temporarily disabled for testing)
+    // Initialize Google Sheets
     console.log('🔍 Google Sheets debug info:');
     console.log('Email exists:', !!ENV.GOOGLE_SERVICE_EMAIL);
     console.log('Private key exists:', !!ENV.GOOGLE_SERVICE_PRIVATE_KEY);
@@ -161,13 +161,55 @@ app.post('/api/sync-payments', async (req, res) => {
       });
     }
     
-    // Temporarily skip Google Sheets to test other functionality
-    console.log('⚠️ Google Sheets temporarily disabled for testing');
-    console.log('✅ Stripe API working - found', successfulPayments.length, 'payments');
-    console.log('✅ Grouping working - created', groupedPurchases.size, 'groups');
+    let serviceAccountAuth;
+    let doc;
+    let sheet;
+    let rows = [];
     
-    // Simulate Google Sheets response
-    const rows = []; // Empty array for testing
+    try {
+      // Обработка приватного ключа для Vercel
+      let privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY;
+      
+      // Vercel может экранировать символы, исправляем
+      if (privateKey.includes('\\n')) {
+        privateKey = privateKey.replace(/\\n/g, '\n');
+      }
+      
+      // Если ключ не содержит заголовки, добавляем их
+      if (!privateKey.includes('BEGIN PRIVATE KEY')) {
+        privateKey = `-----BEGIN PRIVATE KEY-----\n${privateKey}\n-----END PRIVATE KEY-----`;
+      }
+      
+      console.log('✅ Google Sheets key formatted successfully');
+      
+      serviceAccountAuth = new JWT({
+        email: ENV.GOOGLE_SERVICE_EMAIL,
+        key: privateKey,
+        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      });
+      
+      doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
+      await doc.loadInfo();
+      
+      sheet = doc.sheetsByIndex[0];
+      if (!sheet) {
+        console.error('❌ No sheets found in document!');
+        return res.status(500).json({ success: false, message: 'Sheet not found' });
+      }
+      
+      console.log(`📄 Using sheet: "${sheet.title}"`);
+      
+      // Load existing rows
+      rows = await sheet.getRows();
+      console.log(`📋 Existing rows in sheet: ${rows.length}`);
+      
+    } catch (error) {
+      console.error('❌ Google Sheets error:', error.message);
+      console.log('⚠️ Continuing without Google Sheets...');
+      
+      // Продолжаем без Google Sheets, но логируем ошибку
+      rows = [];
+    }
 
     for (const [dateKey, group] of groupedPurchases.entries()) {
       try {
