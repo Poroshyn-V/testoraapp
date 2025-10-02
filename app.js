@@ -234,30 +234,25 @@ app.post('/api/sync-payments', async (req, res) => {
         // Create unique purchase ID
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
-        // ПРОВЕРКА: есть ли эта покупка в Google Sheets?
-        const customerId = customer?.id || 'unknown';
-        const purchaseDate = dateKey.split('_')[1]; // YYYY-MM-DD
+        // ПРОВЕРКА: есть ли эта покупка в Google Sheets по Purchase ID?
+        console.log(`🔍 Checking Purchase ID: ${purchaseId}`);
         
-        console.log(`🔍 Checking: Customer ${customerId} on ${purchaseDate}`);
-        
-        // Ищем в Google Sheets по Customer ID + дате (более надежно)
+        // Ищем в Google Sheets по Purchase ID (самый надежный способ)
         const alreadyExists = rows.some((row) => {
-          const rowCustomerId = row.get('customer_id') || '';
-          const rowDate = row.get('created_at') || '';
-          const rowDateOnly = rowDate.split('T')[0]; // YYYY-MM-DD
-          const match = rowCustomerId === customerId && rowDateOnly === purchaseDate;
+          const rowPurchaseId = row.get('purchase_id') || '';
+          const match = rowPurchaseId === purchaseId;
           if (match) {
-            console.log(`✅ MATCH FOUND: ${rowCustomerId} === ${customerId} && ${rowDateOnly} === ${purchaseDate}`);
+            console.log(`✅ MATCH FOUND: ${rowPurchaseId} === ${purchaseId}`);
           }
           return match;
         });
 
         if (alreadyExists) {
-          console.log(`⏭️ Already exists: Customer ${customerId} on ${purchaseDate} - SKIP`);
+          console.log(`⏭️ Already exists: ${purchaseId} - SKIP`);
           continue; // Пропускаем существующие
         }
         
-        console.log(`🆕 NEW: Customer ${customerId} on ${purchaseDate} - ADDING`);
+        console.log(`🆕 NEW: ${purchaseId} - ADDING`);
 
         // Format GEO data
         let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
