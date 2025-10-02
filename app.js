@@ -208,7 +208,7 @@ app.post('/api/sync-payments', async (req, res) => {
         console.log('📄 First 3 rows in Google Sheets:');
         for (let i = 0; i < Math.min(3, rows.length); i++) {
           const row = rows[i];
-          console.log(`Row ${i + 1}: email="${row.get('email')}" date="${row.get('created_at')}"`);
+          console.log(`Row ${i + 1}: customer_id="${row.get('customer_id')}" date="${row.get('created_at')}" email="${row.get('email')}"`);
         }
       }
       
