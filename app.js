@@ -267,51 +267,49 @@ app.get('/auto-sync', async (req, res) => {
         });
         
         if (existingRow) {
-          // Проверяем нужно ли обновить UTC+1 или GEO
+          // ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ ВСЕ ПОКУПКИ
           const currentUtcPlus1 = existingRow.get('Created UTC+1') || '';
           const currentGeo = existingRow.get('GEO') || '';
           
-          if (!currentUtcPlus1 || currentUtcPlus1 === '' || currentGeo === 'N/A' || currentGeo === '') {
-            console.log(`🔄 Updating existing purchase: ${purchaseId}`);
+          // Обновляем ВСЕ покупки (не только пустые)
+          console.log(`🔄 FORCE updating existing purchase: ${purchaseId}`);
+          console.log(`  - Current UTC+1: "${currentUtcPlus1}"`);
+          console.log(`  - Current GEO: "${currentGeo}"`);
             
-            // Обновляем UTC+1
-            if (!currentUtcPlus1 || currentUtcPlus1 === '') {
-              const utcTime = new Date(firstPayment.created * 1000);
-              const utcPlus1 = new Date(utcTime.getTime() + 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
-              existingRow.set('Created UTC+1', utcPlus1);
-              console.log(`🕐 Updated UTC+1: ${utcPlus1}`);
-            }
+            // ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ UTC+1 для ВСЕХ покупок
+            const utcTime = new Date(firstPayment.created * 1000);
+            const utcPlus1 = new Date(utcTime.getTime() + 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+            existingRow.set('Created UTC+1', utcPlus1);
+            console.log(`🕐 FORCE Updated UTC+1: ${utcPlus1}`);
             
-            // Обновляем GEO через API (как было раньше) - формат "US, Los Angeles"
-            if (currentGeo === 'N/A' || currentGeo === '') {
-              let geoCountry = 'N/A';
-              try {
-                // Получаем IP из Stripe payment
-                const paymentMethod = await stripe.paymentMethods.retrieve(firstPayment.payment_method);
-                if (paymentMethod.card && paymentMethod.card.country) {
-                  const country = paymentMethod.card.country;
-                  // Добавляем город если есть в метаданных
-                  const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
-                  const city = m.city || m.geo_city || '';
-                  if (city) {
-                    geoCountry = `${country}, ${city}`;
-                  } else {
-                    geoCountry = country;
-                  }
-                }
-              } catch (error) {
-                console.log('🌍 GEO API error:', error.message);
-                // Fallback к метаданным если API не работает
+            // ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ GEO для ВСЕХ покупок
+            let geoCountry = 'N/A';
+            try {
+              // Получаем IP из Stripe payment
+              const paymentMethod = await stripe.paymentMethods.retrieve(firstPayment.payment_method);
+              if (paymentMethod.card && paymentMethod.card.country) {
+                const country = paymentMethod.card.country;
+                // Добавляем город если есть в метаданных
                 const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
-                if (m.geo_country) {
-                  geoCountry = m.geo_country;
-                } else if (m.country) {
-                  geoCountry = m.country;
+                const city = m.city || m.geo_city || '';
+                if (city) {
+                  geoCountry = `${country}, ${city}`;
+                } else {
+                  geoCountry = country;
                 }
               }
-              existingRow.set('GEO', geoCountry);
-              console.log(`🌍 Updated GEO: ${geoCountry}`);
+            } catch (error) {
+              console.log('🌍 GEO API error:', error.message);
+              // Fallback к метаданным если API не работает
+              const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
+              if (m.geo_country) {
+                geoCountry = m.geo_country;
+              } else if (m.country) {
+                geoCountry = m.country;
+              }
             }
+            existingRow.set('GEO', geoCountry);
+            console.log(`🌍 FORCE Updated GEO: ${geoCountry}`);
             
             await existingRow.save();
             updatedExisting++;
