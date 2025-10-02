@@ -227,16 +227,26 @@ app.post('/api/sync-payments', async (req, res) => {
         // Check if purchase already exists (проверяем по email + дате)
         const customerEmail = customer?.email || firstPayment.receipt_email || 'N/A';
         const purchaseDate = dateKey.split('_')[1]; // YYYY-MM-DD
+        
+        console.log(`🔍 Checking purchase: ${customerEmail} on ${purchaseDate}`);
+        
         const purchaseExists = rows.length > 0 ? rows.some((row) => {
           const rowEmail = row.get('email') || '';
           const rowDate = row.get('created_at') || '';
-          return rowEmail === customerEmail && rowDate.includes(purchaseDate);
+          const rowDateOnly = rowDate.split('T')[0]; // YYYY-MM-DD
+          const exists = rowEmail === customerEmail && rowDateOnly === purchaseDate;
+          if (exists) {
+            console.log(`✅ Found existing: ${rowEmail} on ${rowDateOnly}`);
+          }
+          return exists;
         }) : false;
 
         if (purchaseExists) {
-          console.log(`⏭️ Purchase already exists: ${purchaseId}`);
+          console.log(`⏭️ Purchase already exists: ${customerEmail} on ${purchaseDate} - SKIPPING`);
           continue; // Пропускаем существующие покупки БЕЗ уведомлений
         }
+        
+        console.log(`🆕 NEW purchase: ${customerEmail} on ${purchaseDate} - PROCESSING`);
 
         // Format GEO data
         let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
