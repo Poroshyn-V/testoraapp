@@ -489,37 +489,14 @@ app.post('/api/sync-payments', async (req, res) => {
     let rows = [];
     
     try {
-      // ИСПРАВЛЕНО: Обработка приватного ключа для Railway
-      let privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY;
+      // ПРОСТАЯ ОБРАБОТКА: используем ключ как есть
+      const privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY;
       
-      console.log('🔍 Debug: Original key length:', privateKey ? privateKey.length : 'undefined');
-      console.log('🔍 Debug: Key starts with:', privateKey ? privateKey.substring(0, 50) : 'undefined');
-      
-      // ИСПРАВЛЕНО: Railway может экранировать символы, исправляем
-      if (privateKey && privateKey.includes('\\n')) {
-        privateKey = privateKey.replace(/\\n/g, '\n');
-        console.log('✅ Fixed escaped newlines');
+      if (!privateKey) {
+        throw new Error('Google Sheets private key not configured');
       }
       
-      // ДОПОЛНИТЕЛЬНО: Убираем лишние пробелы и символы
-      if (privateKey) {
-        privateKey = privateKey.trim();
-        console.log('✅ Trimmed key');
-      }
-      
-      // Если ключ не содержит заголовки, добавляем их
-      if (privateKey && !privateKey.includes('BEGIN PRIVATE KEY')) {
-        privateKey = `-----BEGIN PRIVATE KEY-----\n${privateKey}\n-----END PRIVATE KEY-----`;
-        console.log('✅ Added key headers');
-      }
-      
-      // Дополнительная проверка для Railway
-      if (privateKey && privateKey.includes('BEGIN PRIVATE KEY') && privateKey.includes('END PRIVATE KEY')) {
-        console.log('✅ Google Sheets key format is correct');
-      } else {
-        console.log('❌ Google Sheets key format is incorrect');
-        throw new Error('Invalid private key format');
-      }
+      console.log('✅ Google Sheets key loaded successfully');
       
       serviceAccountAuth = new JWT({
         email: ENV.GOOGLE_SERVICE_EMAIL,
