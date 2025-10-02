@@ -26,6 +26,14 @@ const stripe = new Stripe(ENV.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
 // Middleware
 app.use(express.json());
 
+// Root endpoint
+app.get('/', (_req, res) => res.json({ 
+  message: 'Stripe Ops API is running!',
+  status: 'ok',
+  timestamp: new Date().toISOString(),
+  endpoints: ['/api/test', '/api/sync-payments', '/health']
+}));
+
 // Health check
 app.get('/health', (_req, res) => res.status(200).send('ok'));
 
