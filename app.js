@@ -336,12 +336,16 @@ app.post('/api/sync-payments', async (req, res) => {
             console.log('📊 First existing row sample:', rows[0] ? rows[0]._rawData : 'No rows');
             
             // Создаем данные в том же формате что уже есть в таблице
+            // Добавляем время UTC+1
+            const utcPlus1 = new Date(new Date(purchaseData.created_at).getTime() + 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+            
             const rowData = {
               'Purchase ID': purchaseData.purchase_id,
               'Total Amount': purchaseData.amount,
               'Currency': purchaseData.currency,
               'Status': purchaseData.payment_status,
               'Created UTC': purchaseData.created_at,
+              'Created UTC+1': utcPlus1,
               'Customer ID': purchaseData.customer_id,
               'Customer Email': purchaseData.email,
               'GEO': purchaseData.country,
