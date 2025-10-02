@@ -532,19 +532,21 @@ app.listen(ENV.PORT, () => {
         // АВТОСИНХРОНИЗАЦИЯ ВКЛЮЧЕНА - УМНАЯ ПРОВЕРКА ДУБЛИРОВАНИЙ
         console.log('🔄 Auto-sync ENABLED - smart duplicate checking');
         
-        setInterval(async () => {
-          try {
-            console.log('🔄 Running scheduled sync...');
-            const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' }
-            });
-            const result = await response.json();
-            console.log('Scheduled sync completed:', result);
-          } catch (error) {
-            console.error('Scheduled sync failed:', error.message);
-          }
-        }, 5 * 60 * 1000); // 5 minutes
+        // АВТОСИНХРОНИЗАЦИЯ ОТКЛЮЧЕНА ДЛЯ ОТЛАДКИ
+        console.log('⚠️ АвтоСинхронизация ОТКЛЮЧЕНА для отладки дубликатов');
+        // setInterval(async () => {
+        //   try {
+        //     console.log('🔄 Running scheduled sync...');
+        //     const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
+        //       method: 'POST',
+        //       headers: { 'Content-Type': 'application/json' }
+        //     });
+        //     const result = await response.json();
+        //     console.log('Scheduled sync completed:', result);
+        //   } catch (error) {
+        //     console.error('Scheduled sync failed:', error.message);
+        //   }
+        // }, 5 * 60 * 1000); // 5 minutes
 });
 
 export default app;
