@@ -598,21 +598,28 @@ app.listen(ENV.PORT, () => {
         // АВТОСИНХРОНИЗАЦИЯ ВКЛЮЧЕНА - УМНАЯ ПРОВЕРКА ДУБЛИРОВАНИЙ
         console.log('🔄 Auto-sync ENABLED - smart duplicate checking');
         
-        // АВТОСИНХРОНИЗАЦИЯ ВКЛЮЧЕНА - РАБОЧАЯ ЛОГИКА С RENDER
-        console.log('🔄 АвтоСинхронизация ВКЛЮЧЕНА - рабочая логика с Render');
-        setInterval(async () => {
-          try {
-            console.log('🔄 Running scheduled sync...');
-            const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' }
-            });
-            const result = await response.json();
-            console.log('Scheduled sync completed:', result);
-          } catch (error) {
-            console.error('Scheduled sync failed:', error.message);
-          }
-        }, 5 * 60 * 1000); // 5 minutes
+        // АВТОСИНХРОНИЗАЦИЯ ОТКЛЮЧЕНА - ИСПОЛЬЗУЕМ ВНЕШНИЙ КРОН
+        console.log('⚠️ АвтоСинхронизация ОТКЛЮЧЕНА - используем внешний крон для надежности');
+        console.log('🔗 Для автоматической синхронизации используйте:');
+        console.log('   - https://cron-job.org/');
+        console.log('   - URL: https://testoraapp.vercel.app/api/sync-payments');
+        console.log('   - Method: POST');
+        console.log('   - Interval: каждые 5 минут');
+        
+        // РЕЗЕРВНАЯ АВТОСИНХРОНИЗАЦИЯ (может не работать на Vercel)
+        // setInterval(async () => {
+        //   try {
+        //     console.log('🔄 Running scheduled sync...');
+        //     const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
+        //       method: 'POST',
+        //       headers: { 'Content-Type': 'application/json' }
+        //     });
+        //     const result = await response.json();
+        //     console.log('Scheduled sync completed:', result);
+        //   } catch (error) {
+        //     console.error('Scheduled sync failed:', error.message);
+        //   }
+        // }, 5 * 60 * 1000); // 5 minutes
 });
 
 export default app;
