@@ -144,20 +144,25 @@ app.get('/auto-sync', async (req, res) => {
         console.log('  - UTC time:', utcTime.toISOString());
         console.log('  - UTC+1 time:', utcPlus1);
         
-        // GEO данные из IP (если есть)
+        // GEO данные через API (как было раньше)
         let geoCountry = 'N/A';
-        if (m.geo_country) {
-          geoCountry = m.geo_country;
-        } else if (m.country) {
-          geoCountry = m.country;
-        } else if (customer?.address?.country) {
-          geoCountry = customer.address.country;
+        try {
+          // Получаем IP из Stripe payment
+          const paymentMethod = await stripe.paymentMethods.retrieve(firstPayment.payment_method);
+          if (paymentMethod.card && paymentMethod.card.country) {
+            geoCountry = paymentMethod.card.country;
+          }
+        } catch (error) {
+          console.log('🌍 GEO API error:', error.message);
+          // Fallback к метаданным если API не работает
+          if (m.geo_country) {
+            geoCountry = m.geo_country;
+          } else if (m.country) {
+            geoCountry = m.country;
+          }
         }
         
         console.log('🌍 GEO debug:');
-        console.log('  - geo_country:', m.geo_country);
-        console.log('  - country:', m.country);
-        console.log('  - customer.address.country:', customer?.address?.country);
         console.log('  - Final geoCountry:', geoCountry);
         
         const rowData = {
@@ -270,16 +275,24 @@ app.get('/auto-sync', async (req, res) => {
               console.log(`🕐 Updated UTC+1: ${utcPlus1}`);
             }
             
-            // Обновляем GEO
+            // Обновляем GEO через API (как было раньше)
             if (currentGeo === 'N/A' || currentGeo === '') {
-              const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
               let geoCountry = 'N/A';
-              if (m.geo_country) {
-                geoCountry = m.geo_country;
-              } else if (m.country) {
-                geoCountry = m.country;
-              } else if (customer?.address?.country) {
-                geoCountry = customer.address.country;
+              try {
+                // Получаем IP из Stripe payment
+                const paymentMethod = await stripe.paymentMethods.retrieve(firstPayment.payment_method);
+                if (paymentMethod.card && paymentMethod.card.country) {
+                  geoCountry = paymentMethod.card.country;
+                }
+              } catch (error) {
+                console.log('🌍 GEO API error:', error.message);
+                // Fallback к метаданным если API не работает
+                const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
+                if (m.geo_country) {
+                  geoCountry = m.geo_country;
+                } else if (m.country) {
+                  geoCountry = m.country;
+                }
               }
               existingRow.set('GEO', geoCountry);
               console.log(`🌍 Updated GEO: ${geoCountry}`);
@@ -961,20 +974,25 @@ app.listen(ENV.PORT, () => {
                 console.log('  - UTC time:', utcTime.toISOString());
                 console.log('  - UTC+1 time:', utcPlus1);
                 
-                // GEO данные из IP (если есть)
+                // GEO данные через API (как было раньше)
                 let geoCountry = 'N/A';
-                if (m.geo_country) {
-                  geoCountry = m.geo_country;
-                } else if (m.country) {
-                  geoCountry = m.country;
-                } else if (customer?.address?.country) {
-                  geoCountry = customer.address.country;
+                try {
+                  // Получаем IP из Stripe payment
+                  const paymentMethod = await stripe.paymentMethods.retrieve(firstPayment.payment_method);
+                  if (paymentMethod.card && paymentMethod.card.country) {
+                    geoCountry = paymentMethod.card.country;
+                  }
+                } catch (error) {
+                  console.log('🌍 GEO API error:', error.message);
+                  // Fallback к метаданным если API не работает
+                  if (m.geo_country) {
+                    geoCountry = m.geo_country;
+                  } else if (m.country) {
+                    geoCountry = m.country;
+                  }
                 }
                 
                 console.log('🌍 GEO debug:');
-                console.log('  - geo_country:', m.geo_country);
-                console.log('  - country:', m.country);
-                console.log('  - customer.address.country:', customer?.address?.country);
                 console.log('  - Final geoCountry:', geoCountry);
                 
                 const rowData = {
