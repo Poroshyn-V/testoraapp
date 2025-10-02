@@ -239,63 +239,23 @@ app.post('/api/sync-payments', async (req, res) => {
       });
     }
 
-    // ПРОСТОЕ СРАВНЕНИЕ: собираем Customer ID + дату из Google Sheets
-    const existingPurchases = new Set();
+    // РАБОЧАЯ ЛОГИКА С RENDER: собираем существующие purchase_id из Google Sheets
+    const existingPurchaseIds = new Set();
     for (const row of rows) {
-      const customerId = row.get('customer_id') || '';
-      const date = row.get('created_at') || '';
-      const dateOnly = date.split('T')[0]; // YYYY-MM-DD
-      
-      // ДЕТАЛЬНАЯ ОТЛАДКА: показываем что именно извлекаем
-      console.log(`🔍 Row data: customer_id="${customerId}" date="${date}" dateOnly="${dateOnly}"`);
-      
-      if (customerId && dateOnly) {
-        const key = `${customerId}_${dateOnly}`;
-        existingPurchases.add(key);
-        console.log(`📋 Found existing: ${key}`);
-      } else {
-        console.log(`⚠️ Skipping row: customer_id="${customerId}" date="${date}"`);
+      const purchaseId = row.get('purchase_id') || '';
+      if (purchaseId) {
+        existingPurchaseIds.add(purchaseId);
+        console.log(`📋 Found existing purchase_id: ${purchaseId}`);
       }
     }
-    console.log(`📋 Total existing purchases in Google Sheets: ${existingPurchases.size}`);
+    console.log(`📋 Total existing purchases in Google Sheets: ${existingPurchaseIds.size}`);
     
     // Показываем первые 5 существующих ключей
-    const firstFive = Array.from(existingPurchases).slice(0, 5);
-    console.log(`📋 First 5 existing keys: ${firstFive.join(', ')}`);
-
-    // КРИТИЧЕСКАЯ ПРОВЕРКА: ПОКАЗЫВАЕМ ЧТО ПРОИСХОДИТ
-    console.log(`🔍 DEBUG: existingPurchases.size = ${existingPurchases.size}`);
-    console.log(`🔍 DEBUG: rows.length = ${rows.length}`);
-    console.log(`🔍 DEBUG: groupedPurchases.size = ${groupedPurchases.size}`);
-    
-    // СТРОГАЯ ЛОГИКА: НЕ ОБРАБАТЫВАЕМ НИЧЕГО если есть существующие данные
-    if (existingPurchases.size > 0) {
-      console.log(`⚠️ Found ${existingPurchases.size} existing purchases in Google Sheets`);
-      console.log('🛑 STOPPING SYNC - to prevent duplicates with existing data');
-      
-      return res.json({
-        success: true,
-        message: `Sync stopped - found ${existingPurchases.size} existing purchases in Google Sheets`,
-        existing_count: existingPurchases.size,
-        total_stripe: groupedPurchases.size,
-        action: 'STOPPED_TO_PREVENT_DUPLICATES'
-      });
-    }
-    
-    // ЕСЛИ GOOGLE SHEETS ПУСТОЙ - ТОЖЕ ОСТАНАВЛИВАЕМ
-    if (rows.length === 0) {
-      console.log('⚠️ Google Sheets is EMPTY - STOPPING SYNC');
-      return res.json({
-        success: true,
-        message: 'Google Sheets is empty - sync stopped',
-        rows_count: 0,
-        total_stripe: groupedPurchases.size,
-        action: 'STOPPED_EMPTY_SHEETS'
-      });
-    }
+    const firstFive = Array.from(existingPurchaseIds).slice(0, 5);
+    console.log(`📋 First 5 existing purchase_ids: ${firstFive.join(', ')}`);
 
     // НОРМАЛЬНАЯ РАБОТА: обрабатываем только новые покупки
-    console.log(`✅ Processing ${groupedPurchases.size} Stripe purchases against ${existingPurchases.size} existing purchases`);
+    console.log(`✅ Processing ${groupedPurchases.size} Stripe purchases against ${existingPurchaseIds.size} existing purchases`);
 
     // ПРОСТАЯ ЛОГИКА: проверяем каждую покупку из Stripe (только если Google Sheets пустой)
     for (const [dateKey, group] of groupedPurchases.entries()) {
@@ -307,17 +267,13 @@ app.post('/api/sync-payments', async (req, res) => {
         // Create unique purchase ID
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
-        // ПРОСТАЯ ПРОВЕРКА: есть ли эта покупка в Google Sheets?
-        const customerId = customer?.id || 'unknown';
-        const purchaseDate = dateKey.split('_')[1]; // YYYY-MM-DD
-        const key = `${customerId}_${purchaseDate}`;
-        
-        if (existingPurchases.has(key)) {
-          console.log(`⏭️ Purchase already exists: ${key} - SKIP`);
+        // РАБОЧАЯ ПРОВЕРКА С RENDER: есть ли эта покупка в Google Sheets?
+        if (existingPurchaseIds.has(purchaseId)) {
+          console.log(`⏭️ Purchase already exists: ${purchaseId} - SKIP`);
           continue; // Пропускаем существующие
         }
         
-        console.log(`🆕 NEW purchase: ${key} - ADDING`);
+        console.log(`🆕 NEW purchase: ${purchaseId} - ADDING`);
 
         // Format GEO data
         let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
@@ -362,25 +318,22 @@ app.post('/api/sync-payments', async (req, res) => {
           console.log('⚠️ Google Sheets not available, skipping save for:', purchaseId);
         }
 
-        // УВЕДОМЛЕНИЯ ОТКЛЮЧЕНЫ - ТОЛЬКО ДОБАВЛЕНИЕ В GOOGLE SHEETS
-        console.log(`🚫 NOTIFICATIONS DISABLED - Only adding to Google Sheets`);
-        
-        // Отправляем уведомления ТОЛЬКО для новых покупок (после добавления в Google Sheets)
-        // try {
-        //   const telegramText = formatTelegram(purchaseData, customer?.metadata || {});
-        //   await sendTelegram(telegramText);
-        //   console.log('📱 Telegram notification sent for NEW purchase:', purchaseId);
-        // } catch (error) {
-        //   console.error('Error sending Telegram:', error.message);
-        // }
+            // Отправляем уведомления ТОЛЬКО для новых покупок (после добавления в Google Sheets)
+            try {
+              const telegramText = formatTelegram(purchaseData, customer?.metadata || {});
+              await sendTelegram(telegramText);
+              console.log('📱 Telegram notification sent for NEW purchase:', purchaseId);
+            } catch (error) {
+              console.error('Error sending Telegram:', error.message);
+            }
 
-        // try {
-        //   const slackText = formatSlack(purchaseData, customer?.metadata || {});
-        //   await sendSlack(slackText);
-        //   console.log('💬 Slack notification sent for NEW purchase:', purchaseId);
-        // } catch (error) {
-        //   console.error('Error sending Slack:', error.message);
-        // }
+            try {
+              const slackText = formatSlack(purchaseData, customer?.metadata || {});
+              await sendSlack(slackText);
+              console.log('💬 Slack notification sent for NEW purchase:', purchaseId);
+            } catch (error) {
+              console.error('Error sending Slack:', error.message);
+            }
 
         newPurchases++;
         processedPurchases.push({
@@ -587,21 +540,21 @@ app.listen(ENV.PORT, () => {
         // АВТОСИНХРОНИЗАЦИЯ ВКЛЮЧЕНА - УМНАЯ ПРОВЕРКА ДУБЛИРОВАНИЙ
         console.log('🔄 Auto-sync ENABLED - smart duplicate checking');
         
-        // АВТОСИНХРОНИЗАЦИЯ ОТКЛЮЧЕНА ДЛЯ ОТЛАДКИ
-        console.log('⚠️ АвтоСинхронизация ОТКЛЮЧЕНА для отладки дубликатов');
-        // setInterval(async () => {
-        //   try {
-        //     console.log('🔄 Running scheduled sync...');
-        //     const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
-        //       method: 'POST',
-        //       headers: { 'Content-Type': 'application/json' }
-        //     });
-        //     const result = await response.json();
-        //     console.log('Scheduled sync completed:', result);
-        //   } catch (error) {
-        //     console.error('Scheduled sync failed:', error.message);
-        //   }
-        // }, 5 * 60 * 1000); // 5 minutes
+        // АВТОСИНХРОНИЗАЦИЯ ВКЛЮЧЕНА - РАБОЧАЯ ЛОГИКА С RENDER
+        console.log('🔄 АвтоСинхронизация ВКЛЮЧЕНА - рабочая логика с Render');
+        setInterval(async () => {
+          try {
+            console.log('🔄 Running scheduled sync...');
+            const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' }
+            });
+            const result = await response.json();
+            console.log('Scheduled sync completed:', result);
+          } catch (error) {
+            console.error('Scheduled sync failed:', error.message);
+          }
+        }, 5 * 60 * 1000); // 5 minutes
 });
 
 export default app;
