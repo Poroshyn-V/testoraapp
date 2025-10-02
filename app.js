@@ -205,10 +205,14 @@ app.post('/api/sync-payments', async (req, res) => {
       
     } catch (error) {
       console.error('❌ Google Sheets error:', error.message);
-      console.log('⚠️ Continuing without Google Sheets...');
+      console.log('⚠️ Google Sheets not available - skipping sync to prevent duplicates');
       
-      // Продолжаем без Google Sheets, но логируем ошибку
-      rows = [];
+      // Если Google Sheets не работает, не обрабатываем покупки
+      return res.status(500).json({
+        success: false,
+        message: 'Google Sheets not available - cannot check for duplicates',
+        error: error.message
+      });
     }
 
     for (const [dateKey, group] of groupedPurchases.entries()) {
@@ -220,8 +224,8 @@ app.post('/api/sync-payments', async (req, res) => {
         // Create unique purchase ID
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
-        // Check if purchase already exists
-        const purchaseExists = rows.some((row) => row.get('purchase_id') === purchaseId);
+        // Check if purchase already exists (только если Google Sheets работает)
+        const purchaseExists = rows.length > 0 ? rows.some((row) => row.get('purchase_id') === purchaseId) : false;
 
         if (purchaseExists) {
           console.log(`⏭️ Purchase already exists: ${purchaseId}`);
