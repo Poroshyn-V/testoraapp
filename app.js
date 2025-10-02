@@ -18,7 +18,8 @@ const ENV = {
   SLACK_CHANNEL_ID: process.env.SLACK_CHANNEL_ID,
   GOOGLE_SERVICE_EMAIL: process.env.GOOGLE_SERVICE_EMAIL,
   GOOGLE_SERVICE_PRIVATE_KEY: process.env.GOOGLE_SERVICE_PRIVATE_KEY,
-  GOOGLE_SHEETS_DOC_ID: process.env.GOOGLE_SHEETS_DOC_ID
+  GOOGLE_SHEETS_DOC_ID: process.env.GOOGLE_SHEETS_DOC_ID,
+  BOT_DISABLED: process.env.BOT_DISABLED === 'true'
 };
 
 const stripe = new Stripe(ENV.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
@@ -1159,6 +1160,14 @@ app.listen(ENV.PORT, () => {
         console.log('🚀 ===== БОТ ЗАПУЩЕН =====');
         console.log('🕐 Время запуска:', new Date().toISOString());
         console.log('🌐 Vercel URL: https://testoraapp.vercel.app');
+        // ПРОВЕРКА: БОТ ОТКЛЮЧЕН?
+        if (ENV.BOT_DISABLED) {
+          console.log('🛑 ===== БОТ ОТКЛЮЧЕН =====');
+          console.log('⚠️ BOT_DISABLED=true - бот не работает');
+          console.log('🔧 Чтобы включить: установи BOT_DISABLED=false');
+          return;
+        }
+        
         // ВОЗВРАЩАЕМ АВТОМАТИЗАЦИЮ ДЛЯ RAILWAY
         console.log('🚀 ===== БОТ ЗАПУЩЕН НА RAILWAY =====');
         console.log('🕐 Время запуска:', new Date().toISOString());
