@@ -224,8 +224,14 @@ app.post('/api/sync-payments', async (req, res) => {
         // Create unique purchase ID
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
-        // Check if purchase already exists (только если Google Sheets работает)
-        const purchaseExists = rows.length > 0 ? rows.some((row) => row.get('purchase_id') === purchaseId) : false;
+        // Check if purchase already exists (проверяем по email + дате)
+        const customerEmail = customer?.email || firstPayment.receipt_email || 'N/A';
+        const purchaseDate = dateKey.split('_')[1]; // YYYY-MM-DD
+        const purchaseExists = rows.length > 0 ? rows.some((row) => {
+          const rowEmail = row.get('email') || '';
+          const rowDate = row.get('created_at') || '';
+          return rowEmail === customerEmail && rowDate.includes(purchaseDate);
+        }) : false;
 
         if (purchaseExists) {
           console.log(`⏭️ Purchase already exists: ${purchaseId}`);
