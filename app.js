@@ -240,10 +240,16 @@ app.post('/api/sync-payments', async (req, res) => {
       const customerId = row.get('customer_id') || '';
       const date = row.get('created_at') || '';
       const dateOnly = date.split('T')[0]; // YYYY-MM-DD
+      
+      // ДЕТАЛЬНАЯ ОТЛАДКА: показываем что именно извлекаем
+      console.log(`🔍 Row data: customer_id="${customerId}" date="${date}" dateOnly="${dateOnly}"`);
+      
       if (customerId && dateOnly) {
         const key = `${customerId}_${dateOnly}`;
         existingPurchases.add(key);
         console.log(`📋 Found existing: ${key}`);
+      } else {
+        console.log(`⚠️ Skipping row: customer_id="${customerId}" date="${date}"`);
       }
     }
     console.log(`📋 Total existing purchases in Google Sheets: ${existingPurchases.size}`);
@@ -283,18 +289,8 @@ app.post('/api/sync-payments', async (req, res) => {
       });
     }
 
-    // ПОЛНАЯ ОСТАНОВКА: НЕ ОБРАБАТЫВАЕМ НИЧЕГО
-    console.log('🛑 COMPLETE STOP - No processing allowed');
-    return res.json({
-      success: true,
-      message: 'SYNC COMPLETELY STOPPED - No processing allowed',
-      debug: {
-        existingPurchases: existingPurchases.size,
-        rows: rows.length,
-        stripe: groupedPurchases.size
-      },
-      action: 'COMPLETE_STOP'
-    });
+    // НОРМАЛЬНАЯ РАБОТА: обрабатываем только новые покупки
+    console.log(`✅ Processing ${groupedPurchases.size} Stripe purchases against ${existingPurchases.size} existing purchases`);
 
     // ПРОСТАЯ ЛОГИКА: проверяем каждую покупку из Stripe (только если Google Sheets пустой)
     for (const [dateKey, group] of groupedPurchases.entries()) {
