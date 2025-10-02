@@ -37,6 +37,180 @@ app.get('/', (_req, res) => res.json({
 // Health check
 app.get('/health', (_req, res) => res.status(200).send('ok'));
 
+// ПРИНУДИТЕЛЬНАЯ АВТОСИНХРОНИЗАЦИЯ при каждом запросе
+app.get('/auto-sync', async (req, res) => {
+  try {
+    console.log('🔄 Принудительная автоСинхронизация...');
+    
+    // Получаем данные из Stripe
+    const sevenDaysAgo = Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000);
+    const payments = await stripe.paymentIntents.list({
+      created: { gte: sevenDaysAgo },
+      limit: 100
+    });
+    
+    console.log(`📊 Found ${payments.data.length} payments in Stripe`);
+    
+    // Группируем покупки
+    const groupedPurchases = new Map();
+    for (const payment of payments.data) {
+      if (payment.status === 'succeeded' && payment.customer) {
+        const customer = await stripe.customers.retrieve(payment.customer);
+        const date = new Date(payment.created * 1000).toISOString().split('T')[0];
+        const key = `${customer.id}_${date}`;
+        
+        if (!groupedPurchases.has(key)) {
+          groupedPurchases.set(key, {
+            customer,
+            payments: [],
+            totalAmount: 0,
+            firstPayment: payment
+          });
+        }
+        
+        const group = groupedPurchases.get(key);
+        group.payments.push(payment);
+        group.totalAmount += payment.amount;
+      }
+    }
+    
+    console.log(`📊 Grouped into ${groupedPurchases.size} purchases`);
+    
+    // Проверяем Google Sheets
+    let sheet, rows;
+    try {
+      const doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
+      await doc.loadInfo();
+      sheet = doc.sheetsByIndex[0];
+      rows = await sheet.getRows();
+      console.log(`📋 Google Sheets: ${rows.length} existing rows`);
+    } catch (error) {
+      console.error('❌ Google Sheets error:', error.message);
+      return res.status(500).json({ error: 'Google Sheets error: ' + error.message });
+    }
+    
+    // Обрабатываем только новые покупки
+    let newPurchases = 0;
+    for (const [dateKey, group] of groupedPurchases.entries()) {
+      try {
+        const customer = group.customer;
+        const firstPayment = group.firstPayment;
+        const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
+        
+        // Проверяем дубликаты
+        const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
+        if (exists) {
+          console.log(`⏭️ Purchase already exists: ${purchaseId}`);
+          continue;
+        }
+        
+        console.log(`🆕 NEW purchase: ${purchaseId} - ADDING`);
+        
+        // Добавляем в Google Sheets
+        const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
+        
+        // ПРАВИЛЬНОЕ UTC+1 ВРЕМЯ
+        const utcTime = new Date(firstPayment.created * 1000);
+        const utcPlus1 = new Date(utcTime.getTime() + 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+        
+        console.log('🕐 Time debug:');
+        console.log('  - UTC time:', utcTime.toISOString());
+        console.log('  - UTC+1 time:', utcPlus1);
+        
+        const rowData = {
+          'Purchase ID': purchaseId,
+          'Total Amount': (group.totalAmount / 100).toFixed(2),
+          'Currency': (firstPayment.currency || 'usd').toUpperCase(),
+          'Status': 'succeeded',
+          'Created UTC': new Date(firstPayment.created * 1000).toISOString(),
+          'Created UTC+1': utcPlus1,
+          'Customer ID': customer?.id || 'N/A',
+          'Customer Email': customer?.email || firstPayment.receipt_email || 'N/A',
+          'GEO': m.country || 'N/A',
+          'UTM Source': m.utm_source || '',
+          'UTM Medium': m.utm_medium || '',
+          'UTM Campaign': m.utm_campaign || '',
+          'UTM Content': m.utm_content || '',
+          'UTM Term': m.utm_term || '',
+          'Ad Name': m.ad_name || '',
+          'Adset Name': m.adset_name || '',
+          'Payment Count': group.payments.length
+        };
+        
+        await sheet.addRow(rowData);
+        console.log('✅ Payment data saved to Google Sheets:', purchaseId);
+        
+        // Отправляем уведомления
+        try {
+          const telegramText = formatTelegram({
+            purchase_id: purchaseId,
+            amount: (group.totalAmount / 100).toFixed(2),
+            currency: (firstPayment.currency || 'usd').toUpperCase(),
+            email: customer?.email || firstPayment.receipt_email || 'N/A',
+            country: m.country || 'N/A',
+            utm_source: m.utm_source || '',
+            utm_medium: m.utm_medium || '',
+            utm_campaign: m.utm_campaign || '',
+            utm_content: m.utm_content || '',
+            utm_term: m.utm_term || '',
+            platform_placement: m.platform_placement || '',
+            ad_name: m.ad_name || '',
+            adset_name: m.adset_name || '',
+            campaign_name: m.campaign_name || m.utm_campaign || '',
+            payment_count: group.payments.length
+          }, customer?.metadata || {});
+          
+          await sendTelegram(telegramText);
+          console.log('📱 Telegram notification sent for NEW purchase:', purchaseId);
+        } catch (error) {
+          console.error('Error sending Telegram:', error.message);
+        }
+        
+        try {
+          const slackText = formatSlack({
+            purchase_id: purchaseId,
+            amount: (group.totalAmount / 100).toFixed(2),
+            currency: (firstPayment.currency || 'usd').toUpperCase(),
+            email: customer?.email || firstPayment.receipt_email || 'N/A',
+            country: m.country || 'N/A',
+            utm_source: m.utm_source || '',
+            utm_medium: m.utm_medium || '',
+            utm_campaign: m.utm_campaign || '',
+            utm_content: m.utm_content || '',
+            utm_term: m.utm_term || '',
+            platform_placement: m.platform_placement || '',
+            ad_name: m.ad_name || '',
+            adset_name: m.adset_name || '',
+            campaign_name: m.campaign_name || m.utm_campaign || '',
+            payment_count: group.payments.length
+          }, customer?.metadata || {});
+          
+          await sendSlack(slackText);
+          console.log('💬 Slack notification sent for NEW purchase:', purchaseId);
+        } catch (error) {
+          console.error('Error sending Slack:', error.message);
+        }
+        
+        newPurchases++;
+      } catch (error) {
+        console.error(`Error processing purchase ${dateKey}:`, error.message);
+      }
+    }
+    
+    console.log(`✅ Auto-sync completed: ${newPurchases} new purchases processed`);
+    res.json({ 
+      success: true, 
+      message: `Auto-sync completed! Processed ${newPurchases} new purchase(s)`,
+      new_purchases: newPurchases,
+      total_groups: groupedPurchases.size
+    });
+    
+  } catch (error) {
+    console.error('Auto-sync failed:', error.message);
+    res.status(500).json({ error: 'Auto-sync failed: ' + error.message });
+  }
+});
+
 // Test endpoint
 app.get('/api/test', (req, res) => {
   res.json({ 
@@ -769,11 +943,26 @@ app.listen(ENV.PORT, () => {
           }
         }
         
-        // Запускаем синхронизацию каждые 5 минут
-        setInterval(runSync, 5 * 60 * 1000);
+        // НАДЕЖНАЯ АВТОСИНХРОНИЗАЦИЯ КАЖДЫЕ 5 МИНУТ
+        console.log('🔄 Запуск автоСинхронизации каждые 5 минут...');
         
         // Первый запуск через 30 секунд
-        setTimeout(runSync, 30 * 1000);
+        setTimeout(() => {
+          console.log('🚀 Первый запуск автоСинхронизации...');
+          runSync();
+        }, 30 * 1000);
+        
+        // Затем каждые 5 минут БЕЗ ОСТАНОВКИ
+        setInterval(() => {
+          console.log('⏰ АвтоСинхронизация по расписанию...');
+          runSync();
+        }, 5 * 60 * 1000);
+        
+        // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА каждые 2 минуты для надежности
+        setInterval(() => {
+          console.log('🔄 Дополнительная проверка каждые 2 минуты...');
+          runSync();
+        }, 2 * 60 * 1000);
 });
 
 export default app;
