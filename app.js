@@ -19,10 +19,60 @@ const ENV = {
   GOOGLE_SERVICE_EMAIL: process.env.GOOGLE_SERVICE_EMAIL,
   GOOGLE_SERVICE_PRIVATE_KEY: process.env.GOOGLE_SERVICE_PRIVATE_KEY,
   GOOGLE_SHEETS_DOC_ID: process.env.GOOGLE_SHEETS_DOC_ID,
-  BOT_DISABLED: process.env.BOT_DISABLED === 'true'
+  BOT_DISABLED: process.env.BOT_DISABLED === 'true',
+  NOTIFICATIONS_DISABLED: process.env.NOTIFICATIONS_DISABLED === 'true',
+  AUTO_SYNC_DISABLED: process.env.AUTO_SYNC_DISABLED === 'true'
 };
 
+// Простое хранилище для запоминания существующих покупок
+const existingPurchases = new Set();
+
 const stripe = new Stripe(ENV.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
+
+// Функция для загрузки и запоминания существующих покупок
+async function loadExistingPurchases() {
+  try {
+    console.log('🔄 Загружаю существующие покупки из Google Sheets...');
+    
+    if (!ENV.GOOGLE_SERVICE_EMAIL || !ENV.GOOGLE_SERVICE_PRIVATE_KEY || !ENV.GOOGLE_SHEETS_DOC_ID) {
+      console.log('❌ Google Sheets не настроен - пропускаю загрузку');
+      return;
+    }
+    
+    const privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY;
+    const serviceAccountAuth = new JWT({
+      email: ENV.GOOGLE_SERVICE_EMAIL,
+      key: privateKey,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    
+    const doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
+    await doc.loadInfo();
+    const sheet = doc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+    
+    console.log(`📋 Найдено ${rows.length} строк в Google Sheets`);
+    console.log('📊 Доступные колонки:', sheet.headerValues);
+    
+    // Очищаем старое хранилище
+    existingPurchases.clear();
+    
+    // Загружаем все существующие Purchase ID
+    for (const row of rows) {
+      const purchaseId = row.get('Purchase ID') || row.get('purchase_id') || '';
+      if (purchaseId) {
+        existingPurchases.add(purchaseId);
+        console.log(`📝 Запомнил покупку: ${purchaseId}`);
+      }
+    }
+    
+    console.log(`✅ Загружено ${existingPurchases.size} существующих покупок в память`);
+    console.log('📝 Список покупок:', Array.from(existingPurchases).slice(0, 5), '...');
+    
+  } catch (error) {
+    console.error('❌ Ошибка загрузки существующих покупок:', error.message);
+  }
+}
 
 // Middleware
 app.use(express.json());
@@ -46,6 +96,24 @@ app.get('/favicon.png', (req, res) => {
 
 // Health check
 app.get('/health', (_req, res) => res.status(200).send('ok'));
+
+// Endpoint для загрузки существующих покупок
+app.get('/api/load-existing', async (req, res) => {
+  try {
+    await loadExistingPurchases();
+    res.json({
+      success: true,
+      message: `Loaded ${existingPurchases.size} existing purchases`,
+      count: existingPurchases.size,
+      purchases: Array.from(existingPurchases).slice(0, 10) // Показываем первые 10
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
 
 // ПРИНУДИТЕЛЬНАЯ АКТИВНОСТЬ чтобы Vercel не засыпал
 app.get('/ping', (_req, res) => {
@@ -408,6 +476,9 @@ app.post('/api/sync-payments', async (req, res) => {
   try {
     console.log('🔄 Starting payment sync...');
     
+    // Загружаем существующие покупки в память
+    await loadExistingPurchases();
+    
     // Get payments from last 7 days
     const sevenDaysAgo = Math.floor(Date.now() / 1000) - (7 * 24 * 60 * 60);
     
@@ -596,18 +667,18 @@ app.post('/api/sync-payments', async (req, res) => {
         console.log(`🔍 Customer ID: ${customer?.id}`);
         console.log(`🔍 Date key: ${dateKey}`);
 
-        // ИСПРАВЛЕНО: ПРОВЕРЯЕМ ДУБЛИКАТЫ ПО ПРАВИЛЬНОМУ ПОЛЮ
-        const exists = rows.some((row) => {
+        // ИСПРАВЛЕНО: ПРОВЕРЯЕМ ДУБЛИКАТЫ В ПАМЯТИ И GOOGLE SHEETS
+        const existsInMemory = existingPurchases.has(purchaseId);
+        const existsInSheets = rows.some((row) => {
           const rowPurchaseId = row.get('Purchase ID') || row.get('purchase_id') || '';
-          const match = rowPurchaseId === purchaseId;
-          if (match) {
-            console.log(`🔍 FOUND EXISTING: ${purchaseId} in Google Sheets`);
-            console.log(`🔍 Row data:`, row._rawData);
-          }
-          return match;
+          return rowPurchaseId === purchaseId;
         });
         
-        if (exists) {
+        console.log(`🔍 Проверка дубликатов для ${purchaseId}:`);
+        console.log(`  - В памяти: ${existsInMemory}`);
+        console.log(`  - В Google Sheets: ${existsInSheets}`);
+        
+        if (existsInMemory || existsInSheets) {
           console.log(`⏭️ Purchase already exists: ${purchaseId} - SKIP`);
           continue; // Пропускаем существующие
         }
@@ -729,8 +800,8 @@ app.post('/api/sync-payments', async (req, res) => {
           savedToSheets = false;
         }
 
-        // Отправляем уведомления ТОЛЬКО если успешно сохранили в Google Sheets
-        if (savedToSheets) {
+        // Отправляем уведомления ТОЛЬКО если успешно сохранили в Google Sheets И уведомления включены
+        if (savedToSheets && !ENV.NOTIFICATIONS_DISABLED) {
           try {
             const telegramText = formatTelegram(purchaseData, customer?.metadata || {});
             await sendTelegram(telegramText);
@@ -746,12 +817,18 @@ app.post('/api/sync-payments', async (req, res) => {
           } catch (error) {
             console.error('Error sending Slack:', error.message);
           }
+        } else if (ENV.NOTIFICATIONS_DISABLED) {
+          console.log('🚫 Notifications disabled - skipping notifications');
         } else {
           console.log('🚫 Notifications skipped - purchase not saved to Google Sheets');
         }
 
         // ИСПРАВЛЕНО: Увеличиваем счетчики ТОЛЬКО если покупка действительно сохранена
         if (savedToSheets) {
+          // Добавляем в память для будущих проверок
+          existingPurchases.add(purchaseId);
+          console.log(`📝 Добавил в память: ${purchaseId} (всего в памяти: ${existingPurchases.size})`);
+          
           newPurchases++;
           processedPurchases.push({
             purchase_id: purchaseId,
@@ -1038,17 +1115,21 @@ app.listen(ENV.PORT, () => {
         console.log('   ✅ Работает БЕЗ твоего участия');
         console.log('🚀 АВТОСИНХРОНИЗАЦИЯ ЗАПУЩЕНА И РАБОТАЕТ!');
         
-        // ОСНОВНАЯ АВТОМАТИЗАЦИЯ каждые 5 минут
-        setInterval(() => {
-          console.log('🤖 АВТОМАТИЧЕСКАЯ ПРОВЕРКА: Ищу новые покупки в Stripe...');
-          runSync();
-        }, 5 * 60 * 1000);
-        
-        // ДОПОЛНИТЕЛЬНАЯ АВТОМАТИЗАЦИЯ каждые 2 минуты
-        setInterval(() => {
-          console.log('🤖 ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Убеждаюсь что ничего не пропустил...');
-          runSync();
-        }, 2 * 60 * 1000);
+        // ОСНОВНАЯ АВТОМАТИЗАЦИЯ каждые 5 минут (ОТКЛЮЧЕНА)
+        if (!ENV.AUTO_SYNC_DISABLED) {
+          setInterval(() => {
+            console.log('🤖 АВТОМАТИЧЕСКАЯ ПРОВЕРКА: Ищу новые покупки в Stripe...');
+            runSync();
+          }, 5 * 60 * 1000);
+          
+          // ДОПОЛНИТЕЛЬНАЯ АВТОМАТИЗАЦИЯ каждые 2 минуты
+          setInterval(() => {
+            console.log('🤖 ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Убеждаюсь что ничего не пропустил...');
+            runSync();
+          }, 2 * 60 * 1000);
+        } else {
+          console.log('🛑 АВТОСИНХРОНИЗАЦИЯ ОТКЛЮЧЕНА - используйте ручной вызов /api/sync-payments');
+        }
 });
 
 export default app;
