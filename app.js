@@ -240,13 +240,67 @@ app.get('/auto-sync', async (req, res) => {
       }
     }
     
-    console.log(`✅ Auto-sync completed: ${newPurchases} NEW purchases processed (NO DUPLICATES)`);
+    // ЗАПОЛНЯЕМ ПУСТЫЕ КОЛОНКИ У СУЩЕСТВУЮЩИХ ПОКУПОК
+    let updatedExisting = 0;
+    for (const [dateKey, group] of groupedPurchases.entries()) {
+      try {
+        const customer = group.customer;
+        const firstPayment = group.firstPayment;
+        const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
+        
+        // Ищем существующую покупку
+        const existingRow = rows.find((row) => {
+          const rowPurchaseId = row.get('Purchase ID') || row.get('purchase_id') || '';
+          return rowPurchaseId === purchaseId;
+        });
+        
+        if (existingRow) {
+          // Проверяем нужно ли обновить UTC+1 или GEO
+          const currentUtcPlus1 = existingRow.get('Created UTC+1') || '';
+          const currentGeo = existingRow.get('GEO') || '';
+          
+          if (!currentUtcPlus1 || currentUtcPlus1 === '' || currentGeo === 'N/A' || currentGeo === '') {
+            console.log(`🔄 Updating existing purchase: ${purchaseId}`);
+            
+            // Обновляем UTC+1
+            if (!currentUtcPlus1 || currentUtcPlus1 === '') {
+              const utcTime = new Date(firstPayment.created * 1000);
+              const utcPlus1 = new Date(utcTime.getTime() + 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+              existingRow.set('Created UTC+1', utcPlus1);
+              console.log(`🕐 Updated UTC+1: ${utcPlus1}`);
+            }
+            
+            // Обновляем GEO
+            if (currentGeo === 'N/A' || currentGeo === '') {
+              const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
+              let geoCountry = 'N/A';
+              if (m.geo_country) {
+                geoCountry = m.geo_country;
+              } else if (m.country) {
+                geoCountry = m.country;
+              } else if (customer?.address?.country) {
+                geoCountry = customer.address.country;
+              }
+              existingRow.set('GEO', geoCountry);
+              console.log(`🌍 Updated GEO: ${geoCountry}`);
+            }
+            
+            await existingRow.save();
+            updatedExisting++;
+          }
+        }
+      } catch (error) {
+        console.error(`Error updating purchase ${dateKey}:`, error.message);
+      }
+    }
+    
+    console.log(`✅ Auto-sync completed: ${newPurchases} NEW purchases, ${updatedExisting} existing updated`);
     res.json({ 
       success: true, 
-      message: `Auto-sync completed! Processed ${newPurchases} NEW purchase(s) - NO DUPLICATES`,
+      message: `Auto-sync completed! ${newPurchases} NEW purchases, ${updatedExisting} existing updated`,
       new_purchases: newPurchases,
-      total_groups: groupedPurchases.size,
-      note: "Only NEW purchases added, existing ones skipped"
+      updated_existing: updatedExisting,
+      total_groups: groupedPurchases.size
     });
     
   } catch (error) {
