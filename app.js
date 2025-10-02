@@ -229,8 +229,15 @@ app.post('/api/sync-payments', async (req, res) => {
         const purchaseDate = dateKey.split('_')[1]; // YYYY-MM-DD
         
         console.log(`🔍 Checking purchase: ${customerEmail} on ${purchaseDate}`);
+        console.log(`📋 Total rows in Google Sheets: ${rows.length}`);
         
-        const purchaseExists = rows.length > 0 ? rows.some((row) => {
+        // СТРОГАЯ ПРОВЕРКА: если Google Sheets пустой, не обрабатываем
+        if (rows.length === 0) {
+          console.log(`⚠️ Google Sheets is empty - skipping to prevent duplicates`);
+          continue;
+        }
+        
+        const purchaseExists = rows.some((row) => {
           const rowEmail = row.get('email') || '';
           const rowDate = row.get('created_at') || '';
           const rowDateOnly = rowDate.split('T')[0]; // YYYY-MM-DD
@@ -239,7 +246,7 @@ app.post('/api/sync-payments', async (req, res) => {
             console.log(`✅ Found existing: ${rowEmail} on ${rowDateOnly}`);
           }
           return exists;
-        }) : false;
+        });
 
         if (purchaseExists) {
           console.log(`⏭️ Purchase already exists: ${customerEmail} on ${purchaseDate} - SKIPPING`);
