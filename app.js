@@ -150,8 +150,23 @@ app.post('/api/sync-payments', async (req, res) => {
     // Initialize Google Sheets
     let serviceAccountAuth;
     try {
+      console.log('🔍 Google Sheets debug info:');
+      console.log('Email exists:', !!ENV.GOOGLE_SERVICE_EMAIL);
+      console.log('Private key exists:', !!ENV.GOOGLE_SERVICE_PRIVATE_KEY);
+      console.log('Doc ID exists:', !!ENV.GOOGLE_SHEETS_DOC_ID);
+      
+      if (!ENV.GOOGLE_SERVICE_EMAIL || !ENV.GOOGLE_SERVICE_PRIVATE_KEY || !ENV.GOOGLE_SHEETS_DOC_ID) {
+        console.log('❌ Missing Google Sheets environment variables');
+        return res.status(500).json({
+          success: false,
+          message: 'Google Sheets not configured - missing environment variables'
+        });
+      }
+      
       // Попробуем разные форматы ключа
       let privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY;
+      console.log('Original key length:', privateKey.length);
+      console.log('Key starts with:', privateKey.substring(0, 20));
       
       // Если ключ не содержит BEGIN, добавляем форматирование
       if (!privateKey.includes('BEGIN PRIVATE KEY')) {
@@ -161,13 +176,19 @@ app.post('/api/sync-payments', async (req, res) => {
         }
       }
       
+      console.log('Formatted key length:', privateKey.length);
+      console.log('Key contains BEGIN:', privateKey.includes('BEGIN'));
+      
       serviceAccountAuth = new JWT({
         email: ENV.GOOGLE_SERVICE_EMAIL,
         key: privateKey,
         scopes: ['https://www.googleapis.com/auth/spreadsheets'],
       });
+      
+      console.log('✅ Google Sheets authentication created successfully');
     } catch (error) {
       console.error('❌ Google Sheets authentication error:', error.message);
+      console.error('Error details:', error);
       return res.status(500).json({
         success: false,
         message: 'Google Sheets authentication failed',
