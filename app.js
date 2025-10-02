@@ -224,31 +224,19 @@ app.post('/api/sync-payments', async (req, res) => {
       });
     }
 
-    // ЛОГИКА ИЗ RENDER: собираем существующие Purchase ID
-    const existingPurchaseIds = new Set();
+    // ПРОСТОЕ СРАВНЕНИЕ: собираем Customer ID + дату из Google Sheets
+    const existingPurchases = new Set();
     for (const row of rows) {
-      const purchaseId = row.get('purchase_id') || '';
-      if (purchaseId) {
-        existingPurchaseIds.add(purchaseId);
-        console.log(`📋 Found existing Purchase ID: ${purchaseId}`);
+      const customerId = row.get('customer_id') || '';
+      const date = row.get('created_at') || '';
+      const dateOnly = date.split('T')[0]; // YYYY-MM-DD
+      if (customerId && dateOnly) {
+        const key = `${customerId}_${dateOnly}`;
+        existingPurchases.add(key);
+        console.log(`📋 Found existing: ${key}`);
       }
     }
-    console.log(`📋 Total existing Purchase IDs in Google Sheets: ${existingPurchaseIds.size}`);
-    
-    // Показываем первые 5 существующих Purchase ID
-    const firstFive = Array.from(existingPurchaseIds).slice(0, 5);
-    console.log(`📋 First 5 existing Purchase IDs: ${firstFive.join(', ')}`);
-    
-    // Показываем первые 5 новых Purchase ID из Stripe
-    console.log(`🆕 First 5 NEW Purchase IDs from Stripe:`);
-    let count = 0;
-    for (const [dateKey, group] of groupedPurchases.entries()) {
-      if (count >= 5) break;
-      const customer = group.customer;
-      const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
-      console.log(`  ${purchaseId}`);
-      count++;
-    }
+    console.log(`📋 Total existing purchases in Google Sheets: ${existingPurchases.size}`);
 
     // ПРОСТАЯ ЛОГИКА: проверяем каждую покупку из Stripe
     for (const [dateKey, group] of groupedPurchases.entries()) {
@@ -260,13 +248,17 @@ app.post('/api/sync-payments', async (req, res) => {
         // Create unique purchase ID
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
-        // ПРОВЕРКА: есть ли эта покупка в Google Sheets?
-        if (existingPurchaseIds.has(purchaseId)) {
-          console.log(`⏭️ Purchase already exists: ${purchaseId} - SKIP`);
+        // ПРОСТАЯ ПРОВЕРКА: есть ли эта покупка в Google Sheets?
+        const customerId = customer?.id || 'unknown';
+        const purchaseDate = dateKey.split('_')[1]; // YYYY-MM-DD
+        const key = `${customerId}_${purchaseDate}`;
+        
+        if (existingPurchases.has(key)) {
+          console.log(`⏭️ Purchase already exists: ${key} - SKIP`);
           continue; // Пропускаем существующие
         }
         
-        console.log(`🆕 NEW purchase: ${purchaseId} - ADDING`);
+        console.log(`🆕 NEW purchase: ${key} - ADDING`);
 
         // Format GEO data
         let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
