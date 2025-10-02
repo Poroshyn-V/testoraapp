@@ -15,13 +15,13 @@ router.post('/sync-payments', async (req, res) => {
   try {
     console.log('🔄 Starting payment sync with grouping...');
     
-    // Получаем PAYMENT INTENTS за последние 24 часа
-    const oneDayAgo = Math.floor(Date.now() / 1000) - (24 * 60 * 60);
+    // Получаем PAYMENT INTENTS за последние 7 дней (чтобы не пропустить)
+    const sevenDaysAgo = Math.floor(Date.now() / 1000) - (7 * 24 * 60 * 60);
     
     const payments = await stripe.paymentIntents.list({
       limit: 100,
       created: {
-        gte: oneDayAgo
+        gte: sevenDaysAgo
       }
     });
     
