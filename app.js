@@ -230,9 +230,14 @@ app.post('/api/sync-payments', async (req, res) => {
       const purchaseId = row.get('purchase_id') || '';
       if (purchaseId) {
         existingPurchaseIds.add(purchaseId);
+        console.log(`📋 Found existing Purchase ID: ${purchaseId}`);
       }
     }
-    console.log(`📋 Existing Purchase IDs in Google Sheets: ${existingPurchaseIds.size}`);
+    console.log(`📋 Total existing Purchase IDs in Google Sheets: ${existingPurchaseIds.size}`);
+    
+    // Показываем первые 5 существующих Purchase ID
+    const firstFive = Array.from(existingPurchaseIds).slice(0, 5);
+    console.log(`📋 First 5 existing Purchase IDs: ${firstFive.join(', ')}`);
 
     // ПРОСТАЯ ЛОГИКА: проверяем каждую покупку из Stripe
     for (const [dateKey, group] of groupedPurchases.entries()) {
