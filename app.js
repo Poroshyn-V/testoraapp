@@ -278,8 +278,15 @@ app.get('/auto-sync', async (req, res) => {
           // ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ UTC+1 для ВСЕХ покупок
           const utcTime = new Date(firstPayment.created * 1000);
           const utcPlus1 = new Date(utcTime.getTime() + 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+          
+          // Пробуем разные названия колонки UTC+1
           existingRow.set('Created UTC+1', utcPlus1);
+          existingRow.set('Created Local (UTC+1)', utcPlus1);
+          existingRow.set('Created Local (UTC+X)', utcPlus1);
+          existingRow.set('UTC+1', utcPlus1);
+          
           console.log(`🕐 FORCE Updated UTC+1: ${utcPlus1}`);
+          console.log(`🕐 Available columns:`, Object.keys(existingRow._rawData));
           
           // ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ GEO для ВСЕХ покупок
           let geoCountry = 'N/A';
