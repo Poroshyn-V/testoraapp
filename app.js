@@ -213,6 +213,8 @@ app.post('/api/sync-payments', async (req, res) => {
           console.log(`  - customer_id: "${row.get('customer_id')}"`);
           console.log(`  - created_at: "${row.get('created_at')}"`);
           console.log(`  - email: "${row.get('email')}"`);
+          console.log(`  - purchase_id: "${row.get('purchase_id')}"`);
+          console.log(`  - Purchase ID: "${row.get('Purchase ID')}"`);
           console.log(`  - All data:`, row._rawData);
         }
       }
@@ -253,7 +255,15 @@ app.post('/api/sync-payments', async (req, res) => {
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
         // ПРОСТАЯ ПРОВЕРКА С RENDER: есть ли эта покупка в Google Sheets?
-        const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
+        // Пробуем разные варианты названий колонок
+        const exists = rows.some((row) => {
+          const purchaseIdFromRow = row.get('purchase_id') || row.get('Purchase ID') || row.get('purchase_id') || row.get('Purchase ID') || '';
+          const match = purchaseIdFromRow === purchaseId;
+          if (match) {
+            console.log(`🔍 FOUND MATCH: ${purchaseId} in Google Sheets`);
+          }
+          return match;
+        });
         
         if (exists) {
           console.log(`⏭️ Purchase already exists: ${purchaseId} - SKIP`);
