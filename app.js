@@ -215,18 +215,7 @@ app.post('/api/sync-payments', async (req, res) => {
       });
     }
 
-    // КРИТИЧЕСКАЯ ПРОВЕРКА: если Google Sheets пустой, НЕ ОБРАБАТЫВАЕМ ВООБЩЕ
-    if (rows.length === 0) {
-      console.log(`⚠️ Google Sheets is empty - STOPPING ALL PROCESSING to prevent duplicates`);
-      return res.json({
-        success: true,
-        message: 'Google Sheets is empty - no processing to prevent duplicates',
-        total_groups: groupedPurchases.size,
-        processed: 0,
-        purchases: []
-      });
-    }
-
+    // ПРОСТАЯ ЛОГИКА: проверяем каждую покупку из Stripe
     for (const [dateKey, group] of groupedPurchases.entries()) {
       try {
         const customer = group.customer;
@@ -236,30 +225,26 @@ app.post('/api/sync-payments', async (req, res) => {
         // Create unique purchase ID
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
-        // Check if purchase already exists (проверяем по email + дате)
+        // ПРОСТАЯ ПРОВЕРКА: есть ли эта покупка в Google Sheets?
         const customerEmail = customer?.email || firstPayment.receipt_email || 'N/A';
         const purchaseDate = dateKey.split('_')[1]; // YYYY-MM-DD
         
-        console.log(`🔍 Checking purchase: ${customerEmail} on ${purchaseDate}`);
-        console.log(`📋 Total rows in Google Sheets: ${rows.length}`);
+        console.log(`🔍 Checking: ${customerEmail} on ${purchaseDate}`);
         
-        const purchaseExists = rows.some((row) => {
+        // Ищем в Google Sheets по email + дате
+        const alreadyExists = rows.some((row) => {
           const rowEmail = row.get('email') || '';
           const rowDate = row.get('created_at') || '';
           const rowDateOnly = rowDate.split('T')[0]; // YYYY-MM-DD
-          const exists = rowEmail === customerEmail && rowDateOnly === purchaseDate;
-          if (exists) {
-            console.log(`✅ Found existing: ${rowEmail} on ${rowDateOnly}`);
-          }
-          return exists;
+          return rowEmail === customerEmail && rowDateOnly === purchaseDate;
         });
 
-        if (purchaseExists) {
-          console.log(`⏭️ Purchase already exists: ${customerEmail} on ${purchaseDate} - SKIPPING`);
-          continue; // Пропускаем существующие покупки БЕЗ уведомлений
+        if (alreadyExists) {
+          console.log(`⏭️ Already exists: ${customerEmail} on ${purchaseDate} - SKIP`);
+          continue; // Пропускаем существующие
         }
         
-        console.log(`🆕 NEW purchase: ${customerEmail} on ${purchaseDate} - PROCESSING`);
+        console.log(`🆕 NEW: ${customerEmail} on ${purchaseDate} - ADDING`);
 
         // Format GEO data
         let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
