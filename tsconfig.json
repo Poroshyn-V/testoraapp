@@ -11,10 +11,10 @@
     "skipLibCheck": true
   },
   "include": [
-    "src"
+    "src/**/*"
   ],
   "exclude": [
-    "src/api/send-last-payment.ts",
-    "src/api/create-checkout.ts"
+    "node_modules",
+    "dist"
   ]
 }
