@@ -49,6 +49,7 @@ app.get('/health', (_req, res) => res.status(200).send('ok'));
 // ПРИНУДИТЕЛЬНАЯ АКТИВНОСТЬ чтобы Vercel не засыпал
 app.get('/ping', (_req, res) => {
   console.log('💓 PING: Поддерживаю активность Vercel...');
+  console.log('🕐 Время:', new Date().toISOString());
   res.status(200).json({ 
     status: 'alive', 
     timestamp: new Date().toISOString(),
@@ -1152,7 +1153,10 @@ app.listen(ENV.PORT, () => {
         console.log('   Method: POST');
         console.log('   Interval: каждые 5 минут');
         
-        // ИСПРАВЛЕНО: VERCEL НЕ ПОДДЕРЖИВАЕТ setInterval
+        // ЛОГИРОВАНИЕ ПРИ ЗАПУСКЕ
+        console.log('🚀 ===== БОТ ЗАПУЩЕН =====');
+        console.log('🕐 Время запуска:', new Date().toISOString());
+        console.log('🌐 Vercel URL: https://testoraapp.vercel.app');
         console.log('🔧 ПРОБЛЕМА: Vercel засыпает - setInterval не работает!');
         console.log('✅ РЕШЕНИЕ: Бот работает при каждом запросе к API');
         console.log('🤖 БОТ ГОТОВ К РАБОТЕ:');
@@ -1160,6 +1164,7 @@ app.listen(ENV.PORT, () => {
         console.log('   🔗 https://testoraapp.vercel.app/auto-sync (GET)');
         console.log('   🔗 https://testoraapp.vercel.app/ping (GET)');
         console.log('⚠️ НАСТРОЙТЕ ВНЕШНИЙ CRON JOB для автоматизации!');
+        console.log('🚀 ===== БОТ ГОТОВ =====');
 });
 
 export default app;
