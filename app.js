@@ -105,10 +105,21 @@ app.get('/auto-sync', async (req, res) => {
         const firstPayment = group.firstPayment;
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
         
-        // ПРОВЕРЯЕМ ДУБЛИКАТЫ - СТРОГАЯ ПРОВЕРКА
-        const exists = rows.some((row) => {
+        // ПРОВЕРЯЕМ ДУБЛИКАТЫ - ДЕБАГИМ ВСЕ КОЛОНКИ
+        console.log(`🔍 Checking for purchase_id: ${purchaseId}`);
+        console.log(`📊 Available columns:`, sheet.headerValues);
+        
+        const exists = rows.some((row, index) => {
           const rowPurchaseId = row.get('purchase_id') || row.get('Purchase ID') || '';
           const match = rowPurchaseId === purchaseId;
+          
+          if (index < 3) { // Показываем первые 3 строки для отладки
+            console.log(`Row ${index + 1}:`);
+            console.log(`  - purchase_id: "${row.get('purchase_id')}"`);
+            console.log(`  - Purchase ID: "${row.get('Purchase ID')}"`);
+            console.log(`  - _rawData:`, row._rawData);
+          }
+          
           if (match) {
             console.log(`🔍 FOUND EXISTING: ${purchaseId} in Google Sheets`);
           }
