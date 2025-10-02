@@ -79,6 +79,14 @@ app.get('/auto-sync', async (req, res) => {
     // Проверяем Google Sheets
     let sheet, rows;
     try {
+      // Форматируем приватный ключ для Vercel
+      const privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY.replace(/\\n/g, '\n');
+      const serviceAccountAuth = new JWT({
+        email: ENV.GOOGLE_SERVICE_EMAIL,
+        key: privateKey,
+        scopes: ['https://www.googleapis.com/auth/spreadsheets']
+      });
+      
       const doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
       await doc.loadInfo();
       sheet = doc.sheetsByIndex[0];
