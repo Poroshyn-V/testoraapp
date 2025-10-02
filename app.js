@@ -190,6 +190,7 @@ app.post('/api/sync-payments', async (req, res) => {
       
       doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
       await doc.loadInfo();
+      console.log(`✅ Google Sheets подключен: ${doc.title}`);
       
       sheet = doc.sheetsByIndex[0];
       if (!sheet) {
@@ -198,6 +199,8 @@ app.post('/api/sync-payments', async (req, res) => {
       }
       
       console.log(`📄 Using sheet: "${sheet.title}"`);
+      console.log(`📄 Sheet ID: ${sheet.sheetId}`);
+      console.log(`📄 Sheet URL: ${sheet.url}`);
       
       // Load existing rows
       rows = await sheet.getRows();
@@ -311,11 +314,21 @@ app.post('/api/sync-payments', async (req, res) => {
         let savedToSheets = false;
         if (sheet) {
           try {
+            console.log('🔄 Attempting to save to Google Sheets:', purchaseId);
+            console.log('📊 Purchase data keys:', Object.keys(purchaseData));
+            console.log('📊 Purchase data sample:', {
+              purchase_id: purchaseData.purchase_id,
+              email: purchaseData.email,
+              amount: purchaseData.amount,
+              created_at: purchaseData.created_at
+            });
+            
             await sheet.addRow(purchaseData);
             console.log('✅ Payment data saved to Google Sheets:', purchaseId);
             savedToSheets = true;
           } catch (error) {
             console.error('❌ Error saving to Google Sheets:', error.message);
+            console.error('❌ Error details:', error);
             console.log('⚠️ Purchase data:', purchaseData);
             savedToSheets = false;
           }
