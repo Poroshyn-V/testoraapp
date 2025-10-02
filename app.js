@@ -252,6 +252,11 @@ app.post('/api/sync-payments', async (req, res) => {
     const firstFive = Array.from(existingPurchases).slice(0, 5);
     console.log(`📋 First 5 existing keys: ${firstFive.join(', ')}`);
 
+    // КРИТИЧЕСКАЯ ПРОВЕРКА: ПОКАЗЫВАЕМ ЧТО ПРОИСХОДИТ
+    console.log(`🔍 DEBUG: existingPurchases.size = ${existingPurchases.size}`);
+    console.log(`🔍 DEBUG: rows.length = ${rows.length}`);
+    console.log(`🔍 DEBUG: groupedPurchases.size = ${groupedPurchases.size}`);
+    
     // СТРОГАЯ ЛОГИКА: НЕ ОБРАБАТЫВАЕМ НИЧЕГО если есть существующие данные
     if (existingPurchases.size > 0) {
       console.log(`⚠️ Found ${existingPurchases.size} existing purchases in Google Sheets`);
@@ -263,6 +268,18 @@ app.post('/api/sync-payments', async (req, res) => {
         existing_count: existingPurchases.size,
         total_stripe: groupedPurchases.size,
         action: 'STOPPED_TO_PREVENT_DUPLICATES'
+      });
+    }
+    
+    // ЕСЛИ GOOGLE SHEETS ПУСТОЙ - ТОЖЕ ОСТАНАВЛИВАЕМ
+    if (rows.length === 0) {
+      console.log('⚠️ Google Sheets is EMPTY - STOPPING SYNC');
+      return res.json({
+        success: true,
+        message: 'Google Sheets is empty - sync stopped',
+        rows_count: 0,
+        total_stripe: groupedPurchases.size,
+        action: 'STOPPED_EMPTY_SHEETS'
       });
     }
 
