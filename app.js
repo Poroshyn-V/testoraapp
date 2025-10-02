@@ -63,6 +63,8 @@ async function loadExistingPurchases() {
       if (purchaseId) {
         existingPurchases.add(purchaseId);
         console.log(`📝 Запомнил покупку: ${purchaseId}`);
+      } else {
+        console.log(`⚠️ Пустой Purchase ID в строке:`, row._rawData);
       }
     }
     
@@ -477,7 +479,9 @@ app.post('/api/sync-payments', async (req, res) => {
     console.log('🔄 Starting payment sync...');
     
     // Загружаем существующие покупки в память
+    console.log('🔄 Вызываю loadExistingPurchases...');
     await loadExistingPurchases();
+    console.log(`📝 В памяти сейчас: ${existingPurchases.size} покупок`);
     
     // Get payments from last 7 days
     const sevenDaysAgo = Math.floor(Date.now() / 1000) - (7 * 24 * 60 * 60);
