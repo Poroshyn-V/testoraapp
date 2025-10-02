@@ -238,6 +238,17 @@ app.post('/api/sync-payments', async (req, res) => {
     // Показываем первые 5 существующих Purchase ID
     const firstFive = Array.from(existingPurchaseIds).slice(0, 5);
     console.log(`📋 First 5 existing Purchase IDs: ${firstFive.join(', ')}`);
+    
+    // Показываем первые 5 новых Purchase ID из Stripe
+    console.log(`🆕 First 5 NEW Purchase IDs from Stripe:`);
+    let count = 0;
+    for (const [dateKey, group] of groupedPurchases.entries()) {
+      if (count >= 5) break;
+      const customer = group.customer;
+      const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
+      console.log(`  ${purchaseId}`);
+      count++;
+    }
 
     // ПРОСТАЯ ЛОГИКА: проверяем каждую покупку из Stripe
     for (const [dateKey, group] of groupedPurchases.entries()) {
