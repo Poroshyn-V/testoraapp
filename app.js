@@ -203,6 +203,15 @@ app.post('/api/sync-payments', async (req, res) => {
       rows = await sheet.getRows();
       console.log(`📋 Existing rows in sheet: ${rows.length}`);
       
+      // Показываем первые 3 строки для отладки
+      if (rows.length > 0) {
+        console.log('📄 First 3 rows in Google Sheets:');
+        for (let i = 0; i < Math.min(3, rows.length); i++) {
+          const row = rows[i];
+          console.log(`Row ${i + 1}: email="${row.get('email')}" date="${row.get('created_at')}"`);
+        }
+      }
+      
     } catch (error) {
       console.error('❌ Google Sheets error:', error.message);
       console.log('⚠️ Google Sheets not available - STOPPING SYNC to prevent duplicates');
