@@ -224,6 +224,16 @@ app.post('/api/sync-payments', async (req, res) => {
       });
     }
 
+    // СТРОГАЯ ПРОВЕРКА: если Google Sheets пустой, НЕ ОБРАБАТЫВАЕМ
+    if (rows.length === 0) {
+      console.log('⚠️ Google Sheets is EMPTY - STOPPING SYNC to prevent duplicates');
+      return res.status(500).json({
+        success: false,
+        message: 'Google Sheets is empty - sync stopped to prevent duplicates',
+        rows_count: 0
+      });
+    }
+
     // ПРОСТОЕ СРАВНЕНИЕ: собираем Customer ID + дату из Google Sheets
     const existingPurchases = new Set();
     for (const row of rows) {
