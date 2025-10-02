@@ -177,6 +177,18 @@ router.post('/sync-payments', async (req, res) => {
                 console.error(`Error processing purchase ${dateKey}:`, error.message);
             }
         }
+        // Сортируем таблицу по дате (старые сверху, новые снизу)
+        if (newPurchases > 0) {
+            try {
+                console.log('🔄 Sorting sheet by date...');
+                await sheet.loadCells();
+                await sheet.sort(5, true); // Колонка 5 = "Created UTC", ascending = true (старые → новые)
+                console.log('✅ Sheet sorted by date');
+            }
+            catch (error) {
+                console.error('Error sorting sheet:', error.message);
+            }
+        }
         res.json({
             success: true,
             message: `Sync completed! Processed ${newPurchases} purchase(s)`,
