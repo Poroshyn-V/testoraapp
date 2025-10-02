@@ -38,23 +38,37 @@ export function formatSlack(session: Stripe.Checkout.Session, customerMetadata: 
   const m = { ...session.metadata, ...customerMetadata };
   const amount = (session.amount_total ?? 0) / 100;
   const currency = (session.currency || 'usd').toUpperCase();
+  const pm = session.payment_method_types?.[0] || 'card';
   const email = session.customer_details?.email || session.customer_email || 'N/A';
-  const orderId = session.id.slice(3, 14);
-  const country = m.geo_country || m.country || session.customer_details?.address?.country || 'N/A';
-  const product_tag = m.product_tag || 'N/A';
-  const utm_campaign = m.campaign_name || m.utm_campaign || 'N/A';
   
-  return `🟢 *Order ${orderId} was processed!*
-
-💳 card
+  // Используем полный ID платежа
+  const paymentId = session.id;
+  const paymentCount = m.payment_count || '1 payment';
+  
+  const country = m.geo_country || m.country || session.customer_details?.address?.country || 'N/A';
+  const gender = m.gender || 'N/A';
+  const creative_link = m.creative_link || 'N/A';
+  const utm_source = m.utm_source || 'N/A';
+  const platform_placement = m.platform_placement || 'N/A';
+  const ad_name = m.ad_name || 'N/A';
+  const adset_name = m.adset_name || 'N/A';
+  const campaign_name = m.campaign_name || m.utm_campaign || 'N/A';
+  
+  return `🟢 *Purchase ${paymentId} was processed!*
+---------------------------
+💳 ${pm}
 💰 ${amount} ${currency}
-🏷️ ${product_tag}
-
+🏷️ ${paymentCount}
+---------------------------
 📧 ${email}
-
-🌪️ ${orderId}
+---------------------------
+🌪️ ${paymentId}
 📍 ${country}
-🎯 ${utm_campaign}
-
-✅ Payment processed successfully!`;
+🧍 ${gender}
+🔗 ${creative_link}
+${utm_source}
+${platform_placement}
+${ad_name}
+${adset_name}
+${campaign_name}`;
 }
