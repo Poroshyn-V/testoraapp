@@ -144,6 +144,22 @@ app.get('/auto-sync', async (req, res) => {
         console.log('  - UTC time:', utcTime.toISOString());
         console.log('  - UTC+1 time:', utcPlus1);
         
+        // GEO данные из IP (если есть)
+        let geoCountry = 'N/A';
+        if (m.geo_country) {
+          geoCountry = m.geo_country;
+        } else if (m.country) {
+          geoCountry = m.country;
+        } else if (customer?.address?.country) {
+          geoCountry = customer.address.country;
+        }
+        
+        console.log('🌍 GEO debug:');
+        console.log('  - geo_country:', m.geo_country);
+        console.log('  - country:', m.country);
+        console.log('  - customer.address.country:', customer?.address?.country);
+        console.log('  - Final geoCountry:', geoCountry);
+        
         const rowData = {
           'Purchase ID': purchaseId,
           'Total Amount': (group.totalAmount / 100).toFixed(2),
@@ -153,7 +169,7 @@ app.get('/auto-sync', async (req, res) => {
           'Created UTC+1': utcPlus1,
           'Customer ID': customer?.id || 'N/A',
           'Customer Email': customer?.email || firstPayment.receipt_email || 'N/A',
-          'GEO': m.country || 'N/A',
+          'GEO': geoCountry,
           'UTM Source': m.utm_source || '',
           'UTM Medium': m.utm_medium || '',
           'UTM Campaign': m.utm_campaign || '',
@@ -891,6 +907,22 @@ app.listen(ENV.PORT, () => {
                 console.log('  - UTC time:', utcTime.toISOString());
                 console.log('  - UTC+1 time:', utcPlus1);
                 
+                // GEO данные из IP (если есть)
+                let geoCountry = 'N/A';
+                if (m.geo_country) {
+                  geoCountry = m.geo_country;
+                } else if (m.country) {
+                  geoCountry = m.country;
+                } else if (customer?.address?.country) {
+                  geoCountry = customer.address.country;
+                }
+                
+                console.log('🌍 GEO debug:');
+                console.log('  - geo_country:', m.geo_country);
+                console.log('  - country:', m.country);
+                console.log('  - customer.address.country:', customer?.address?.country);
+                console.log('  - Final geoCountry:', geoCountry);
+                
                 const rowData = {
                   'Purchase ID': purchaseId,
                   'Total Amount': (group.totalAmount / 100).toFixed(2),
@@ -900,7 +932,7 @@ app.listen(ENV.PORT, () => {
                   'Created UTC+1': utcPlus1,
                   'Customer ID': customer?.id || 'N/A',
                   'Customer Email': customer?.email || firstPayment.receipt_email || 'N/A',
-                  'GEO': m.country || 'N/A',
+                  'GEO': geoCountry,
                   'UTM Source': m.utm_source || '',
                   'UTM Medium': m.utm_medium || '',
                   'UTM Campaign': m.utm_campaign || '',
