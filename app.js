@@ -592,10 +592,16 @@ app.post('/api/sync-payments', async (req, res) => {
         
         console.log(`🆕 NEW purchase: ${purchaseId} - ADDING`);
 
-        // Format GEO data - ИСПРАВЛЕНО: Country, City формат
+        // ИСПРАВЛЕНО: GEO data - Country, City формат
         let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
         let geoCity = m.geo_city || m.city || '';
         const country = geoCity ? `${geoCountry}, ${geoCity}` : geoCountry;
+        
+        // ПРОВЕРЯЕМ GEO ФОРМАТ
+        console.log('🌍 DEBUG: GEO data:');
+        console.log('  - geoCountry:', geoCountry);
+        console.log('  - geoCity:', geoCity);
+        console.log('  - Final country:', country);
 
         const purchaseData = {
           created_at: new Date(firstPayment.created * 1000).toISOString(),
@@ -677,6 +683,14 @@ app.post('/api/sync-payments', async (req, res) => {
               'Adset Name': purchaseData.adset_name,
               'Payment Count': purchaseData.payment_count
             };
+            
+            // ПРОВЕРЯЕМ ЧТО GEO И ВРЕМЯ ПРАВИЛЬНЫЕ
+            console.log('🔍 DEBUG: Row data for Google Sheets:');
+            console.log('  - Purchase ID:', rowData['Purchase ID']);
+            console.log('  - Created UTC:', rowData['Created UTC']);
+            console.log('  - Created Local (UTC+1):', rowData['Created Local (UTC+1)']);
+            console.log('  - GEO:', rowData['GEO']);
+            console.log('  - Customer Email:', rowData['Customer Email']);
             
             console.log('📊 Row data for Google Sheets:', rowData);
             await sheet.addRow(rowData);
