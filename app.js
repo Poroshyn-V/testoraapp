@@ -336,8 +336,9 @@ app.post('/api/sync-payments', async (req, res) => {
             console.log('📊 First existing row sample:', rows[0] ? rows[0]._rawData : 'No rows');
             
             // Создаем данные в том же формате что уже есть в таблице
-            // Добавляем время UTC+1
-            const utcPlus1 = new Date(new Date(purchaseData.created_at).getTime() + 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+            // ПРАВИЛЬНОЕ UTC+1 ВРЕМЯ
+            const utcTime = new Date(purchaseData.created_at);
+            const utcPlus1 = new Date(utcTime.getTime() + 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
             
             const rowData = {
               'Purchase ID': purchaseData.purchase_id,
@@ -672,7 +673,14 @@ app.listen(ENV.PORT, () => {
                 
                 // Добавляем в Google Sheets
                 const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
-                const utcPlus1 = new Date(new Date(firstPayment.created * 1000).toISOString()).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+                
+                // ПРАВИЛЬНОЕ UTC+1 ВРЕМЯ
+                const utcTime = new Date(firstPayment.created * 1000);
+                const utcPlus1 = new Date(utcTime.getTime() + 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+                
+                console.log('🕐 Time debug:');
+                console.log('  - UTC time:', utcTime.toISOString());
+                console.log('  - UTC+1 time:', utcPlus1);
                 
                 const rowData = {
                   'Purchase ID': purchaseId,
