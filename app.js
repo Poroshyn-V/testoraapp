@@ -206,9 +206,14 @@ app.post('/api/sync-payments', async (req, res) => {
       // Показываем первые 3 строки для отладки
       if (rows.length > 0) {
         console.log('📄 First 3 rows in Google Sheets:');
+        console.log('📄 Available columns:', sheet.headerValues);
         for (let i = 0; i < Math.min(3, rows.length); i++) {
           const row = rows[i];
-          console.log(`Row ${i + 1}: customer_id="${row.get('customer_id')}" date="${row.get('created_at')}" email="${row.get('email')}"`);
+          console.log(`Row ${i + 1}:`);
+          console.log(`  - customer_id: "${row.get('customer_id')}"`);
+          console.log(`  - created_at: "${row.get('created_at')}"`);
+          console.log(`  - email: "${row.get('email')}"`);
+          console.log(`  - All data:`, row._rawData);
         }
       }
       
