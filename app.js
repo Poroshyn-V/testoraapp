@@ -563,6 +563,24 @@ app.post('/api/sync-payments', async (req, res) => {
 
     // ПРОСТАЯ РАБОЧАЯ ЛОГИКА С RENDER: проверяем каждую покупку индивидуально
     console.log(`✅ Processing ${groupedPurchases.size} Stripe purchases against ${rows.length} existing rows in Google Sheets`);
+    
+    // ДЕТАЛЬНАЯ ОТЛАДКА: показываем первые несколько строк Google Sheets
+    console.log('🔍 DEBUG: Google Sheets data:');
+    console.log('📊 Total rows:', rows.length);
+    console.log('📊 Available columns:', sheet.headerValues);
+    
+    if (rows.length > 0) {
+      console.log('📊 First 3 rows from Google Sheets:');
+      for (let i = 0; i < Math.min(3, rows.length); i++) {
+        const row = rows[i];
+        console.log(`Row ${i + 1}:`);
+        console.log(`  - Purchase ID: "${row.get('Purchase ID')}"`);
+        console.log(`  - purchase_id: "${row.get('purchase_id')}"`);
+        console.log(`  - Customer ID: "${row.get('Customer ID')}"`);
+        console.log(`  - Email: "${row.get('Customer Email')}"`);
+        console.log(`  - All data:`, row._rawData);
+      }
+    }
 
     // ПРОСТАЯ ЛОГИКА: проверяем каждую покупку из Stripe (только если Google Sheets пустой)
     for (const [dateKey, group] of groupedPurchases.entries()) {
@@ -573,6 +591,10 @@ app.post('/api/sync-payments', async (req, res) => {
 
         // Create unique purchase ID
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
+
+        console.log(`🔍 Checking purchase: ${purchaseId}`);
+        console.log(`🔍 Customer ID: ${customer?.id}`);
+        console.log(`🔍 Date key: ${dateKey}`);
 
         // ИСПРАВЛЕНО: ПРОВЕРЯЕМ ДУБЛИКАТЫ ПО ПРАВИЛЬНОМУ ПОЛЮ
         const exists = rows.some((row) => {
