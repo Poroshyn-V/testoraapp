@@ -34,6 +34,15 @@ app.get('/', (_req, res) => res.json({
   endpoints: ['/api/test', '/api/sync-payments', '/health', '/webhook/stripe']
 }));
 
+// Исправляем ошибки favicon
+app.get('/favicon.ico', (req, res) => {
+  res.status(204).end();
+});
+
+app.get('/favicon.png', (req, res) => {
+  res.status(204).end();
+});
+
 // Health check
 app.get('/health', (_req, res) => res.status(200).send('ok'));
 
