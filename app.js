@@ -237,6 +237,10 @@ app.post('/api/sync-payments', async (req, res) => {
       }
     }
     console.log(`📋 Total existing purchases in Google Sheets: ${existingPurchases.size}`);
+    
+    // Показываем первые 5 существующих ключей
+    const firstFive = Array.from(existingPurchases).slice(0, 5);
+    console.log(`📋 First 5 existing keys: ${firstFive.join(', ')}`);
 
     // ПРОСТАЯ ЛОГИКА: проверяем каждую покупку из Stripe
     for (const [dateKey, group] of groupedPurchases.entries()) {
