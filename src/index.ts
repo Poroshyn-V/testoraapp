@@ -217,5 +217,5 @@ app.listen(ENV.PORT, () => {
     } catch (error: any) {
       logger.error({ error }, 'Scheduled sync failed');
     }
-  }, 5 * 60 * 1000); // 5 минут
+  }, 2 * 60 * 1000); // 2 минуты (для тестирования)
 });
