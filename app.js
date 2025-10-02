@@ -105,8 +105,16 @@ app.get('/auto-sync', async (req, res) => {
         const firstPayment = group.firstPayment;
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
         
-        // ПРОВЕРЯЕМ ДУБЛИКАТЫ ПО PURCHASE_ID (как было раньше)
-        const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
+        // ПРОВЕРЯЕМ ДУБЛИКАТЫ - СТРОГАЯ ПРОВЕРКА
+        const exists = rows.some((row) => {
+          const rowPurchaseId = row.get('purchase_id') || row.get('Purchase ID') || '';
+          const match = rowPurchaseId === purchaseId;
+          if (match) {
+            console.log(`🔍 FOUND EXISTING: ${purchaseId} in Google Sheets`);
+          }
+          return match;
+        });
+        
         if (exists) {
           console.log(`⏭️ Purchase already exists: ${purchaseId} - SKIPPING`);
           continue;
@@ -440,8 +448,16 @@ app.post('/api/sync-payments', async (req, res) => {
         // Create unique purchase ID
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
-        // ПРОВЕРЯЕМ ДУБЛИКАТЫ ПО PURCHASE_ID (как было раньше)
-        const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
+        // ПРОВЕРЯЕМ ДУБЛИКАТЫ - СТРОГАЯ ПРОВЕРКА
+        const exists = rows.some((row) => {
+          const rowPurchaseId = row.get('purchase_id') || row.get('Purchase ID') || '';
+          const match = rowPurchaseId === purchaseId;
+          if (match) {
+            console.log(`🔍 FOUND EXISTING: ${purchaseId} in Google Sheets`);
+          }
+          return match;
+        });
+        
         if (exists) {
           console.log(`⏭️ Purchase already exists: ${purchaseId} - SKIP`);
           continue; // Пропускаем существующие
@@ -836,8 +852,16 @@ app.listen(ENV.PORT, () => {
                 const firstPayment = group.firstPayment;
                 const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
                 
-                // ПРОВЕРЯЕМ ДУБЛИКАТЫ ПО PURCHASE_ID (как было раньше)
-                const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
+                // ПРОВЕРЯЕМ ДУБЛИКАТЫ - СТРОГАЯ ПРОВЕРКА
+                const exists = rows.some((row) => {
+                  const rowPurchaseId = row.get('purchase_id') || row.get('Purchase ID') || '';
+                  const match = rowPurchaseId === purchaseId;
+                  if (match) {
+                    console.log(`🔍 FOUND EXISTING: ${purchaseId} in Google Sheets`);
+                  }
+                  return match;
+                });
+                
                 if (exists) {
                   console.log(`⏭️ Purchase already exists: ${purchaseId} - SKIPPING`);
                   continue;
