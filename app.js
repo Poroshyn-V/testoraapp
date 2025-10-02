@@ -519,22 +519,22 @@ app.listen(ENV.PORT, () => {
   }, 30000);
   
   // Then every 2 minutes
-        // АВТОСИНХРОНИЗАЦИЯ ОТКЛЮЧЕНА - ТОЛЬКО РУЧНОЕ УПРАВЛЕНИЕ КАК В RENDER
-        console.log('🚫 Auto-sync DISABLED - manual sync only (like Render)');
+        // АВТОСИНХРОНИЗАЦИЯ ВКЛЮЧЕНА - УМНАЯ ПРОВЕРКА ДУБЛИРОВАНИЙ
+        console.log('🔄 Auto-sync ENABLED - smart duplicate checking');
         
-        // setInterval(async () => {
-        //   try {
-        //     console.log('🔄 Running scheduled sync...');
-        //     const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
-        //       method: 'POST',
-        //       headers: { 'Content-Type': 'application/json' }
-        //     });
-        //     const result = await response.json();
-        //     console.log('Scheduled sync completed:', result);
-        //   } catch (error) {
-        //     console.error('Scheduled sync failed:', error.message);
-        //   }
-        // }, 2 * 60 * 1000); // 2 minutes
+        setInterval(async () => {
+          try {
+            console.log('🔄 Running scheduled sync...');
+            const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' }
+            });
+            const result = await response.json();
+            console.log('Scheduled sync completed:', result);
+          } catch (error) {
+            console.error('Scheduled sync failed:', error.message);
+          }
+        }, 5 * 60 * 1000); // 5 minutes
 });
 
 export default app;
