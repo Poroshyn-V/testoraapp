@@ -105,17 +105,10 @@ app.get('/auto-sync', async (req, res) => {
         const firstPayment = group.firstPayment;
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
         
-        // ПРОВЕРЯЕМ ДУБЛИКАТЫ ПО EMAIL + ДАТА (как было раньше)
-        const customerEmail = customer?.email || firstPayment.receipt_email || 'N/A';
-        const purchaseDate = dateKey.split('_')[1];
-        const exists = rows.some((row) => {
-          const rowEmail = row.get('Customer Email') || row.get('email') || '';
-          const rowDate = row.get('Created UTC') ? new Date(row.get('Created UTC')).toISOString().split('T')[0] : '';
-          return rowEmail === customerEmail && rowDate === purchaseDate;
-        });
-        
+        // ПРОВЕРЯЕМ ДУБЛИКАТЫ ПО PURCHASE_ID (как было раньше)
+        const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
         if (exists) {
-          console.log(`⏭️ Purchase already exists: ${customerEmail} on ${purchaseDate} - SKIPPING`);
+          console.log(`⏭️ Purchase already exists: ${purchaseId} - SKIPPING`);
           continue;
         }
         
@@ -447,17 +440,10 @@ app.post('/api/sync-payments', async (req, res) => {
         // Create unique purchase ID
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
-        // ПРОВЕРЯЕМ ДУБЛИКАТЫ ПО EMAIL + ДАТА (как было раньше)
-        const customerEmail = customer?.email || firstPayment.receipt_email || 'N/A';
-        const purchaseDate = new Date(firstPayment.created * 1000).toISOString().split('T')[0];
-        const exists = rows.some((row) => {
-          const rowEmail = row.get('Customer Email') || row.get('email') || '';
-          const rowDate = row.get('Created UTC') ? new Date(row.get('Created UTC')).toISOString().split('T')[0] : '';
-          return rowEmail === customerEmail && rowDate === purchaseDate;
-        });
-        
+        // ПРОВЕРЯЕМ ДУБЛИКАТЫ ПО PURCHASE_ID (как было раньше)
+        const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
         if (exists) {
-          console.log(`⏭️ Purchase already exists: ${customerEmail} on ${purchaseDate} - SKIP`);
+          console.log(`⏭️ Purchase already exists: ${purchaseId} - SKIP`);
           continue; // Пропускаем существующие
         }
         
@@ -850,17 +836,10 @@ app.listen(ENV.PORT, () => {
                 const firstPayment = group.firstPayment;
                 const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
                 
-                // ПРОВЕРЯЕМ ДУБЛИКАТЫ ПО EMAIL + ДАТА (как было раньше)
-                const customerEmail = customer?.email || firstPayment.receipt_email || 'N/A';
-                const purchaseDate = dateKey.split('_')[1];
-                const exists = rows.some((row) => {
-                  const rowEmail = row.get('Customer Email') || row.get('email') || '';
-                  const rowDate = row.get('Created UTC') ? new Date(row.get('Created UTC')).toISOString().split('T')[0] : '';
-                  return rowEmail === customerEmail && rowDate === purchaseDate;
-                });
-                
+                // ПРОВЕРЯЕМ ДУБЛИКАТЫ ПО PURCHASE_ID (как было раньше)
+                const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
                 if (exists) {
-                  console.log(`⏭️ Purchase already exists: ${customerEmail} on ${purchaseDate} - SKIPPING`);
+                  console.log(`⏭️ Purchase already exists: ${purchaseId} - SKIPPING`);
                   continue;
                 }
                 
