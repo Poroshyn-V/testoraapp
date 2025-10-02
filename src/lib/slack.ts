@@ -2,12 +2,21 @@ import { ENV } from './env.js';
 import Stripe from 'stripe';
 
 export async function sendSlack(text: string) {
+  console.log('🔍 Slack debug - checking configuration...');
+  console.log('SLACK_BOT_TOKEN exists:', !!ENV.SLACK_BOT_TOKEN);
+  console.log('SLACK_CHANNEL_ID exists:', !!ENV.SLACK_CHANNEL_ID);
+  
   if (!ENV.SLACK_BOT_TOKEN || !ENV.SLACK_CHANNEL_ID) {
-    console.log('Slack not configured, skipping notification');
+    console.log('❌ Slack not configured, skipping notification');
+    console.log('Missing:', {
+      token: !ENV.SLACK_BOT_TOKEN,
+      channel: !ENV.SLACK_CHANNEL_ID
+    });
     return;
   }
 
   try {
+    console.log('📤 Sending Slack notification...');
     const response = await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
       headers: {
@@ -23,14 +32,15 @@ export async function sendSlack(text: string) {
     });
 
     const result = await response.json();
+    console.log('📥 Slack API response:', result);
     
     if (result.ok) {
-      console.log('Slack notification sent successfully');
+      console.log('✅ Slack notification sent successfully');
     } else {
-      console.error('Slack API error:', result.error);
+      console.error('❌ Slack API error:', result.error);
     }
   } catch (error) {
-    console.error('Error sending Slack notification:', error);
+    console.error('❌ Error sending Slack notification:', error);
   }
 }
 
