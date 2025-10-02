@@ -144,13 +144,20 @@ app.get('/auto-sync', async (req, res) => {
         console.log('  - UTC time:', utcTime.toISOString());
         console.log('  - UTC+1 time:', utcPlus1);
         
-        // GEO данные через API (как было раньше)
+        // GEO данные через API (как было раньше) - формат "US, Los Angeles"
         let geoCountry = 'N/A';
         try {
           // Получаем IP из Stripe payment
           const paymentMethod = await stripe.paymentMethods.retrieve(firstPayment.payment_method);
           if (paymentMethod.card && paymentMethod.card.country) {
-            geoCountry = paymentMethod.card.country;
+            const country = paymentMethod.card.country;
+            // Добавляем город если есть в метаданных
+            const city = m.city || m.geo_city || '';
+            if (city) {
+              geoCountry = `${country}, ${city}`;
+            } else {
+              geoCountry = country;
+            }
           }
         } catch (error) {
           console.log('🌍 GEO API error:', error.message);
@@ -275,14 +282,22 @@ app.get('/auto-sync', async (req, res) => {
               console.log(`🕐 Updated UTC+1: ${utcPlus1}`);
             }
             
-            // Обновляем GEO через API (как было раньше)
+            // Обновляем GEO через API (как было раньше) - формат "US, Los Angeles"
             if (currentGeo === 'N/A' || currentGeo === '') {
               let geoCountry = 'N/A';
               try {
                 // Получаем IP из Stripe payment
                 const paymentMethod = await stripe.paymentMethods.retrieve(firstPayment.payment_method);
                 if (paymentMethod.card && paymentMethod.card.country) {
-                  geoCountry = paymentMethod.card.country;
+                  const country = paymentMethod.card.country;
+                  // Добавляем город если есть в метаданных
+                  const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
+                  const city = m.city || m.geo_city || '';
+                  if (city) {
+                    geoCountry = `${country}, ${city}`;
+                  } else {
+                    geoCountry = country;
+                  }
                 }
               } catch (error) {
                 console.log('🌍 GEO API error:', error.message);
@@ -974,13 +989,20 @@ app.listen(ENV.PORT, () => {
                 console.log('  - UTC time:', utcTime.toISOString());
                 console.log('  - UTC+1 time:', utcPlus1);
                 
-                // GEO данные через API (как было раньше)
+                // GEO данные через API (как было раньше) - формат "US, Los Angeles"
                 let geoCountry = 'N/A';
                 try {
                   // Получаем IP из Stripe payment
                   const paymentMethod = await stripe.paymentMethods.retrieve(firstPayment.payment_method);
                   if (paymentMethod.card && paymentMethod.card.country) {
-                    geoCountry = paymentMethod.card.country;
+                    const country = paymentMethod.card.country;
+                    // Добавляем город если есть в метаданных
+                    const city = m.city || m.geo_city || '';
+                    if (city) {
+                      geoCountry = `${country}, ${city}`;
+                    } else {
+                      geoCountry = country;
+                    }
                   }
                 } catch (error) {
                   console.log('🌍 GEO API error:', error.message);
