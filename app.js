@@ -482,9 +482,8 @@ function formatTelegram(purchaseData, customerMetadata = {}) {
     `---------------------------`,
     `🌪️ ${paymentId}`,
     `📍 ${country}`,
-    `🧍 ${gender}`,
-    `🔗 ${creative_link}`,
-    utm_source,
+    `🔗 quiz.testora.pro/iq1`,
+    `meta`,
     platform_placement,
     ad_name,
     adset_name,
@@ -567,9 +566,8 @@ function formatSlack(purchaseData, customerMetadata = {}) {
 ---------------------------
 🌪️ ${paymentId}
 📍 ${country}
-🧍 ${gender}
-🔗 ${creative_link}
-${utm_source}
+🔗 quiz.testora.pro/iq1
+meta
 ${platform_placement}
 ${ad_name}
 ${adset_name}
