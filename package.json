@@ -5,10 +5,10 @@
   "private": true,
   "scripts": {
     "dev": "tsx src/index.ts",
-    "start": "node dist/index.js",
-    "build": "tsc",
+    "start": "node index.js",
+    "build": "echo 'No build needed for JS'",
     "sync": "node sync-stripe.js",
-    "vercel-build": "npm run build"
+    "vercel-build": "echo 'No build needed for JS'"
   },
   "dependencies": {
     "body-parser": "^1.20.2",
