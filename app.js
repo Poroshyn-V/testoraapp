@@ -331,17 +331,32 @@ app.post('/api/sync-payments', async (req, res) => {
               created_at: purchaseData.created_at
             });
             
-            // ПРОСТОЕ ДОБАВЛЕНИЕ: используем addRow с минимальными данными
-            const simpleData = {
-              purchase_id: purchaseData.purchase_id,
-              email: purchaseData.email,
-              amount: purchaseData.amount,
-              created_at: purchaseData.created_at,
-              customer_id: purchaseData.customer_id
+            // ИСПОЛЬЗУЕМ СУЩЕСТВУЮЩИЙ ФОРМАТ: берем данные из первой строки Google Sheets
+            console.log('📊 Existing sheet headers:', sheet.headerValues);
+            console.log('📊 First existing row sample:', rows[0] ? rows[0]._rawData : 'No rows');
+            
+            // Создаем данные в том же формате что уже есть в таблице
+            const rowData = {
+              'Purchase ID': purchaseData.purchase_id,
+              'Total Amount': purchaseData.amount,
+              'Currency': purchaseData.currency,
+              'Status': purchaseData.payment_status,
+              'Created UTC': purchaseData.created_at,
+              'Customer ID': purchaseData.customer_id,
+              'Customer Email': purchaseData.email,
+              'GEO': purchaseData.country,
+              'UTM Source': purchaseData.utm_source,
+              'UTM Medium': purchaseData.utm_medium,
+              'UTM Campaign': purchaseData.utm_campaign,
+              'UTM Content': purchaseData.utm_content,
+              'UTM Term': purchaseData.utm_term,
+              'Ad Name': purchaseData.ad_name,
+              'Adset Name': purchaseData.adset_name,
+              'Payment Count': purchaseData.payment_count
             };
             
-            console.log('📊 Simple data for Google Sheets:', simpleData);
-            await sheet.addRow(simpleData);
+            console.log('📊 Row data for Google Sheets:', rowData);
+            await sheet.addRow(rowData);
             console.log('✅ Payment data saved to Google Sheets:', purchaseId);
             savedToSheets = true;
           } catch (error) {
