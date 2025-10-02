@@ -263,8 +263,13 @@ app.post('/api/sync-payments', async (req, res) => {
           payment_count: group.payments.length
         };
 
-        await sheet.addRow(purchaseData);
-        console.log('✅ Payment data saved to Google Sheets:', purchaseId);
+        // Добавляем в Google Sheets только если подключение работает
+        if (sheet) {
+          await sheet.addRow(purchaseData);
+          console.log('✅ Payment data saved to Google Sheets:', purchaseId);
+        } else {
+          console.log('⚠️ Google Sheets not available, skipping save for:', purchaseId);
+        }
 
         // Send notifications
         try {
