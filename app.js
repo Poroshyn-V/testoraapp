@@ -105,10 +105,10 @@ app.get('/auto-sync', async (req, res) => {
         const firstPayment = group.firstPayment;
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
         
-        // Проверяем дубликаты
+        // ПРОВЕРЯЕМ ДУБЛИКАТЫ - НЕ ДОБАВЛЯЕМ СУЩЕСТВУЮЩИЕ ПОКУПКИ
         const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
         if (exists) {
-          console.log(`⏭️ Purchase already exists: ${purchaseId}`);
+          console.log(`⏭️ Purchase already exists: ${purchaseId} - SKIPPING`);
           continue;
         }
         
@@ -205,12 +205,13 @@ app.get('/auto-sync', async (req, res) => {
       }
     }
     
-    console.log(`✅ Auto-sync completed: ${newPurchases} new purchases processed`);
+    console.log(`✅ Auto-sync completed: ${newPurchases} NEW purchases processed (NO DUPLICATES)`);
     res.json({ 
       success: true, 
-      message: `Auto-sync completed! Processed ${newPurchases} new purchase(s)`,
+      message: `Auto-sync completed! Processed ${newPurchases} NEW purchase(s) - NO DUPLICATES`,
       new_purchases: newPurchases,
-      total_groups: groupedPurchases.size
+      total_groups: groupedPurchases.size,
+      note: "Only NEW purchases added, existing ones skipped"
     });
     
   } catch (error) {
@@ -844,10 +845,10 @@ app.listen(ENV.PORT, () => {
                 const firstPayment = group.firstPayment;
                 const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
                 
-                // Проверяем дубликаты
+                // ПРОВЕРЯЕМ ДУБЛИКАТЫ - НЕ ДОБАВЛЯЕМ СУЩЕСТВУЮЩИЕ ПОКУПКИ
                 const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
                 if (exists) {
-                  console.log(`⏭️ Purchase already exists: ${purchaseId}`);
+                  console.log(`⏭️ Purchase already exists: ${purchaseId} - SKIPPING`);
                   continue;
                 }
                 
