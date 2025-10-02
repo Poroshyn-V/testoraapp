@@ -221,9 +221,9 @@ app.post('/api/sync-payments', async (req, res) => {
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
         // Check if purchase already exists
-        const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
+        const purchaseExists = rows.some((row) => row.get('purchase_id') === purchaseId);
 
-        if (exists) {
+        if (purchaseExists) {
           console.log(`⏭️ Purchase already exists: ${purchaseId}`);
           continue;
         }
@@ -264,9 +264,9 @@ app.post('/api/sync-payments', async (req, res) => {
         };
 
         // Проверяем, существует ли уже эта покупка в Google Sheets
-        const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
+        const purchaseAlreadyExists = rows.some((row) => row.get('purchase_id') === purchaseId);
 
-        if (exists) {
+        if (purchaseAlreadyExists) {
           console.log(`⏭️ Purchase already exists: ${purchaseId}`);
           continue; // Пропускаем существующие покупки
         }
