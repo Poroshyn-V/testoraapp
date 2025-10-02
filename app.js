@@ -940,213 +940,34 @@ app.listen(ENV.PORT, () => {
         // ПОСТОЯННАЯ АВТОСИНХРОНИЗАЦИЯ - РАБОТАЕТ НА VERCEL
         console.log('🔄 АвтоСинхронизация ВКЛЮЧЕНА - постоянная работа каждые 5 минут');
         
-        // Функция синхронизации - ПОЛНАЯ АВТОМАТИЗАЦИЯ
+        // Функция синхронизации - ИСПРАВЛЕННАЯ ЛОГИКА
         async function runSync() {
           try {
             console.log('🤖 АВТОМАТИЧЕСКАЯ РАБОТА БОТА:');
             console.log('   🔍 Проверяю Stripe на новые покупки...');
             console.log('⏰ Время проверки:', new Date().toISOString());
             
-            // Получаем данные из Stripe
-            const sevenDaysAgo = Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000);
-            const payments = await stripe.paymentIntents.list({
-              created: { gte: sevenDaysAgo },
-              limit: 100
+            // ИСПРАВЛЕНО: Используем правильный endpoint с проверкой savedToSheets
+            const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' }
             });
             
-            console.log(`📊 Found ${payments.data.length} payments in Stripe`);
-            
-            // Группируем покупки
-            const groupedPurchases = new Map();
-            for (const payment of payments.data) {
-              if (payment.status === 'succeeded' && payment.customer) {
-                const customer = await stripe.customers.retrieve(payment.customer);
-                const date = new Date(payment.created * 1000).toISOString().split('T')[0];
-                const key = `${customer.id}_${date}`;
-                
-                if (!groupedPurchases.has(key)) {
-                  groupedPurchases.set(key, {
-                    customer,
-                    payments: [],
-                    totalAmount: 0,
-                    firstPayment: payment
-                  });
-                }
-                
-                const group = groupedPurchases.get(key);
-                group.payments.push(payment);
-                group.totalAmount += payment.amount;
-              }
-            }
-            
-            console.log(`📊 Grouped into ${groupedPurchases.size} purchases`);
-            
-            // Проверяем Google Sheets
-            let sheet, rows;
-            try {
-              const doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
-              await doc.loadInfo();
-              sheet = doc.sheetsByIndex[0];
-              rows = await sheet.getRows();
-              console.log(`📋 Google Sheets: ${rows.length} existing rows`);
-            } catch (error) {
-              console.error('❌ Google Sheets error:', error.message);
+            if (!response.ok) {
+              console.error('❌ Sync request failed:', response.status, response.statusText);
               return;
             }
             
-            // Обрабатываем только новые покупки
-            let newPurchases = 0;
-            for (const [dateKey, group] of groupedPurchases.entries()) {
-              try {
-                const customer = group.customer;
-                const firstPayment = group.firstPayment;
-                const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
-                
-                // ПРОВЕРЯЕМ ДУБЛИКАТЫ - СТРОГАЯ ПРОВЕРКА
-                const exists = rows.some((row) => {
-                  const rowPurchaseId = row.get('Purchase ID') || row.get('purchase_id') || '';
-                  const match = rowPurchaseId === purchaseId;
-                  if (match) {
-                    console.log(`🔍 FOUND EXISTING: ${purchaseId} in Google Sheets`);
-                  }
-                  return match;
-                });
-                
-                if (exists) {
-                  console.log(`⏭️ Purchase already exists: ${purchaseId} - SKIPPING`);
-                  continue;
-                }
-                
-                console.log(`🤖 НАШЕЛ НОВУЮ ПОКУПКУ: ${purchaseId}`);
-                console.log('   📋 Добавляю в Google Sheets...');
-                console.log('   📱 Буду отправлять уведомления...');
-                
-                // Добавляем в Google Sheets
-                const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
-                
-                // ПРАВИЛЬНОЕ UTC+1 ВРЕМЯ
-                const utcTime = new Date(firstPayment.created * 1000);
-                const utcPlus1 = new Date(utcTime.getTime() + 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
-                
-                console.log('🕐 Time debug:');
-                console.log('  - UTC time:', utcTime.toISOString());
-                console.log('  - UTC+1 time:', utcPlus1);
-                
-                // GEO данные через API (как было раньше) - формат "US, Los Angeles"
-                let geoCountry = 'N/A';
-                try {
-                  // Получаем IP из Stripe payment
-                  const paymentMethod = await stripe.paymentMethods.retrieve(firstPayment.payment_method);
-                  if (paymentMethod.card && paymentMethod.card.country) {
-                    const country = paymentMethod.card.country;
-                    // Добавляем город если есть в метаданных
-                    const city = m.city || m.geo_city || '';
-                    if (city) {
-                      geoCountry = `${country}, ${city}`;
-                    } else {
-                      geoCountry = country;
-                    }
-                  }
-                } catch (error) {
-                  console.log('🌍 GEO API error:', error.message);
-                  // Fallback к метаданным если API не работает
-                  if (m.geo_country) {
-                    geoCountry = m.geo_country;
-                  } else if (m.country) {
-                    geoCountry = m.country;
-                  }
-                }
-                
-                console.log('🌍 GEO debug:');
-                console.log('  - Final geoCountry:', geoCountry);
-                
-                const rowData = {
-                  'Purchase ID': purchaseId,
-                  'Total Amount': (group.totalAmount / 100).toFixed(2),
-                  'Currency': (firstPayment.currency || 'usd').toUpperCase(),
-                  'Status': 'succeeded',
-                  'Created UTC': new Date(firstPayment.created * 1000).toISOString(),
-                  'Created Local (UTC+1)': utcPlus1,
-                  'Customer ID': customer?.id || 'N/A',
-                  'Customer Email': customer?.email || firstPayment.receipt_email || 'N/A',
-                  'GEO': geoCountry,
-                  'UTM Source': m.utm_source || '',
-                  'UTM Medium': m.utm_medium || '',
-                  'UTM Campaign': m.utm_campaign || '',
-                  'UTM Content': m.utm_content || '',
-                  'UTM Term': m.utm_term || '',
-                  'Ad Name': m.ad_name || '',
-                  'Adset Name': m.adset_name || '',
-                  'Payment Count': group.payments.length
-                };
-                
-                await sheet.addRow(rowData);
-                console.log('✅ Payment data saved to Google Sheets:', purchaseId);
-                
-                // Отправляем уведомления
-                try {
-                  const telegramText = formatTelegram({
-                    purchase_id: purchaseId,
-                    amount: (group.totalAmount / 100).toFixed(2),
-                    currency: (firstPayment.currency || 'usd').toUpperCase(),
-                    email: customer?.email || firstPayment.receipt_email || 'N/A',
-                    country: m.country || 'N/A',
-                    utm_source: m.utm_source || '',
-                    utm_medium: m.utm_medium || '',
-                    utm_campaign: m.utm_campaign || '',
-                    utm_content: m.utm_content || '',
-                    utm_term: m.utm_term || '',
-                    platform_placement: m.platform_placement || '',
-                    ad_name: m.ad_name || '',
-                    adset_name: m.adset_name || '',
-                    campaign_name: m.campaign_name || m.utm_campaign || '',
-                    payment_count: group.payments.length
-                  }, customer?.metadata || {});
-                  
-                  await sendTelegram(telegramText);
-                  console.log('📱 Telegram notification sent for NEW purchase:', purchaseId);
-                } catch (error) {
-                  console.error('Error sending Telegram:', error.message);
-                }
-                
-                try {
-                  const slackText = formatSlack({
-                    purchase_id: purchaseId,
-                    amount: (group.totalAmount / 100).toFixed(2),
-                    currency: (firstPayment.currency || 'usd').toUpperCase(),
-                    email: customer?.email || firstPayment.receipt_email || 'N/A',
-                    country: m.country || 'N/A',
-                    utm_source: m.utm_source || '',
-                    utm_medium: m.utm_medium || '',
-                    utm_campaign: m.utm_campaign || '',
-                    utm_content: m.utm_content || '',
-                    utm_term: m.utm_term || '',
-                    platform_placement: m.platform_placement || '',
-                    ad_name: m.ad_name || '',
-                    adset_name: m.adset_name || '',
-                    campaign_name: m.campaign_name || m.utm_campaign || '',
-                    payment_count: group.payments.length
-                  }, customer?.metadata || {});
-                  
-                  await sendSlack(slackText);
-                  console.log('💬 Slack notification sent for NEW purchase:', purchaseId);
-                } catch (error) {
-                  console.error('Error sending Slack:', error.message);
-                }
-                
-                newPurchases++;
-              } catch (error) {
-                console.error(`Error processing purchase ${dateKey}:`, error.message);
-              }
-            }
+            const result = await response.json();
+            console.log('✅ Auto-sync completed:', result);
             
             console.log(`🤖 АВТОМАТИЧЕСКАЯ РАБОТА ЗАВЕРШЕНА:`);
-            console.log(`   ✅ Обработано новых покупок: ${newPurchases}`);
-            console.log(`   📊 Всего групп в Stripe: ${groupedPurchases.size}`);
+            console.log(`   ✅ Обработано новых покупок: ${result.processed || 0}`);
+            console.log(`   📊 Всего групп в Stripe: ${result.total_groups || 0}`);
             console.log(`   ⏰ Следующая проверка через 5 минут`);
             
           } catch (error) {
-            console.error('Scheduled sync failed:', error.message);
+            console.error('❌ Auto-sync failed:', error.message);
           }
         }
         
