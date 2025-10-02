@@ -5,7 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "tsx src/index.ts",
-    "start": "node index.js",
+    "start": "node app.js",
     "build": "echo 'No build needed for JS'",
     "sync": "node sync-stripe.js",
     "vercel-build": "echo 'No build needed for JS'"
