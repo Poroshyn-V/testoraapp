@@ -62,7 +62,7 @@ async function loadExistingPurchases() {
       const purchaseId = row.get('Purchase ID') || row.get('purchase_id') || '';
       if (purchaseId) {
         existingPurchases.add(purchaseId);
-        console.log(`📝 Запомнил покупку: ${purchaseId}`);
+        // Убираем детальные логи для каждой покупки
       } else {
         console.log(`⚠️ Пустой Purchase ID в строке:`, row._rawData);
       }
@@ -651,23 +651,8 @@ app.post('/api/sync-payments', async (req, res) => {
     // ПРОСТАЯ РАБОЧАЯ ЛОГИКА С RENDER: проверяем каждую покупку индивидуально
     console.log(`✅ Processing ${groupedPurchases.size} Stripe purchases against ${rows.length} existing rows in Google Sheets`);
     
-    // ДЕТАЛЬНАЯ ОТЛАДКА: показываем первые несколько строк Google Sheets
-    console.log('🔍 DEBUG: Google Sheets data:');
-    console.log('📊 Total rows:', rows.length);
-    console.log('📊 Available columns:', sheet.headerValues);
-    
-    if (rows.length > 0) {
-      console.log('📊 First 3 rows from Google Sheets:');
-      for (let i = 0; i < Math.min(3, rows.length); i++) {
-        const row = rows[i];
-        console.log(`Row ${i + 1}:`);
-        console.log(`  - Purchase ID: "${row.get('Purchase ID')}"`);
-        console.log(`  - purchase_id: "${row.get('purchase_id')}"`);
-        console.log(`  - Customer ID: "${row.get('Customer ID')}"`);
-        console.log(`  - Email: "${row.get('Customer Email')}"`);
-        console.log(`  - All data:`, row._rawData);
-      }
-    }
+    // Упрощенная отладка Google Sheets
+    console.log(`📊 Google Sheets: ${rows.length} строк, колонки: ${sheet.headerValues.length}`);
 
     // ПРОСТАЯ ЛОГИКА: проверяем каждую покупку из Stripe (только если Google Sheets пустой)
     for (const [dateKey, group] of groupedPurchases.entries()) {
@@ -679,10 +664,6 @@ app.post('/api/sync-payments', async (req, res) => {
         // Create unique purchase ID
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
-        console.log(`🔍 Checking purchase: ${purchaseId}`);
-        console.log(`🔍 Customer ID: ${customer?.id}`);
-        console.log(`🔍 Date key: ${dateKey}`);
-
         // ИСПРАВЛЕНО: ПРОВЕРЯЕМ ДУБЛИКАТЫ В ПАМЯТИ И GOOGLE SHEETS
         const existsInMemory = existingPurchases.has(purchaseId);
         const existsInSheets = rows.some((row) => {
@@ -690,27 +671,19 @@ app.post('/api/sync-payments', async (req, res) => {
           return rowPurchaseId === purchaseId;
         });
         
-        console.log(`🔍 Проверка дубликатов для ${purchaseId}:`);
-        console.log(`  - В памяти: ${existsInMemory}`);
-        console.log(`  - В Google Sheets: ${existsInSheets}`);
-        
         if (existsInMemory || existsInSheets) {
-          console.log(`⏭️ Purchase already exists: ${purchaseId} - SKIP`);
+          console.log(`⏭️ SKIP: ${purchaseId} already exists`);
           continue; // Пропускаем существующие
         }
         
-        console.log(`🆕 NEW purchase: ${purchaseId} - ADDING`);
+        console.log(`🆕 NEW: ${purchaseId} - ADDING`);
 
         // ИСПРАВЛЕНО: GEO data - Country, City формат
         let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
         let geoCity = m.geo_city || m.city || '';
         const country = geoCity ? `${geoCountry}, ${geoCity}` : geoCountry;
         
-        // ПРОВЕРЯЕМ GEO ФОРМАТ
-        console.log('🌍 DEBUG: GEO data:');
-        console.log('  - geoCountry:', geoCountry);
-        console.log('  - geoCity:', geoCity);
-        console.log('  - Final country:', country);
+        // GEO формат: Country, City
 
         const purchaseData = {
           created_at: new Date(firstPayment.created * 1000).toISOString(),
@@ -742,30 +715,13 @@ app.post('/api/sync-payments', async (req, res) => {
           payment_count: group.payments.length
         };
 
-        // ПРОСТАЯ ПРОВЕРКА: убеждаемся что все поля заполнены
-        console.log('🔍 Purchase data validation:');
-        console.log('  - purchase_id:', purchaseData.purchase_id);
-        console.log('  - email:', purchaseData.email);
-        console.log('  - amount:', purchaseData.amount);
-        console.log('  - created_at:', purchaseData.created_at);
-        console.log('  - customer_id:', purchaseData.customer_id);
+        // Валидация данных покупки
 
         // Добавляем в Google Sheets только если подключение работает
         let savedToSheets = false;
         if (sheet) {
           try {
-            console.log('🔄 Attempting to save to Google Sheets:', purchaseId);
-            console.log('📊 Purchase data keys:', Object.keys(purchaseData));
-            console.log('📊 Purchase data sample:', {
-              purchase_id: purchaseData.purchase_id,
-              email: purchaseData.email,
-              amount: purchaseData.amount,
-              created_at: purchaseData.created_at
-            });
-            
-            // ИСПОЛЬЗУЕМ СУЩЕСТВУЮЩИЙ ФОРМАТ: берем данные из первой строки Google Sheets
-            console.log('📊 Existing sheet headers:', sheet.headerValues);
-            console.log('📊 First existing row sample:', rows[0] ? rows[0]._rawData : 'No rows');
+            console.log(`💾 Saving to Google Sheets: ${purchaseId}`);
             
             // Создаем данные в том же формате что уже есть в таблице
             // ИСПРАВЛЕНО: ПРАВИЛЬНОЕ UTC+1 ВРЕМЯ
@@ -793,15 +749,7 @@ app.post('/api/sync-payments', async (req, res) => {
               'Payment Count': purchaseData.payment_count
             };
             
-            // ПРОВЕРЯЕМ ЧТО GEO И ВРЕМЯ ПРАВИЛЬНЫЕ
-            console.log('🔍 DEBUG: Row data for Google Sheets:');
-            console.log('  - Purchase ID:', rowData['Purchase ID']);
-            console.log('  - Created UTC:', rowData['Created UTC']);
-            console.log('  - Created Local (UTC+1):', rowData['Created Local (UTC+1)']);
-            console.log('  - GEO:', rowData['GEO']);
-            console.log('  - Customer Email:', rowData['Customer Email']);
-            
-            console.log('📊 Row data for Google Sheets:', rowData);
+            // Сохраняем данные в Google Sheets
             await sheet.addRow(rowData);
             console.log('✅ Payment data saved to Google Sheets:', purchaseId);
             savedToSheets = true;
@@ -843,7 +791,7 @@ app.post('/api/sync-payments', async (req, res) => {
         if (savedToSheets) {
           // Добавляем в память для будущих проверок
           existingPurchases.add(purchaseId);
-          console.log(`📝 Добавил в память: ${purchaseId} (всего в памяти: ${existingPurchases.size})`);
+          console.log(`✅ Added to memory: ${purchaseId}`);
           
           newPurchases++;
           processedPurchases.push({
@@ -852,9 +800,6 @@ app.post('/api/sync-payments', async (req, res) => {
             amount: purchaseData.amount,
             payments_count: purchaseData.payment_count
           });
-          console.log('✅ Purchase added to results:', purchaseId);
-        } else {
-          console.log('⚠️ Purchase NOT added to results - not saved to Google Sheets:', purchaseId);
         }
       } catch (error) {
         console.error(`Error processing purchase ${dateKey}:`, error.message);
