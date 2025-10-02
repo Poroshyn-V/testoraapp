@@ -295,14 +295,15 @@ app.get('/auto-sync', async (req, res) => {
           console.log(`  - Current UTC+1: "${currentUtcPlus1}"`);
           console.log(`  - Current GEO: "${currentGeo}"`);
           
-          // ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ UTC+1 для ВСЕХ покупок
+          // ИСПРАВЛЕНО: ПРАВИЛЬНОЕ UTC+1 ВРЕМЯ для существующих записей
           const utcTime = new Date(firstPayment.created * 1000);
-          const utcPlus1 = new Date(utcTime.getTime() + 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+          const utcPlus1 = new Date(utcTime.getTime() + 60 * 60 * 1000);
+          const utcPlus1Formatted = utcPlus1.toISOString().replace('T', ' ').replace('Z', ' UTC+1');
           
           // ПРАВИЛЬНОЕ НАЗВАНИЕ КОЛОНКИ UTC+1
-          existingRow.set('Created Local (UTC+1)', utcPlus1);
+          existingRow.set('Created Local (UTC+1)', utcPlus1Formatted);
           
-          console.log(`🕐 FORCE Updated UTC+1: ${utcPlus1}`);
+          console.log(`🕐 FORCE Updated UTC+1: ${utcPlus1Formatted}`);
           console.log(`🕐 Available columns:`, Object.keys(existingRow._rawData));
           
           // ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ GEO для ВСЕХ покупок
@@ -316,7 +317,7 @@ app.get('/auto-sync', async (req, res) => {
               const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
               const city = m.city || m.geo_city || '';
               if (city) {
-                geoCountry = `${country}, ${city}`;
+                geoCountry = `${country}, ${city}`; // ИСПРАВЛЕНО: Country, City формат
               } else {
                 geoCountry = country;
               }
@@ -594,10 +595,10 @@ app.post('/api/sync-payments', async (req, res) => {
         
         console.log(`🆕 NEW purchase: ${purchaseId} - ADDING`);
 
-        // Format GEO data
+        // Format GEO data - ИСПРАВЛЕНО: Country, City формат
         let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
-        let geoCity = m.geo_city || '';
-        const country = geoCity ? `${geoCity}, ${geoCountry}` : geoCountry;
+        let geoCity = m.geo_city || m.city || '';
+        const country = geoCity ? `${geoCountry}, ${geoCity}` : geoCountry;
 
         const purchaseData = {
           created_at: new Date(firstPayment.created * 1000).toISOString(),
@@ -655,9 +656,10 @@ app.post('/api/sync-payments', async (req, res) => {
             console.log('📊 First existing row sample:', rows[0] ? rows[0]._rawData : 'No rows');
             
             // Создаем данные в том же формате что уже есть в таблице
-            // ПРАВИЛЬНОЕ UTC+1 ВРЕМЯ
+            // ИСПРАВЛЕНО: ПРАВИЛЬНОЕ UTC+1 ВРЕМЯ
             const utcTime = new Date(purchaseData.created_at);
-            const utcPlus1 = new Date(utcTime.getTime() + 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+            const utcPlus1 = new Date(utcTime.getTime() + 60 * 60 * 1000);
+            const utcPlus1Formatted = utcPlus1.toISOString().replace('T', ' ').replace('Z', ' UTC+1');
             
             const rowData = {
               'Purchase ID': purchaseData.purchase_id,
@@ -665,7 +667,7 @@ app.post('/api/sync-payments', async (req, res) => {
               'Currency': purchaseData.currency,
               'Status': purchaseData.payment_status,
               'Created UTC': purchaseData.created_at,
-              'Created UTC+1': utcPlus1,
+              'Created Local (UTC+1)': utcPlus1Formatted,
               'Customer ID': purchaseData.customer_id,
               'Customer Email': purchaseData.email,
               'GEO': purchaseData.country,
