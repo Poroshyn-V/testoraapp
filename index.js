@@ -37,6 +37,33 @@ app.get('/', (_req, res) => res.json({
 // Health check
 app.get('/health', (_req, res) => res.status(200).send('ok'));
 
+// Stripe webhook endpoint
+app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (req, res) => {
+  let event;
+  try {
+    const sig = req.headers['stripe-signature'];
+    event = stripe.webhooks.constructEvent(req.body, sig, ENV.STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('Webhook signature verification failed:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  try {
+    if (event.type === 'checkout.session.completed' || event.type === 'payment_intent.succeeded') {
+      console.log('🎉 Webhook received:', event.type);
+      
+      // Process the event (same logic as sync-payments)
+      // This will be handled by the automatic sync every 2 minutes
+      console.log('✅ Webhook processed - automatic sync will handle this');
+    }
+    
+    res.json({ received: true });
+  } catch (error) {
+    console.error('Error processing webhook:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Test endpoint
 app.get('/api/test', (req, res) => {
   res.json({ 
