@@ -110,7 +110,7 @@ app.get('/auto-sync', async (req, res) => {
         console.log(`📊 Available columns:`, sheet.headerValues);
         
         const exists = rows.some((row, index) => {
-          const rowPurchaseId = row.get('purchase_id') || row.get('Purchase ID') || '';
+          const rowPurchaseId = row.get('Purchase ID') || row.get('purchase_id') || '';
           const match = rowPurchaseId === purchaseId;
           
           if (index < 3) { // Показываем первые 3 строки для отладки
@@ -461,7 +461,7 @@ app.post('/api/sync-payments', async (req, res) => {
 
         // ПРОВЕРЯЕМ ДУБЛИКАТЫ - СТРОГАЯ ПРОВЕРКА
         const exists = rows.some((row) => {
-          const rowPurchaseId = row.get('purchase_id') || row.get('Purchase ID') || '';
+          const rowPurchaseId = row.get('Purchase ID') || row.get('purchase_id') || '';
           const match = rowPurchaseId === purchaseId;
           if (match) {
             console.log(`🔍 FOUND EXISTING: ${purchaseId} in Google Sheets`);
@@ -865,7 +865,7 @@ app.listen(ENV.PORT, () => {
                 
                 // ПРОВЕРЯЕМ ДУБЛИКАТЫ - СТРОГАЯ ПРОВЕРКА
                 const exists = rows.some((row) => {
-                  const rowPurchaseId = row.get('purchase_id') || row.get('Purchase ID') || '';
+                  const rowPurchaseId = row.get('Purchase ID') || row.get('purchase_id') || '';
                   const match = rowPurchaseId === purchaseId;
                   if (match) {
                     console.log(`🔍 FOUND EXISTING: ${purchaseId} in Google Sheets`);
