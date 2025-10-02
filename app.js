@@ -225,7 +225,7 @@ app.post('/api/sync-payments', async (req, res) => {
 
         if (purchaseExists) {
           console.log(`⏭️ Purchase already exists: ${purchaseId}`);
-          continue;
+          continue; // Пропускаем существующие покупки БЕЗ уведомлений
         }
 
         // Format GEO data
@@ -263,14 +263,6 @@ app.post('/api/sync-payments', async (req, res) => {
           payment_count: group.payments.length
         };
 
-        // Проверяем, существует ли уже эта покупка в Google Sheets
-        const purchaseAlreadyExists = rows.some((row) => row.get('purchase_id') === purchaseId);
-
-        if (purchaseAlreadyExists) {
-          console.log(`⏭️ Purchase already exists: ${purchaseId}`);
-          continue; // Пропускаем существующие покупки
-        }
-
         // Добавляем в Google Sheets только если подключение работает
         if (sheet) {
           await sheet.addRow(purchaseData);
@@ -279,7 +271,7 @@ app.post('/api/sync-payments', async (req, res) => {
           console.log('⚠️ Google Sheets not available, skipping save for:', purchaseId);
         }
 
-        // Отправляем уведомления ТОЛЬКО для новых покупок
+        // Отправляем уведомления ТОЛЬКО для новых покупок (после добавления в Google Sheets)
         try {
           const telegramText = formatTelegram(purchaseData, customer?.metadata || {});
           await sendTelegram(telegramText);
