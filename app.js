@@ -252,7 +252,21 @@ app.post('/api/sync-payments', async (req, res) => {
     const firstFive = Array.from(existingPurchases).slice(0, 5);
     console.log(`📋 First 5 existing keys: ${firstFive.join(', ')}`);
 
-    // ПРОСТАЯ ЛОГИКА: проверяем каждую покупку из Stripe
+    // СТРОГАЯ ЛОГИКА: НЕ ОБРАБАТЫВАЕМ НИЧЕГО если есть существующие данные
+    if (existingPurchases.size > 0) {
+      console.log(`⚠️ Found ${existingPurchases.size} existing purchases in Google Sheets`);
+      console.log('🛑 STOPPING SYNC - to prevent duplicates with existing data');
+      
+      return res.json({
+        success: true,
+        message: `Sync stopped - found ${existingPurchases.size} existing purchases in Google Sheets`,
+        existing_count: existingPurchases.size,
+        total_stripe: groupedPurchases.size,
+        action: 'STOPPED_TO_PREVENT_DUPLICATES'
+      });
+    }
+
+    // ПРОСТАЯ ЛОГИКА: проверяем каждую покупку из Stripe (только если Google Sheets пустой)
     for (const [dateKey, group] of groupedPurchases.entries()) {
       try {
         const customer = group.customer;
