@@ -310,6 +310,14 @@ app.post('/api/sync-payments', async (req, res) => {
           payment_count: group.payments.length
         };
 
+        // ПРОСТАЯ ПРОВЕРКА: убеждаемся что все поля заполнены
+        console.log('🔍 Purchase data validation:');
+        console.log('  - purchase_id:', purchaseData.purchase_id);
+        console.log('  - email:', purchaseData.email);
+        console.log('  - amount:', purchaseData.amount);
+        console.log('  - created_at:', purchaseData.created_at);
+        console.log('  - customer_id:', purchaseData.customer_id);
+
         // Добавляем в Google Sheets только если подключение работает
         let savedToSheets = false;
         if (sheet) {
@@ -323,7 +331,17 @@ app.post('/api/sync-payments', async (req, res) => {
               created_at: purchaseData.created_at
             });
             
-            await sheet.addRow(purchaseData);
+            // ПРОСТОЕ ДОБАВЛЕНИЕ: используем addRow с минимальными данными
+            const simpleData = {
+              purchase_id: purchaseData.purchase_id,
+              email: purchaseData.email,
+              amount: purchaseData.amount,
+              created_at: purchaseData.created_at,
+              customer_id: purchaseData.customer_id
+            };
+            
+            console.log('📊 Simple data for Google Sheets:', simpleData);
+            await sheet.addRow(simpleData);
             console.log('✅ Payment data saved to Google Sheets:', purchaseId);
             savedToSheets = true;
           } catch (error) {
