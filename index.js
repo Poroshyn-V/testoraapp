@@ -2667,9 +2667,35 @@ notifiedPayments.clear();
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
-  console.log('✅ Google Sheets настроен правильно - автоматическое обновление отключено');
+  console.log('🔄 Starting automatic sync every 2 minutes...');
   
-  // Принудительно запускаем API polling при старте
-  // Автоматическое обновление отключено - никаких дублирований
-  console.log('✅ Автоматическое обновление отключено - никаких дублирований');
+  // First run after 30 seconds
+  setTimeout(async () => {
+    try {
+      console.log('🚀 Running initial sync...');
+      const response = await fetch(`http://localhost:${PORT}/api/sync-payments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const result = await response.json();
+      console.log('Initial sync completed:', result);
+    } catch (error) {
+      console.error('Initial sync failed:', error.message);
+    }
+  }, 30000);
+  
+  // Then every 2 minutes
+  setInterval(async () => {
+    try {
+      console.log('🔄 Running scheduled sync...');
+      const response = await fetch(`http://localhost:${PORT}/api/sync-payments`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      const result = await response.json();
+      console.log('Scheduled sync completed:', result);
+    } catch (error) {
+      console.error('Scheduled sync failed:', error.message);
+    }
+  }, 2 * 60 * 1000); // 2 minutes
 });
