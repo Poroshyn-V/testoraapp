@@ -271,49 +271,47 @@ app.get('/auto-sync', async (req, res) => {
           const currentUtcPlus1 = existingRow.get('Created UTC+1') || '';
           const currentGeo = existingRow.get('GEO') || '';
           
-          // Обновляем ВСЕ покупки (не только пустые)
           console.log(`🔄 FORCE updating existing purchase: ${purchaseId}`);
           console.log(`  - Current UTC+1: "${currentUtcPlus1}"`);
           console.log(`  - Current GEO: "${currentGeo}"`);
-            
-            // ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ UTC+1 для ВСЕХ покупок
-            const utcTime = new Date(firstPayment.created * 1000);
-            const utcPlus1 = new Date(utcTime.getTime() + 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
-            existingRow.set('Created UTC+1', utcPlus1);
-            console.log(`🕐 FORCE Updated UTC+1: ${utcPlus1}`);
-            
-            // ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ GEO для ВСЕХ покупок
-            let geoCountry = 'N/A';
-            try {
-              // Получаем IP из Stripe payment
-              const paymentMethod = await stripe.paymentMethods.retrieve(firstPayment.payment_method);
-              if (paymentMethod.card && paymentMethod.card.country) {
-                const country = paymentMethod.card.country;
-                // Добавляем город если есть в метаданных
-                const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
-                const city = m.city || m.geo_city || '';
-                if (city) {
-                  geoCountry = `${country}, ${city}`;
-                } else {
-                  geoCountry = country;
-                }
-              }
-            } catch (error) {
-              console.log('🌍 GEO API error:', error.message);
-              // Fallback к метаданным если API не работает
+          
+          // ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ UTC+1 для ВСЕХ покупок
+          const utcTime = new Date(firstPayment.created * 1000);
+          const utcPlus1 = new Date(utcTime.getTime() + 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+          existingRow.set('Created UTC+1', utcPlus1);
+          console.log(`🕐 FORCE Updated UTC+1: ${utcPlus1}`);
+          
+          // ПРИНУДИТЕЛЬНО ОБНОВЛЯЕМ GEO для ВСЕХ покупок
+          let geoCountry = 'N/A';
+          try {
+            // Получаем IP из Stripe payment
+            const paymentMethod = await stripe.paymentMethods.retrieve(firstPayment.payment_method);
+            if (paymentMethod.card && paymentMethod.card.country) {
+              const country = paymentMethod.card.country;
+              // Добавляем город если есть в метаданных
               const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
-              if (m.geo_country) {
-                geoCountry = m.geo_country;
-              } else if (m.country) {
-                geoCountry = m.country;
+              const city = m.city || m.geo_city || '';
+              if (city) {
+                geoCountry = `${country}, ${city}`;
+              } else {
+                geoCountry = country;
               }
             }
-            existingRow.set('GEO', geoCountry);
-            console.log(`🌍 FORCE Updated GEO: ${geoCountry}`);
-            
-            await existingRow.save();
-            updatedExisting++;
+          } catch (error) {
+            console.log('🌍 GEO API error:', error.message);
+            // Fallback к метаданным если API не работает
+            const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
+            if (m.geo_country) {
+              geoCountry = m.geo_country;
+            } else if (m.country) {
+              geoCountry = m.country;
+            }
           }
+          existingRow.set('GEO', geoCountry);
+          console.log(`🌍 FORCE Updated GEO: ${geoCountry}`);
+          
+          await existingRow.save();
+          updatedExisting++;
         }
       } catch (error) {
         console.error(`Error updating purchase ${dateKey}:`, error.message);
