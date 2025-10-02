@@ -205,13 +205,25 @@ app.post('/api/sync-payments', async (req, res) => {
       
     } catch (error) {
       console.error('❌ Google Sheets error:', error.message);
-      console.log('⚠️ Google Sheets not available - skipping sync to prevent duplicates');
+      console.log('⚠️ Google Sheets not available - STOPPING SYNC to prevent duplicates');
       
-      // Если Google Sheets не работает, не обрабатываем покупки
+      // Если Google Sheets не работает, НЕ ОБРАБАТЫВАЕМ ПОКУПКИ ВООБЩЕ
       return res.status(500).json({
         success: false,
-        message: 'Google Sheets not available - cannot check for duplicates',
+        message: 'Google Sheets not available - sync stopped to prevent duplicates',
         error: error.message
+      });
+    }
+
+    // КРИТИЧЕСКАЯ ПРОВЕРКА: если Google Sheets пустой, НЕ ОБРАБАТЫВАЕМ ВООБЩЕ
+    if (rows.length === 0) {
+      console.log(`⚠️ Google Sheets is empty - STOPPING ALL PROCESSING to prevent duplicates`);
+      return res.json({
+        success: true,
+        message: 'Google Sheets is empty - no processing to prevent duplicates',
+        total_groups: groupedPurchases.size,
+        processed: 0,
+        purchases: []
       });
     }
 
@@ -230,12 +242,6 @@ app.post('/api/sync-payments', async (req, res) => {
         
         console.log(`🔍 Checking purchase: ${customerEmail} on ${purchaseDate}`);
         console.log(`📋 Total rows in Google Sheets: ${rows.length}`);
-        
-        // СТРОГАЯ ПРОВЕРКА: если Google Sheets пустой, не обрабатываем
-        if (rows.length === 0) {
-          console.log(`⚠️ Google Sheets is empty - skipping to prevent duplicates`);
-          continue;
-        }
         
         const purchaseExists = rows.some((row) => {
           const rowEmail = row.get('email') || '';

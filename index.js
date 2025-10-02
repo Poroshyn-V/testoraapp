@@ -58,7 +58,7 @@ app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (re
     }
     
     res.json({ received: true });
-  } catch (error) {
+        } catch (error) {
     console.error('Error processing webhook:', error.message);
     res.status(500).json({ error: error.message });
   }
@@ -90,8 +90,8 @@ app.post('/api/sync-payments', async (req, res) => {
     });
     
     if (payments.data.length === 0) {
-      return res.json({ 
-        success: true, 
+    return res.json({
+      success: true,
         message: 'No payments found',
         processed: 0 
       });
@@ -108,7 +108,7 @@ app.post('/api/sync-payments', async (req, res) => {
       if (payment.customer) {
         let customer = null;
         try {
-          customer = await stripe.customers.retrieve(payment.customer);
+        customer = await stripe.customers.retrieve(payment.customer);
           if (customer && 'deleted' in customer && customer.deleted) {
             customer = null;
           }
@@ -122,21 +122,21 @@ app.post('/api/sync-payments', async (req, res) => {
 
         if (!groupedPurchases.has(dateKey)) {
           groupedPurchases.set(dateKey, {
-            customer,
-            payments: [],
-            totalAmount: 0,
-            firstPayment: payment
-          });
-        }
-
+          customer,
+          payments: [],
+          totalAmount: 0,
+          firstPayment: payment
+        });
+      }
+      
         const group = groupedPurchases.get(dateKey);
-        group.payments.push(payment);
-        group.totalAmount += payment.amount;
+      group.payments.push(payment);
+      group.totalAmount += payment.amount;
       }
     }
-
+    
     console.log(`📊 Сгруппировано покупок: ${groupedPurchases.size}`);
-
+    
     let newPurchases = 0;
     const processedPurchases = [];
 
@@ -162,8 +162,8 @@ app.post('/api/sync-payments', async (req, res) => {
 
     for (const [dateKey, group] of groupedPurchases.entries()) {
       try {
-        const customer = group.customer;
-        const firstPayment = group.firstPayment;
+          const customer = group.customer;
+          const firstPayment = group.firstPayment;
         const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
 
         // Create unique purchase ID
@@ -220,7 +220,7 @@ app.post('/api/sync-payments', async (req, res) => {
           const telegramText = formatTelegram(purchaseData, customer?.metadata || {});
           await sendTelegram(telegramText);
           console.log('📱 Telegram notification sent for:', purchaseId);
-        } catch (error) {
+  } catch (error) {
           console.error('Error sending Telegram:', error.message);
         }
 
@@ -228,7 +228,7 @@ app.post('/api/sync-payments', async (req, res) => {
           const slackText = formatSlack(purchaseData, customer?.metadata || {});
           await sendSlack(slackText);
           console.log('💬 Slack notification sent for:', purchaseId);
-        } catch (error) {
+      } catch (error) {
           console.error('Error sending Slack:', error.message);
         }
 
@@ -245,7 +245,7 @@ app.post('/api/sync-payments', async (req, res) => {
     }
     
     res.json({
-      success: true,
+        success: true, 
       message: `Sync completed! Processed ${newPurchases} purchase(s)`,
       total_groups: groupedPurchases.size,
       processed: newPurchases,
@@ -255,7 +255,7 @@ app.post('/api/sync-payments', async (req, res) => {
   } catch (error) {
     console.error('❌ Sync error:', error.message);
     res.status(500).json({
-      success: false,
+      success: false, 
       message: 'Sync failed',
       error: error.message
     });
@@ -271,22 +271,22 @@ async function sendTelegram(text) {
 
   try {
     const response = await fetch(`https://api.telegram.org/bot${ENV.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
         chat_id: ENV.TELEGRAM_CHAT_ID,
         text: text,
         parse_mode: 'HTML'
-      })
-    });
-
+              })
+            });
+            
     const result = await response.json();
     if (result.ok) {
       console.log('Telegram notification sent successfully');
     } else {
       console.error('Telegram API error:', result.description);
     }
-  } catch (error) {
+          } catch (error) {
     console.error('Error sending Telegram notification:', error);
   }
 }
@@ -351,28 +351,28 @@ async function sendSlack(text) {
   try {
     console.log('📤 Sending Slack notification...');
     const response = await fetch('https://slack.com/api/chat.postMessage', {
-      method: 'POST',
-      headers: {
+                method: 'POST',
+                headers: {
         'Authorization': `Bearer ${ENV.SLACK_BOT_TOKEN}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
+              body: JSON.stringify({
         channel: ENV.SLACK_CHANNEL_ID,
         text: text,
         username: 'Stripe Bot',
         icon_emoji: ':money_with_wings:'
-      })
-    });
-
+              })
+            });
+            
     const result = await response.json();
     console.log('📥 Slack API response:', result);
     
     if (result.ok) {
       console.log('✅ Slack notification sent successfully');
-    } else {
+              } else {
       console.error('❌ Slack API error:', result.error);
-    }
-  } catch (error) {
+            }
+          } catch (error) {
     console.error('❌ Error sending Slack notification:', error);
   }
 }
@@ -423,12 +423,12 @@ app.listen(ENV.PORT, () => {
     try {
       console.log('🚀 Running initial sync...');
       const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
-        method: 'POST',
+      method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });
       const result = await response.json();
       console.log('Initial sync completed:', result);
-    } catch (error) {
+  } catch (error) {
       console.error('Initial sync failed:', error.message);
     }
   }, 30000);
@@ -443,7 +443,7 @@ app.listen(ENV.PORT, () => {
       });
       const result = await response.json();
       console.log('Scheduled sync completed:', result);
-    } catch (error) {
+  } catch (error) {
       console.error('Scheduled sync failed:', error.message);
     }
   }, 2 * 60 * 1000); // 2 minutes
