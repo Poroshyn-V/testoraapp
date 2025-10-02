@@ -522,18 +522,19 @@ app.post('/api/sync-payments', async (req, res) => {
       rows = await sheet.getRows();
       console.log(`📋 Existing rows in sheet: ${rows.length}`);
       
-      // Показываем первые 3 строки для отладки
+      // СТРОГАЯ ПРОВЕРКА: показываем все данные для отладки
       if (rows.length > 0) {
-        console.log('📄 First 3 rows in Google Sheets:');
+        console.log('📄 Google Sheets debug info:');
+        console.log('📄 Total rows:', rows.length);
         console.log('📄 Available columns:', sheet.headerValues);
+        console.log('📄 First 3 rows:');
         for (let i = 0; i < Math.min(3, rows.length); i++) {
           const row = rows[i];
           console.log(`Row ${i + 1}:`);
-          console.log(`  - customer_id: "${row.get('customer_id')}"`);
-          console.log(`  - created_at: "${row.get('created_at')}"`);
-          console.log(`  - email: "${row.get('email')}"`);
-          console.log(`  - purchase_id: "${row.get('purchase_id')}"`);
           console.log(`  - Purchase ID: "${row.get('Purchase ID')}"`);
+          console.log(`  - purchase_id: "${row.get('purchase_id')}"`);
+          console.log(`  - Customer ID: "${row.get('Customer ID')}"`);
+          console.log(`  - Email: "${row.get('Customer Email')}"`);
           console.log(`  - All data:`, row._rawData);
         }
       }
@@ -573,12 +574,13 @@ app.post('/api/sync-payments', async (req, res) => {
         // Create unique purchase ID
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
-        // ПРОВЕРЯЕМ ДУБЛИКАТЫ - СТРОГАЯ ПРОВЕРКА
+        // ИСПРАВЛЕНО: ПРОВЕРЯЕМ ДУБЛИКАТЫ ПО ПРАВИЛЬНОМУ ПОЛЮ
         const exists = rows.some((row) => {
           const rowPurchaseId = row.get('Purchase ID') || row.get('purchase_id') || '';
           const match = rowPurchaseId === purchaseId;
           if (match) {
             console.log(`🔍 FOUND EXISTING: ${purchaseId} in Google Sheets`);
+            console.log(`🔍 Row data:`, row._rawData);
           }
           return match;
         });
