@@ -1,0 +1,34 @@
+// Скрипт для исправления Google Sheets ключа
+const key = `-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCxVOH92yxe/KkP
+5RIcShxh10cxtWOtBw8cjP4XAPDK1YMAo2A+YRRCBzNA5DOSdeMRbHz4QOMbVuzB
+954T8bHKHPtnGmPAM17Ts9e1FkIrYaUd1ZxdS5yw1/RtUPvm69H2JUYjrGSGU1a+
+P65fe5l8NeU9w1TVbUujn0UbHS/ZdLUUlEp4CU5lg8uKS/z3Iz3egPhgdoM9cKwi
+pOWDT27T2UMfIO4uFK04fs2/VZUDonSj1v8SMac7ejecKmXeQTijQmroR78ZM0ON
+23jdLLndAsQu2g3Ps90UKmDhozhPVFUS+a4/fWF7ERTNT8m+M1CZkEZCpgE/jpoV
+emILOtyNAgMBAAECggEAC8ARYnoU/a1LFuB0UQIQe+OL1jghT5w1t4wDI9Xo3rPY
++fWZbBYQMCjceqVfDR/Oc5TcpLGIqu2EA31Le6Gqs3cJ/zoL1+GU3BJ2YwuDcm7x
+BeH7OguyKV4B661vp6HteByJAiuglJhYmYN24+D42ba+MYJsMGE333LEsugonRrG
+xvw6LRF2+XrCj4NOXx1WPjQeehD2fk2Ad8lyTip37zWB59uxs1QS6USNG3P3JKDV
+t4Oh0wWrjdEaW6Velc2Mv5NFOpUgOoctbdTR3l60u59Yf3/+ud2WRqK6IVem0NXx
+8mP4xhRNb09ql0SljygxbccBbmBcha+csTeyNRdyqQKBgQDvwOOiwtcWRfSHfxf5
+ahQin+SC+2AY9A+YmvZfjb6Y30gfA+a3uodcOgu2RHhS4cub5RbWM/LAc5LWn34M
+2lS6Y4UsrPh9EahK+ikoQU/aKXZ5QzE0IwXnlN8+fRacEZuAsIUHvQGXogM8yYgd
+UT3XXgH6VrH+si0dSBO4DGGaSQKBgQC9WSIIeSu2YpK8k+YhrgAY1wXIoLcY+3sE
+ueDzU5diHGRP0lQX+27ODaL451rE9DAWjKu2kA6nxdONGOM3sWEhOMHgnH08dZcl
+nXP43l1zLXgONcQzOXsAjVuqDgWc4qlc5UDWZQXt/3WsHWPZnQYGIKJBA0uXuuhe
+rvgdk6MQJQKBgDNSeigkR0CoVvEOXsZwU8EZsyPqxaZx0EjdmzHXON6mpVymTCQ2
+VLWEY29v9sXfOeO0RZAy7JsP4nX5DFWaAxsnJKHsoQC83+a06EyKtpo/1/GbVZQQ
+jzoEn0lUI5vjFQOWRdPjPM0FzGWdynpkIrXQlOHO3yljYM7s1/PFCrupAoGBALfk
+tiHmlKaYi4xsU4gINn3pbuuP8uNnce2AHVIUsCSQEHhZfGSiQ9YI9muoPcakpYNw
+8V/n/uPARJp3Pk2bjwq11c2wDg1G4xmcFsLwK3AuC7g5Tai2PZimsQyye48Hr5bR
+7CuMh7rCbOVQ0eXKE8ylqw9bBPKCiyVR5xTKiwalAoGALOUxeJ32JcixOtt+HBOD
+cnm14OJfAWiKFDWnywP6VJW1w2KJ5k/GjZ+kYFZM6+wJHnRoysCDfpG39FUqtLf6
+CLR51/cPiFxKMNRWbRpTSH4/5n1s4Aa2hM2yl/QTS3b6CJ7s3YcZ+VhYJaL5evy4
+Vx/2A8IvD9aRB/0xLzbArFA=
+-----END PRIVATE KEY-----`;
+
+console.log('🔧 Правильный ключ для Railway:');
+console.log(key);
+console.log('\n📋 Скопируй этот ключ в Railway Variables:');
+console.log('GOOGLE_SERVICE_PRIVATE_KEY = [скопируй ключ выше]');

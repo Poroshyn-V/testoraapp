@@ -495,10 +495,16 @@ app.post('/api/sync-payments', async (req, res) => {
       console.log('🔍 Debug: Original key length:', privateKey ? privateKey.length : 'undefined');
       console.log('🔍 Debug: Key starts with:', privateKey ? privateKey.substring(0, 50) : 'undefined');
       
-      // Railway может экранировать символы, исправляем
+      // ИСПРАВЛЕНО: Railway может экранировать символы, исправляем
       if (privateKey && privateKey.includes('\\n')) {
         privateKey = privateKey.replace(/\\n/g, '\n');
         console.log('✅ Fixed escaped newlines');
+      }
+      
+      // ДОПОЛНИТЕЛЬНО: Убираем лишние пробелы и символы
+      if (privateKey) {
+        privateKey = privateKey.trim();
+        console.log('✅ Trimmed key');
       }
       
       // Если ключ не содержит заголовки, добавляем их
