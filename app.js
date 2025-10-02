@@ -147,67 +147,27 @@ app.post('/api/sync-payments', async (req, res) => {
     let newPurchases = 0;
     const processedPurchases = [];
 
-    // Initialize Google Sheets
-    let serviceAccountAuth;
-    try {
-      console.log('🔍 Google Sheets debug info:');
-      console.log('Email exists:', !!ENV.GOOGLE_SERVICE_EMAIL);
-      console.log('Private key exists:', !!ENV.GOOGLE_SERVICE_PRIVATE_KEY);
-      console.log('Doc ID exists:', !!ENV.GOOGLE_SHEETS_DOC_ID);
-      
-      if (!ENV.GOOGLE_SERVICE_EMAIL || !ENV.GOOGLE_SERVICE_PRIVATE_KEY || !ENV.GOOGLE_SHEETS_DOC_ID) {
-        console.log('❌ Missing Google Sheets environment variables');
-        return res.status(500).json({
-          success: false,
-          message: 'Google Sheets not configured - missing environment variables'
-        });
-      }
-      
-      // Попробуем разные форматы ключа
-      let privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY;
-      console.log('Original key length:', privateKey.length);
-      console.log('Key starts with:', privateKey.substring(0, 20));
-      
-      // Если ключ не содержит BEGIN, добавляем форматирование
-      if (!privateKey.includes('BEGIN PRIVATE KEY')) {
-        privateKey = privateKey.replace(/\\n/g, '\n');
-        if (!privateKey.includes('BEGIN')) {
-          privateKey = `-----BEGIN PRIVATE KEY-----\n${privateKey}\n-----END PRIVATE KEY-----`;
-        }
-      }
-      
-      console.log('Formatted key length:', privateKey.length);
-      console.log('Key contains BEGIN:', privateKey.includes('BEGIN'));
-      
-      serviceAccountAuth = new JWT({
-        email: ENV.GOOGLE_SERVICE_EMAIL,
-        key: privateKey,
-        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-      });
-      
-      console.log('✅ Google Sheets authentication created successfully');
-    } catch (error) {
-      console.error('❌ Google Sheets authentication error:', error.message);
-      console.error('Error details:', error);
+    // Initialize Google Sheets (temporarily disabled for testing)
+    console.log('🔍 Google Sheets debug info:');
+    console.log('Email exists:', !!ENV.GOOGLE_SERVICE_EMAIL);
+    console.log('Private key exists:', !!ENV.GOOGLE_SERVICE_PRIVATE_KEY);
+    console.log('Doc ID exists:', !!ENV.GOOGLE_SHEETS_DOC_ID);
+    
+    if (!ENV.GOOGLE_SERVICE_EMAIL || !ENV.GOOGLE_SERVICE_PRIVATE_KEY || !ENV.GOOGLE_SHEETS_DOC_ID) {
+      console.log('❌ Missing Google Sheets environment variables');
       return res.status(500).json({
         success: false,
-        message: 'Google Sheets authentication failed',
-        error: error.message
+        message: 'Google Sheets not configured - missing environment variables'
       });
     }
-    const doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
-    await doc.loadInfo();
     
-    let sheet = doc.sheetsByIndex[0];
-    if (!sheet) {
-      console.error('❌ No sheets found in document!');
-      return res.status(500).json({ success: false, message: 'Sheet not found' });
-    }
-    console.log(`📄 Using sheet: "${sheet.title}"`);
+    // Temporarily skip Google Sheets to test other functionality
+    console.log('⚠️ Google Sheets temporarily disabled for testing');
+    console.log('✅ Stripe API working - found', successfulPayments.length, 'payments');
+    console.log('✅ Grouping working - created', groupedPurchases.size, 'groups');
     
-    // Load existing rows
-    const rows = await sheet.getRows();
-    console.log(`📋 Existing rows in sheet: ${rows.length}`);
+    // Simulate Google Sheets response
+    const rows = []; // Empty array for testing
 
     for (const [dateKey, group] of groupedPurchases.entries()) {
       try {
