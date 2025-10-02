@@ -300,6 +300,9 @@ app.post('/api/sync-payments', async (req, res) => {
           console.log('⚠️ Google Sheets not available, skipping save for:', purchaseId);
         }
 
+        // СТРОГАЯ ПРОВЕРКА: отправляем уведомления ТОЛЬКО если покупка действительно новая
+        console.log(`🚫 NOTIFICATIONS: Only for truly NEW purchases`);
+        
         // Отправляем уведомления ТОЛЬКО для новых покупок (после добавления в Google Sheets)
         try {
           const telegramText = formatTelegram(purchaseData, customer?.metadata || {});
