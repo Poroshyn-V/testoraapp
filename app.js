@@ -236,7 +236,11 @@ app.post('/api/sync-payments', async (req, res) => {
           const rowEmail = row.get('email') || '';
           const rowDate = row.get('created_at') || '';
           const rowDateOnly = rowDate.split('T')[0]; // YYYY-MM-DD
-          return rowEmail === customerEmail && rowDateOnly === purchaseDate;
+          const match = rowEmail === customerEmail && rowDateOnly === purchaseDate;
+          if (match) {
+            console.log(`✅ MATCH FOUND: ${rowEmail} === ${customerEmail} && ${rowDateOnly} === ${purchaseDate}`);
+          }
+          return match;
         });
 
         if (alreadyExists) {
