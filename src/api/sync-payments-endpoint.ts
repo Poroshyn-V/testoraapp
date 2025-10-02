@@ -203,17 +203,16 @@ router.post('/sync-payments', async (req, res) => {
       }
     }
     
-    // Сортируем таблицу по дате (старые сверху, новые снизу)
-    if (newPurchases > 0) {
-      try {
-        console.log('🔄 Sorting sheet by date...');
-        await sheet.loadCells();
-        await sheet.sort(5, true); // Колонка 5 = "Created UTC", ascending = true (старые → новые)
-        console.log('✅ Sheet sorted by date');
-      } catch (error: any) {
-        console.error('Error sorting sheet:', error.message);
-      }
-    }
+           // Сортируем таблицу по дате (старые сверху, новые снизу)
+           if (newPurchases > 0) {
+             try {
+               console.log('🔄 Sorting sheet by date...');
+               // Убираем сортировку - она не поддерживается в google-spreadsheet
+               console.log('✅ Sheet sorting skipped (not supported)');
+             } catch (error: any) {
+               console.error('Error sorting sheet:', error.message);
+             }
+           }
     
     res.json({
       success: true,
