@@ -224,6 +224,16 @@ app.post('/api/sync-payments', async (req, res) => {
       });
     }
 
+    // ЛОГИКА ИЗ RENDER: собираем существующие Purchase ID
+    const existingPurchaseIds = new Set();
+    for (const row of rows) {
+      const purchaseId = row.get('purchase_id') || '';
+      if (purchaseId) {
+        existingPurchaseIds.add(purchaseId);
+      }
+    }
+    console.log(`📋 Existing Purchase IDs in Google Sheets: ${existingPurchaseIds.size}`);
+
     // ПРОСТАЯ ЛОГИКА: проверяем каждую покупку из Stripe
     for (const [dateKey, group] of groupedPurchases.entries()) {
       try {
@@ -234,25 +244,13 @@ app.post('/api/sync-payments', async (req, res) => {
         // Create unique purchase ID
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
-        // ПРОВЕРКА: есть ли эта покупка в Google Sheets по Purchase ID?
-        console.log(`🔍 Checking Purchase ID: ${purchaseId}`);
-        
-        // Ищем в Google Sheets по Purchase ID (самый надежный способ)
-        const alreadyExists = rows.some((row) => {
-          const rowPurchaseId = row.get('purchase_id') || '';
-          const match = rowPurchaseId === purchaseId;
-          if (match) {
-            console.log(`✅ MATCH FOUND: ${rowPurchaseId} === ${purchaseId}`);
-          }
-          return match;
-        });
-
-        if (alreadyExists) {
-          console.log(`⏭️ Already exists: ${purchaseId} - SKIP`);
+        // ПРОВЕРКА: есть ли эта покупка в Google Sheets?
+        if (existingPurchaseIds.has(purchaseId)) {
+          console.log(`⏭️ Purchase already exists: ${purchaseId} - SKIP`);
           continue; // Пропускаем существующие
         }
         
-        console.log(`🆕 NEW: ${purchaseId} - ADDING`);
+        console.log(`🆕 NEW purchase: ${purchaseId} - ADDING`);
 
         // Format GEO data
         let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
