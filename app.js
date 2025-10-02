@@ -117,6 +117,18 @@ app.get('/api/load-existing', async (req, res) => {
   }
 });
 
+// Endpoint для проверки состояния памяти
+app.get('/api/memory-status', (req, res) => {
+  res.json({
+    success: true,
+    message: `Memory contains ${existingPurchases.size} purchases`,
+    count: existingPurchases.size,
+    purchases: Array.from(existingPurchases).slice(0, 20), // Показываем первые 20
+    auto_sync_disabled: ENV.AUTO_SYNC_DISABLED,
+    notifications_disabled: ENV.NOTIFICATIONS_DISABLED
+  });
+});
+
 // ПРИНУДИТЕЛЬНАЯ АКТИВНОСТЬ чтобы Vercel не засыпал
 app.get('/ping', (_req, res) => {
   console.log('💓 PING: Поддерживаю активность Vercel...');
@@ -1119,8 +1131,9 @@ app.listen(ENV.PORT, () => {
         console.log('   ✅ Работает БЕЗ твоего участия');
         console.log('🚀 АВТОСИНХРОНИЗАЦИЯ ЗАПУЩЕНА И РАБОТАЕТ!');
         
-        // ОСНОВНАЯ АВТОМАТИЗАЦИЯ каждые 5 минут (ОТКЛЮЧЕНА)
+        // ОСНОВНАЯ АВТОМАТИЗАЦИЯ каждые 5 минут (ОТКЛЮЧЕНА ПО УМОЛЧАНИЮ)
         if (!ENV.AUTO_SYNC_DISABLED) {
+          console.log('🔄 АВТОСИНХРОНИЗАЦИЯ ВКЛЮЧЕНА');
           setInterval(() => {
             console.log('🤖 АВТОМАТИЧЕСКАЯ ПРОВЕРКА: Ищу новые покупки в Stripe...');
             runSync();
@@ -1134,6 +1147,11 @@ app.listen(ENV.PORT, () => {
         } else {
           console.log('🛑 АВТОСИНХРОНИЗАЦИЯ ОТКЛЮЧЕНА - используйте ручной вызов /api/sync-payments');
         }
+        
+        // ПО УМОЛЧАНИЮ ОТКЛЮЧАЕМ АВТОСИНХРОНИЗАЦИЮ
+        console.log('🛑 АВТОСИНХРОНИЗАЦИЯ ОТКЛЮЧЕНА ПО УМОЛЧАНИЮ');
+        console.log('🔧 Для включения установите AUTO_SYNC_DISABLED=false в Railway');
+        console.log('📞 Используйте ручной вызов: POST /api/sync-payments');
 });
 
 export default app;
