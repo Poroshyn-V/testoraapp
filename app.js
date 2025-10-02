@@ -242,10 +242,13 @@ app.post('/api/sync-payments', async (req, res) => {
     // РАБОЧАЯ ЛОГИКА С RENDER: собираем существующие purchase_id из Google Sheets
     const existingPurchaseIds = new Set();
     for (const row of rows) {
-      const purchaseId = row.get('purchase_id') || '';
+      // Пробуем разные варианты названий колонок
+      const purchaseId = row.get('purchase_id') || row.get('Purchase ID') || row.get('purchase_id') || '';
       if (purchaseId) {
         existingPurchaseIds.add(purchaseId);
         console.log(`📋 Found existing purchase_id: ${purchaseId}`);
+      } else {
+        console.log(`⚠️ No purchase_id found in row:`, row._rawData);
       }
     }
     console.log(`📋 Total existing purchases in Google Sheets: ${existingPurchaseIds.size}`);
