@@ -148,11 +148,32 @@ app.post('/api/sync-payments', async (req, res) => {
     const processedPurchases = [];
 
     // Initialize Google Sheets
-    const serviceAccountAuth = new JWT({
-      email: ENV.GOOGLE_SERVICE_EMAIL,
-      key: ENV.GOOGLE_SERVICE_PRIVATE_KEY,
-      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-    });
+    let serviceAccountAuth;
+    try {
+      // Попробуем разные форматы ключа
+      let privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY;
+      
+      // Если ключ не содержит BEGIN, добавляем форматирование
+      if (!privateKey.includes('BEGIN PRIVATE KEY')) {
+        privateKey = privateKey.replace(/\\n/g, '\n');
+        if (!privateKey.includes('BEGIN')) {
+          privateKey = `-----BEGIN PRIVATE KEY-----\n${privateKey}\n-----END PRIVATE KEY-----`;
+        }
+      }
+      
+      serviceAccountAuth = new JWT({
+        email: ENV.GOOGLE_SERVICE_EMAIL,
+        key: privateKey,
+        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      });
+    } catch (error) {
+      console.error('❌ Google Sheets authentication error:', error.message);
+      return res.status(500).json({
+        success: false,
+        message: 'Google Sheets authentication failed',
+        error: error.message
+      });
+    }
     const doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
     await doc.loadInfo();
     
