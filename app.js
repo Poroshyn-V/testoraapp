@@ -263,6 +263,14 @@ app.post('/api/sync-payments', async (req, res) => {
           payment_count: group.payments.length
         };
 
+        // Проверяем, существует ли уже эта покупка в Google Sheets
+        const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
+
+        if (exists) {
+          console.log(`⏭️ Purchase already exists: ${purchaseId}`);
+          continue; // Пропускаем существующие покупки
+        }
+
         // Добавляем в Google Sheets только если подключение работает
         if (sheet) {
           await sheet.addRow(purchaseData);
@@ -271,11 +279,11 @@ app.post('/api/sync-payments', async (req, res) => {
           console.log('⚠️ Google Sheets not available, skipping save for:', purchaseId);
         }
 
-        // Send notifications
+        // Отправляем уведомления ТОЛЬКО для новых покупок
         try {
           const telegramText = formatTelegram(purchaseData, customer?.metadata || {});
           await sendTelegram(telegramText);
-          console.log('📱 Telegram notification sent for:', purchaseId);
+          console.log('📱 Telegram notification sent for NEW purchase:', purchaseId);
         } catch (error) {
           console.error('Error sending Telegram:', error.message);
         }
@@ -283,7 +291,7 @@ app.post('/api/sync-payments', async (req, res) => {
         try {
           const slackText = formatSlack(purchaseData, customer?.metadata || {});
           await sendSlack(slackText);
-          console.log('💬 Slack notification sent for:', purchaseId);
+          console.log('💬 Slack notification sent for NEW purchase:', purchaseId);
         } catch (error) {
           console.error('Error sending Slack:', error.message);
         }
