@@ -178,7 +178,7 @@ app.get('/auto-sync', async (req, res) => {
           'Currency': (firstPayment.currency || 'usd').toUpperCase(),
           'Status': 'succeeded',
           'Created UTC': new Date(firstPayment.created * 1000).toISOString(),
-          'Created UTC+1': utcPlus1,
+          'Created Local (UTC+1)': utcPlus1,
           'Customer ID': customer?.id || 'N/A',
           'Customer Email': customer?.email || firstPayment.receipt_email || 'N/A',
           'GEO': geoCountry,
@@ -279,11 +279,8 @@ app.get('/auto-sync', async (req, res) => {
           const utcTime = new Date(firstPayment.created * 1000);
           const utcPlus1 = new Date(utcTime.getTime() + 60 * 60 * 1000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
           
-          // Пробуем разные названия колонки UTC+1
-          existingRow.set('Created UTC+1', utcPlus1);
+          // ПРАВИЛЬНОЕ НАЗВАНИЕ КОЛОНКИ UTC+1
           existingRow.set('Created Local (UTC+1)', utcPlus1);
-          existingRow.set('Created Local (UTC+X)', utcPlus1);
-          existingRow.set('UTC+1', utcPlus1);
           
           console.log(`🕐 FORCE Updated UTC+1: ${utcPlus1}`);
           console.log(`🕐 Available columns:`, Object.keys(existingRow._rawData));
@@ -1026,7 +1023,7 @@ app.listen(ENV.PORT, () => {
                   'Currency': (firstPayment.currency || 'usd').toUpperCase(),
                   'Status': 'succeeded',
                   'Created UTC': new Date(firstPayment.created * 1000).toISOString(),
-                  'Created UTC+1': utcPlus1,
+                  'Created Local (UTC+1)': utcPlus1,
                   'Customer ID': customer?.id || 'N/A',
                   'Customer Email': customer?.email || firstPayment.receipt_email || 'N/A',
                   'GEO': geoCountry,
@@ -1116,17 +1113,11 @@ app.listen(ENV.PORT, () => {
           runSync();
         }, 30 * 1000);
         
-        // Затем каждые 5 минут БЕЗ ОСТАНОВКИ
+        // НАДЕЖНЫЙ ИНТЕРВАЛ каждые 10 минут
         setInterval(() => {
-          console.log('⏰ АвтоСинхронизация по расписанию...');
+          console.log('⏰ АвтоСинхронизация каждые 10 минут...');
           runSync();
-        }, 5 * 60 * 1000);
-        
-        // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА каждые 2 минуты для надежности
-        setInterval(() => {
-          console.log('🔄 Дополнительная проверка каждые 2 минуты...');
-          runSync();
-        }, 2 * 60 * 1000);
+        }, 10 * 60 * 1000);
 });
 
 export default app;
