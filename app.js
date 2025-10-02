@@ -489,20 +489,31 @@ app.post('/api/sync-payments', async (req, res) => {
     let rows = [];
     
     try {
-      // Обработка приватного ключа для Vercel
+      // ИСПРАВЛЕНО: Обработка приватного ключа для Railway
       let privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY;
       
-      // Vercel может экранировать символы, исправляем
-      if (privateKey.includes('\\n')) {
+      console.log('🔍 Debug: Original key length:', privateKey ? privateKey.length : 'undefined');
+      console.log('🔍 Debug: Key starts with:', privateKey ? privateKey.substring(0, 50) : 'undefined');
+      
+      // Railway может экранировать символы, исправляем
+      if (privateKey && privateKey.includes('\\n')) {
         privateKey = privateKey.replace(/\\n/g, '\n');
+        console.log('✅ Fixed escaped newlines');
       }
       
       // Если ключ не содержит заголовки, добавляем их
-      if (!privateKey.includes('BEGIN PRIVATE KEY')) {
+      if (privateKey && !privateKey.includes('BEGIN PRIVATE KEY')) {
         privateKey = `-----BEGIN PRIVATE KEY-----\n${privateKey}\n-----END PRIVATE KEY-----`;
+        console.log('✅ Added key headers');
       }
       
-      console.log('✅ Google Sheets key formatted successfully');
+      // Дополнительная проверка для Railway
+      if (privateKey && privateKey.includes('BEGIN PRIVATE KEY') && privateKey.includes('END PRIVATE KEY')) {
+        console.log('✅ Google Sheets key format is correct');
+      } else {
+        console.log('❌ Google Sheets key format is incorrect');
+        throw new Error('Invalid private key format');
+      }
       
       serviceAccountAuth = new JWT({
         email: ENV.GOOGLE_SERVICE_EMAIL,
