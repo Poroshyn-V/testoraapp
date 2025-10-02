@@ -714,13 +714,19 @@ app.post('/api/sync-payments', async (req, res) => {
           console.log('🚫 Notifications skipped - purchase not saved to Google Sheets');
         }
 
-        newPurchases++;
-        processedPurchases.push({
-          purchase_id: purchaseId,
-          email: purchaseData.email,
-          amount: purchaseData.amount,
-          payments_count: purchaseData.payment_count
-        });
+        // ИСПРАВЛЕНО: Увеличиваем счетчики ТОЛЬКО если покупка действительно сохранена
+        if (savedToSheets) {
+          newPurchases++;
+          processedPurchases.push({
+            purchase_id: purchaseId,
+            email: purchaseData.email,
+            amount: purchaseData.amount,
+            payments_count: purchaseData.payment_count
+          });
+          console.log('✅ Purchase added to results:', purchaseId);
+        } else {
+          console.log('⚠️ Purchase NOT added to results - not saved to Google Sheets:', purchaseId);
+        }
       } catch (error) {
         console.error(`Error processing purchase ${dateKey}:`, error.message);
       }
