@@ -239,26 +239,8 @@ app.post('/api/sync-payments', async (req, res) => {
       });
     }
 
-    // РАБОЧАЯ ЛОГИКА С RENDER: собираем существующие purchase_id из Google Sheets
-    const existingPurchaseIds = new Set();
-    for (const row of rows) {
-      // Пробуем разные варианты названий колонок
-      const purchaseId = row.get('purchase_id') || row.get('Purchase ID') || row.get('purchase_id') || '';
-      if (purchaseId) {
-        existingPurchaseIds.add(purchaseId);
-        console.log(`📋 Found existing purchase_id: ${purchaseId}`);
-      } else {
-        console.log(`⚠️ No purchase_id found in row:`, row._rawData);
-      }
-    }
-    console.log(`📋 Total existing purchases in Google Sheets: ${existingPurchaseIds.size}`);
-    
-    // Показываем первые 5 существующих ключей
-    const firstFive = Array.from(existingPurchaseIds).slice(0, 5);
-    console.log(`📋 First 5 existing purchase_ids: ${firstFive.join(', ')}`);
-
-    // НОРМАЛЬНАЯ РАБОТА: обрабатываем только новые покупки
-    console.log(`✅ Processing ${groupedPurchases.size} Stripe purchases against ${existingPurchaseIds.size} existing purchases`);
+    // ПРОСТАЯ РАБОЧАЯ ЛОГИКА С RENDER: проверяем каждую покупку индивидуально
+    console.log(`✅ Processing ${groupedPurchases.size} Stripe purchases against ${rows.length} existing rows in Google Sheets`);
 
     // ПРОСТАЯ ЛОГИКА: проверяем каждую покупку из Stripe (только если Google Sheets пустой)
     for (const [dateKey, group] of groupedPurchases.entries()) {
@@ -270,8 +252,10 @@ app.post('/api/sync-payments', async (req, res) => {
         // Create unique purchase ID
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
-        // РАБОЧАЯ ПРОВЕРКА С RENDER: есть ли эта покупка в Google Sheets?
-        if (existingPurchaseIds.has(purchaseId)) {
+        // ПРОСТАЯ ПРОВЕРКА С RENDER: есть ли эта покупка в Google Sheets?
+        const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
+        
+        if (exists) {
           console.log(`⏭️ Purchase already exists: ${purchaseId} - SKIP`);
           continue; // Пропускаем существующие
         }
