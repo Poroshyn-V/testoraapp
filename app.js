@@ -693,6 +693,18 @@ app.post('/api/sync-payments', async (req, res) => {
           try {
             console.log(`💾 Saving to Google Sheets: ${purchaseId}`);
             
+            // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: проверяем дубликаты прямо перед сохранением
+            const currentRows = await sheet.getRows();
+            const existsInSheetsNow = currentRows.some((row) => {
+              const rowPurchaseId = row.get('Purchase ID') || row.get('purchase_id') || '';
+              return rowPurchaseId === purchaseId;
+            });
+            
+            if (existsInSheetsNow) {
+              console.log(`⏭️ SKIP: ${purchaseId} already exists in Google Sheets (double-check)`);
+              continue; // Пропускаем если уже есть
+            }
+            
             // Создаем данные в том же формате что уже есть в таблице
             // ИСПРАВЛЕНО: ПРАВИЛЬНОЕ UTC+1 ВРЕМЯ
             const utcTime = new Date(purchaseData.created_at);
