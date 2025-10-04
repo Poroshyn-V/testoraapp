@@ -843,33 +843,31 @@ function formatTelegram(purchaseData, customerMetadata = {}) {
   const paymentId = purchaseData.purchase_id;
   const paymentCount = m.payment_count || '1 payment';
   
-  const country = m.country || 'N/A';
-  const gender = m.gender || 'N/A';
-  const creative_link = m.creative_link || 'N/A';
-  const utm_source = m.utm_source || 'N/A';
-  const platform_placement = m.platform_placement || 'N/A';
-  const ad_name = m.ad_name || 'N/A';
-  const adset_name = m.adset_name || 'N/A';
-  const campaign_name = m.campaign_name || m.utm_campaign || 'N/A';
+  const country = m.country || '';
+  const platform_placement = m.platform_placement || '';
+  const ad_name = m.ad_name || '';
+  const adset_name = m.adset_name || '';
+  const campaign_name = m.campaign_name || m.utm_campaign || '';
 
   const lines = [
     `🟢 Purchase ${paymentId} was processed!`,
-    `---------------------------`,
-    `💳 card`,
-    `💰 ${amount} ${currency}`,
-    `🏷️ ${paymentCount}`,
-    `---------------------------`,
-    `📧 ${email}`,
-    `---------------------------`,
-    `🌪️ ${paymentId}`,
-    `📍 ${country}`,
-    `🔗 quiz.testora.pro/iq1`,
-    `meta`,
-    platform_placement,
-    ad_name,
-    adset_name,
-    campaign_name
-  ];
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+    `💳 Payment Method: Card`,
+    `💰 Amount: ${amount} ${currency}`,
+    `🏷️ Payments: ${paymentCount}`,
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+    `📧 Email: ${email}`,
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+    `🌪️ Purchase ID: ${paymentId}`,
+    `📍 Location: ${country}`,
+    `🔗 Link: quiz.testora.pro/iq1`,
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+    `📊 Campaign Data:`,
+    platform_placement && `• Platform: ${platform_placement}`,
+    ad_name && `• Ad: ${ad_name}`,
+    adset_name && `• Adset: ${adset_name}`,
+    campaign_name && `• Campaign: ${campaign_name}`
+  ].filter(Boolean); // Убираем пустые строки
 
   let text = lines.join('\n');
   if (text.length > 4096) text = text.slice(0, 4093) + '...';
@@ -928,31 +926,29 @@ function formatSlack(purchaseData, customerMetadata = {}) {
   const paymentId = purchaseData.purchase_id;
   const paymentCount = m.payment_count || '1 payment';
   
-  const country = m.country || 'N/A';
-  const gender = m.gender || 'N/A';
-  const creative_link = m.creative_link || 'N/A';
-  const utm_source = m.utm_source || 'N/A';
-  const platform_placement = m.platform_placement || 'N/A';
-  const ad_name = m.ad_name || 'N/A';
-  const adset_name = m.adset_name || 'N/A';
-  const campaign_name = m.campaign_name || m.utm_campaign || 'N/A';
+  const country = m.country || '';
+  const platform_placement = m.platform_placement || '';
+  const ad_name = m.ad_name || '';
+  const adset_name = m.adset_name || '';
+  const campaign_name = m.campaign_name || m.utm_campaign || '';
   
   return `🟢 *Purchase ${paymentId} was processed!*
----------------------------
-💳 card
-💰 ${amount} ${currency}
-🏷️ ${paymentCount}
----------------------------
-📧 ${email}
----------------------------
-🌪️ ${paymentId}
-📍 ${country}
-🔗 quiz.testora.pro/iq1
-meta
-${platform_placement}
-${ad_name}
-${adset_name}
-${campaign_name}`;
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💳 *Payment Method:* Card
+💰 *Amount:* ${amount} ${currency}
+🏷️ *Payments:* ${paymentCount}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📧 *Email:* ${email}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🌪️ *Purchase ID:* ${paymentId}
+📍 *Location:* ${country}
+🔗 *Link:* quiz.testora.pro/iq1
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 *Campaign Data:*
+${platform_placement ? `• Platform: ${platform_placement}` : ''}
+${ad_name ? `• Ad: ${ad_name}` : ''}
+${adset_name ? `• Adset: ${adset_name}` : ''}
+${campaign_name ? `• Campaign: ${campaign_name}` : ''}`;
 }
 
 // Start server
