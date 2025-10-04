@@ -29,6 +29,227 @@ const existingPurchases = new Set();
 
 const stripe = new Stripe(ENV.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
 
+// Функция для анализа GEO данных и отправки ТОП-3 алертов
+async function sendGeoAlert() {
+  try {
+    console.log('🌍 Анализирую GEO данные за сегодня...');
+    
+    if (!ENV.GOOGLE_SERVICE_EMAIL || !ENV.GOOGLE_SERVICE_PRIVATE_KEY || !ENV.GOOGLE_SHEETS_DOC_ID) {
+      console.log('❌ Google Sheets не настроен - пропускаю GEO анализ');
+      return;
+    }
+    
+    const privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY;
+    const serviceAccountAuth = new JWT({
+      email: ENV.GOOGLE_SERVICE_EMAIL,
+      key: privateKey,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    
+    const doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
+    await doc.loadInfo();
+    const sheet = doc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+    
+    // Получаем сегодняшнюю дату в UTC+1
+    const today = new Date();
+    const utcPlus1 = new Date(today.getTime() + 60 * 60 * 1000);
+    const todayStr = utcPlus1.toISOString().split('T')[0]; // YYYY-MM-DD
+    
+    console.log(`📅 Анализирую покупки за ${todayStr} (UTC+1)`);
+    
+    // Фильтруем покупки за сегодня
+    const todayPurchases = rows.filter(row => {
+      const createdLocal = row.get('Created Local (UTC+1)') || '';
+      return createdLocal.includes(todayStr);
+    });
+    
+    console.log(`📊 Найдено ${todayPurchases.length} покупок за сегодня`);
+    
+    if (todayPurchases.length === 0) {
+      console.log('📭 Нет покупок за сегодня - пропускаю GEO алерт');
+      return;
+    }
+    
+    // Анализируем GEO данные
+    const geoStats = new Map();
+    
+    for (const purchase of todayPurchases) {
+      const geo = purchase.get('GEO') || 'Unknown';
+      const country = geo.split(',')[0].trim(); // Берем только страну
+      
+      if (geoStats.has(country)) {
+        geoStats.set(country, geoStats.get(country) + 1);
+      } else {
+        geoStats.set(country, 1);
+      }
+    }
+    
+    // Сортируем по количеству покупок
+    const sortedGeo = Array.from(geoStats.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3);
+    
+    // Формируем ТОП-3
+    const top3 = [];
+    for (const [country, count] of sortedGeo) {
+      const flag = getCountryFlag(country);
+      top3.push(`${flag} ${country} - ${count}`);
+    }
+    
+    // Добавляем WW (все остальные)
+    const totalToday = todayPurchases.length;
+    const top3Total = sortedGeo.reduce((sum, [, count]) => sum + count, 0);
+    const wwCount = totalToday - top3Total;
+    
+    if (wwCount > 0) {
+      top3.push(`🌍 WW - ${wwCount}`);
+    }
+    
+    // Формируем сообщение
+    const alertText = `📊 **ТОП-3 ГЕО за сегодня (${todayStr})**\n\n${top3.join('\n')}\n\n📈 Всего покупок: ${totalToday}`;
+    
+    console.log('📤 Отправляю GEO алерт:', alertText);
+    
+    // Отправляем в Telegram
+    if (!ENV.NOTIFICATIONS_DISABLED && ENV.TELEGRAM_BOT_TOKEN && ENV.TELEGRAM_CHAT_ID) {
+      try {
+        await sendTelegram(alertText);
+        console.log('✅ GEO алерт отправлен в Telegram');
+      } catch (error) {
+        console.error('❌ Ошибка отправки GEO алерта в Telegram:', error.message);
+      }
+    }
+    
+    // Отправляем в Slack
+    if (!ENV.NOTIFICATIONS_DISABLED && ENV.SLACK_BOT_TOKEN && ENV.SLACK_CHANNEL_ID) {
+      try {
+        await sendSlack(alertText);
+        console.log('✅ GEO алерт отправлен в Slack');
+      } catch (error) {
+        console.error('❌ Ошибка отправки GEO алерта в Slack:', error.message);
+      }
+    }
+    
+  } catch (error) {
+    console.error('❌ Ошибка GEO анализа:', error.message);
+  }
+}
+
+// Функция для получения флага страны
+function getCountryFlag(country) {
+  const flags = {
+    'US': '🇺🇸',
+    'CA': '🇨🇦', 
+    'AU': '🇦🇺',
+    'GB': '🇬🇧',
+    'DE': '🇩🇪',
+    'FR': '🇫🇷',
+    'IT': '🇮🇹',
+    'ES': '🇪🇸',
+    'NL': '🇳🇱',
+    'SE': '🇸🇪',
+    'NO': '🇳🇴',
+    'DK': '🇩🇰',
+    'FI': '🇫🇮',
+    'PL': '🇵🇱',
+    'CZ': '🇨🇿',
+    'HU': '🇭🇺',
+    'RO': '🇷🇴',
+    'BG': '🇧🇬',
+    'HR': '🇭🇷',
+    'SI': '🇸🇮',
+    'SK': '🇸🇰',
+    'LT': '🇱🇹',
+    'LV': '🇱🇻',
+    'EE': '🇪🇪',
+    'IE': '🇮🇪',
+    'PT': '🇵🇹',
+    'GR': '🇬🇷',
+    'CY': '🇨🇾',
+    'MT': '🇲🇹',
+    'LU': '🇱🇺',
+    'AT': '🇦🇹',
+    'BE': '🇧🇪',
+    'CH': '🇨🇭',
+    'IS': '🇮🇸',
+    'LI': '🇱🇮',
+    'MC': '🇲🇨',
+    'SM': '🇸🇲',
+    'VA': '🇻🇦',
+    'AD': '🇦🇩',
+    'JP': '🇯🇵',
+    'KR': '🇰🇷',
+    'CN': '🇨🇳',
+    'IN': '🇮🇳',
+    'BR': '🇧🇷',
+    'MX': '🇲🇽',
+    'AR': '🇦🇷',
+    'CL': '🇨🇱',
+    'CO': '🇨🇴',
+    'PE': '🇵🇪',
+    'VE': '🇻🇪',
+    'UY': '🇺🇾',
+    'PY': '🇵🇾',
+    'BO': '🇧🇴',
+    'EC': '🇪🇨',
+    'GY': '🇬🇾',
+    'SR': '🇸🇷',
+    'FK': '🇫🇰',
+    'GF': '🇬🇫',
+    'ZA': '🇿🇦',
+    'EG': '🇪🇬',
+    'NG': '🇳🇬',
+    'KE': '🇰🇪',
+    'GH': '🇬🇭',
+    'MA': '🇲🇦',
+    'TN': '🇹🇳',
+    'DZ': '🇩🇿',
+    'LY': '🇱🇾',
+    'SD': '🇸🇩',
+    'ET': '🇪🇹',
+    'UG': '🇺🇬',
+    'TZ': '🇹🇿',
+    'RW': '🇷🇼',
+    'BI': '🇧🇮',
+    'DJ': '🇩🇯',
+    'SO': '🇸🇴',
+    'ER': '🇪🇷',
+    'SS': '🇸🇸',
+    'CF': '🇨🇫',
+    'TD': '🇹🇩',
+    'NE': '🇳🇪',
+    'ML': '🇲🇱',
+    'BF': '🇧🇫',
+    'CI': '🇨🇮',
+    'GN': '🇬🇳',
+    'SN': '🇸🇳',
+    'GM': '🇬🇲',
+    'GW': '🇬🇼',
+    'CV': '🇨🇻',
+    'ST': '🇸🇹',
+    'AO': '🇦🇴',
+    'ZM': '🇿🇲',
+    'ZW': '🇿🇼',
+    'BW': '🇧🇼',
+    'NA': '🇳🇦',
+    'SZ': '🇸🇿',
+    'LS': '🇱🇸',
+    'MW': '🇲🇼',
+    'MZ': '🇲🇿',
+    'MG': '🇲🇬',
+    'MU': '🇲🇺',
+    'SC': '🇸🇨',
+    'KM': '🇰🇲',
+    'YT': '🇾🇹',
+    'RE': '🇷🇪',
+    'Unknown': '❓',
+    'N/A': '❓'
+  };
+  
+  return flags[country] || '🌍';
+}
+
 // Функция для загрузки и запоминания существующих покупок
 async function loadExistingPurchases() {
   try {
@@ -84,7 +305,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/health', '/webhook/stripe']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/memory-status', '/health', '/webhook/stripe']
 }));
 
 // Исправляем ошибки favicon
@@ -127,6 +348,24 @@ app.get('/api/memory-status', (req, res) => {
     auto_sync_disabled: ENV.AUTO_SYNC_DISABLED,
     notifications_disabled: ENV.NOTIFICATIONS_DISABLED
   });
+});
+
+// Endpoint для ручного запуска GEO алерта
+app.get('/api/geo-alert', async (req, res) => {
+  try {
+    console.log('🌍 Ручной запуск GEO алерта...');
+    await sendGeoAlert();
+    res.json({
+      success: true,
+      message: 'GEO alert sent successfully'
+    });
+  } catch (error) {
+    console.error('❌ GEO alert error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
 });
 
 // ПРИНУДИТЕЛЬНАЯ АКТИВНОСТЬ чтобы Vercel не засыпал
@@ -820,6 +1059,14 @@ app.listen(ENV.PORT, () => {
                  console.log('🤖 ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Убеждаюсь что ничего не пропустил...');
                  runSync();
                }, 2 * 60 * 1000);
+               
+               // GEO АЛЕРТЫ каждые 60 минут
+               console.log('🌍 GEO АЛЕРТЫ ВКЛЮЧЕНЫ - каждые 60 минут');
+               setInterval(() => {
+                 console.log('🌍 АВТОМАТИЧЕСКИЙ GEO АНАЛИЗ: Анализирую ТОП-3 стран...');
+                 sendGeoAlert();
+               }, 60 * 60 * 1000); // 60 минут
+               
              } else {
                console.log('🛑 АВТОСИНХРОНИЗАЦИЯ ОТКЛЮЧЕНА');
                console.log('🔧 Для включения установите AUTO_SYNC_DISABLED=false в Railway');
