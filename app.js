@@ -107,7 +107,7 @@ async function sendGeoAlert() {
     }
     
     // Формируем сообщение
-    const alertText = `📊 **ТОП-3 ГЕО за сегодня (${todayStr})**\n\n${top3.join('\n')}\n\n📈 Всего покупок: ${totalToday}`;
+    const alertText = `📊 **TOP-3 GEO for today (${todayStr})**\n\n${top3.join('\n')}\n\n📈 Total purchases: ${totalToday}`;
     
     console.log('📤 Отправляю GEO алерт:', alertText);
     
