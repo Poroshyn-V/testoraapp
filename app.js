@@ -1162,16 +1162,24 @@ app.post('/api/sync-payments', async (req, res) => {
         const timestamp = firstPayment.created;
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}_${timestamp}`;
 
-        // ПРОСТАЯ ПРОВЕРКА ДУБЛИКАТОВ: только по Purchase ID
-        const existsInMemory = existingPurchases.has(purchaseId);
+        // СТРОГАЯ ПРОВЕРКА ДУБЛИКАТОВ: по email + дата + сумма
+        const customerEmail = customer?.email || firstPayment.receipt_email || 'N/A';
+        const purchaseDate = dateKey.split('_')[1]; // YYYY-MM-DD
+        const purchaseAmount = (group.totalAmount / 100).toFixed(2);
+        
         const existsInSheets = rows.some((row) => {
-          const rowPurchaseId = row.get('Purchase ID') || '';
-          return rowPurchaseId === purchaseId;
+          const rowEmail = row.get('Customer Email') || '';
+          const rowDate = row.get('Created Local (UTC+1)') || '';
+          const rowAmount = row.get('Total Amount') || '';
+          
+          return rowEmail === customerEmail && 
+                 rowDate.includes(purchaseDate) && 
+                 rowAmount === purchaseAmount;
         });
         
-        if (existsInMemory || existsInSheets) {
-          console.log(`⏭️ SKIP: ${purchaseId} already exists in sheets or memory`);
-          continue; // Пропускаем существующие
+        if (existsInSheets) {
+          console.log(`⏭️ SKIP: Duplicate found - Email: ${customerEmail}, Date: ${purchaseDate}, Amount: ${purchaseAmount}`);
+          continue; // Пропускаем дубликаты
         }
         
         console.log(`🆕 NEW: ${purchaseId} - ADDING`);
