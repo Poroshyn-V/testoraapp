@@ -1231,34 +1231,19 @@ app.post('/api/sync-payments', async (req, res) => {
         const firstPayment = group.firstPayment;
         const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
 
-        // ИСПОЛЬЗУЕМ Customer ID как Purchase ID (как в существующих записях)
-        const purchaseId = customer?.id || 'unknown_customer';
+        // ПРОСТАЯ ЛОГИКА: используем timestamp для уникальности
+        const timestamp = firstPayment.created;
+        const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}_${timestamp}`;
 
-        // ПРОВЕРКА ДУБЛИКАТОВ: по Customer ID + date (основная проверка)
-        const customerEmail = customer?.email || firstPayment.receipt_email || 'N/A';
-        const purchaseDate = dateKey.split('_')[1];
-        const purchaseAmount = (group.totalAmount / 100).toFixed(2);
-        
+        // ПРОСТАЯ ПРОВЕРКА ДУБЛИКАТОВ: только по Purchase ID
         const existsInSheets = rows.some((row) => {
           const rowPurchaseId = row.get('Purchase ID') || '';
-          const rowEmail = row.get('Customer Email') || '';
-          const rowDate = row.get('Created Local (UTC+1)') || '';
-          const rowAmount = row.get('Total Amount') || '';
-          
-          // Основная проверка: Customer ID + дата
-          if (rowPurchaseId === purchaseId && rowDate.includes(purchaseDate)) {
-            return true;
-          }
-          
-          // Дополнительная проверка по email + date + amount
-          return rowEmail === customerEmail && 
-                 rowDate.includes(purchaseDate) && 
-                 rowAmount === purchaseAmount;
+          return rowPurchaseId === purchaseId;
         });
         
         if (existsInSheets) {
-          console.log(`⏭️ SKIP: Duplicate found - Email: ${customerEmail}, Date: ${purchaseDate}, Amount: ${purchaseAmount}`);
-          continue; // Пропускаем дубликаты
+          console.log(`⏭️ SKIP: ${purchaseId} already exists`);
+          continue; // Пропускаем существующие
         }
         
         console.log(`🆕 NEW: ${purchaseId} - ADDING (${group.payments.length} payments)`);
@@ -1308,24 +1293,7 @@ app.post('/api/sync-payments', async (req, res) => {
           try {
             console.log(`💾 Saving to Google Sheets: ${purchaseId}`);
             
-            // СТРОГАЯ ФИНАЛЬНАЯ ПРОВЕРКА ДУБЛИКАТОВ ПЕРЕД СОХРАНЕНИЕМ
-            const freshRows = await sheet.getRows();
-            const isDuplicate = freshRows.some((row) => {
-              const rowCustomerId = row.get('Customer ID') || '';
-              const rowEmail = row.get('Customer Email') || '';
-              const rowDate = row.get('Created Local (UTC+1)') || '';
-              const rowAmount = row.get('Total Amount') || '';
-              
-              return rowCustomerId === customer?.id && 
-                     rowEmail === customerEmail && 
-                     rowDate.includes(purchaseDate) && 
-                     rowAmount === purchaseAmount;
-            });
-            
-            if (isDuplicate) {
-              console.log(`🚫 BLOCKED: Duplicate found - Customer: ${customer?.id}, Email: ${customerEmail}, Date: ${purchaseDate}, Amount: ${purchaseAmount}`);
-              continue; // БЛОКИРУЕМ дубликаты
-            }
+            // УБИРАЕМ СЛОЖНУЮ ПРОВЕРКУ - используем только простую проверку выше
             
             // Добавляем задержку для избежания превышения лимитов Google Sheets API
             await new Promise(resolve => setTimeout(resolve, 1000)); // 1 секунда задержки
