@@ -1114,7 +1114,7 @@ app.post('/api/sync-payments', async (req, res) => {
             firstPayment: payment
           });
         }
-
+        
         const group = groupedPurchases.get(dateKey);
         group.payments.push(payment);
         group.totalAmount += payment.amount;
@@ -1256,6 +1256,8 @@ app.post('/api/sync-payments', async (req, res) => {
         processedPurchaseIds.add(purchaseId);
         
         console.log(`🆕 NEW: ${purchaseId} - ADDING (${group.payments.length} payments)`);
+        
+        // НЕ ОТПРАВЛЯЕМ УВЕДОМЛЕНИЯ СРАЗУ - сначала сохраняем в Google Sheets
 
         // ИСПРАВЛЕНО: GEO data - Country, City формат
         let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
