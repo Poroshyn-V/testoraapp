@@ -416,37 +416,7 @@ ${campaign_name}`;
 // Start server
 app.listen(ENV.PORT, () => {
   logger.info(`Server listening on port ${ENV.PORT}`);
-  console.log('🔄 Starting automatic sync every 2 minutes...');
-  
-  // First run after 30 seconds
-  setTimeout(async () => {
-    try {
-      console.log('🚀 Running initial sync...');
-      const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
-      method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      const result = await response.json();
-      console.log('Initial sync completed:', result);
-  } catch (error) {
-      console.error('Initial sync failed:', error.message);
-    }
-  }, 30000);
-  
-  // Then every 2 minutes
-  setInterval(async () => {
-    try {
-      console.log('🔄 Running scheduled sync...');
-      const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      const result = await response.json();
-      console.log('Scheduled sync completed:', result);
-  } catch (error) {
-      console.error('Scheduled sync failed:', error.message);
-    }
-  }, 2 * 60 * 1000); // 2 minutes
+  console.log('✅ Server started - manual sync only via /api/sync-payments endpoint');
 });
 
 export default app;
