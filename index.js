@@ -168,6 +168,9 @@ app.post('/api/sync-payments', async (req, res) => {
 
         // Create unique purchase ID (original format)
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${customer?.id || 'unknown'}`;
+        
+        console.log(`🔍 DEBUG: Created purchaseId: ${purchaseId}`);
+        console.log(`🔍 DEBUG: Customer ID: ${customer?.id}`);
 
         // Check if purchase already exists
         const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
