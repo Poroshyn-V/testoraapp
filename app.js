@@ -29,6 +29,296 @@ const existingPurchases = new Set();
 
 const stripe = new Stripe(ENV.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
 
+// Функция для детекции аномалий в продажах
+async function checkSalesAnomalies() {
+  try {
+    console.log('🚨 Проверяю аномалии в продажах...');
+    
+    if (!ENV.GOOGLE_SERVICE_EMAIL || !ENV.GOOGLE_SERVICE_PRIVATE_KEY || !ENV.GOOGLE_SHEETS_DOC_ID) {
+      console.log('❌ Google Sheets не настроен - пропускаю проверку аномалий');
+      return;
+    }
+    
+    const privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY;
+    const serviceAccountAuth = new JWT({
+      email: ENV.GOOGLE_SERVICE_EMAIL,
+      key: privateKey,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    
+    const doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
+    await doc.loadInfo();
+    const sheet = doc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+    
+    const now = new Date();
+    const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+    
+    // Анализируем последние 2 часа
+    const twoHoursAgo = new Date(utcPlus1.getTime() - 2 * 60 * 60 * 1000);
+    const recentPurchases = rows.filter(row => {
+      const createdLocal = row.get('Created Local (UTC+1)') || '';
+      const purchaseDate = new Date(createdLocal);
+      return purchaseDate >= twoHoursAgo;
+    });
+    
+    // Анализируем тот же период вчера
+    const yesterdayStart = new Date(utcPlus1);
+    yesterdayStart.setDate(utcPlus1.getDate() - 1);
+    yesterdayStart.setHours(utcPlus1.getHours() - 2, 0, 0, 0);
+    
+    const yesterdayEnd = new Date(yesterdayStart);
+    yesterdayEnd.setHours(yesterdayStart.getHours() + 2, 0, 0, 0);
+    
+    const yesterdayPurchases = rows.filter(row => {
+      const createdLocal = row.get('Created Local (UTC+1)') || '';
+      const purchaseDate = new Date(createdLocal);
+      return purchaseDate >= yesterdayStart && purchaseDate <= yesterdayEnd;
+    });
+    
+    console.log(`📊 Последние 2 часа: ${recentPurchases.length} покупок`);
+    console.log(`📊 Вчера в то же время: ${yesterdayPurchases.length} покупок`);
+    
+    if (yesterdayPurchases.length === 0) {
+      console.log('📭 Нет данных за вчера - пропускаю проверку аномалий');
+      return;
+    }
+    
+    // Рассчитываем изменение
+    const changePercent = ((recentPurchases.length - yesterdayPurchases.length) / yesterdayPurchases.length * 100);
+    const isSignificantDrop = changePercent <= -50; // Падение на 50% или больше
+    const isSignificantSpike = changePercent >= 100; // Рост на 100% или больше
+    
+    if (isSignificantDrop || isSignificantSpike) {
+      const alertType = isSignificantDrop ? '🚨 SALES DROP ALERT!' : '📈 SALES SPIKE ALERT!';
+      const emoji = isSignificantDrop ? '⚠️' : '🚀';
+      const direction = isSignificantDrop ? 'dropped' : 'spiked';
+      
+      const timeStr = utcPlus1.toLocaleTimeString('ru-RU', { 
+        timeZone: 'Europe/Berlin',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      
+      const alertText = `${alertType}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${emoji} Sales ${direction} ${Math.abs(changePercent).toFixed(1)}% in last 2 hours
+📊 Current: ${recentPurchases.length} sales vs ${yesterdayPurchases.length} yesterday
+🕐 Time: ${timeStr} UTC+1
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${isSignificantDrop ? '🔍 Check your campaigns!' : '🎉 Great performance!'}`;
+      
+      console.log('📤 Отправляю алерт об аномалии:', alertText);
+      
+      // Отправляем в Telegram
+      if (!ENV.NOTIFICATIONS_DISABLED && ENV.TELEGRAM_BOT_TOKEN && ENV.TELEGRAM_CHAT_ID) {
+        try {
+          await sendTelegram(alertText);
+          console.log('✅ Anomaly alert sent to Telegram');
+        } catch (error) {
+          console.error('❌ Ошибка отправки алерта об аномалии в Telegram:', error.message);
+        }
+      }
+      
+      // Отправляем в Slack
+      if (!ENV.NOTIFICATIONS_DISABLED && ENV.SLACK_BOT_TOKEN && ENV.SLACK_CHANNEL_ID) {
+        try {
+          await sendSlack(alertText);
+          console.log('✅ Anomaly alert sent to Slack');
+        } catch (error) {
+          console.error('❌ Ошибка отправки алерта об аномалии в Slack:', error.message);
+        }
+      }
+    } else {
+      console.log(`📊 Продажи в норме: ${changePercent.toFixed(1)}% изменение`);
+    }
+    
+  } catch (error) {
+    console.error('❌ Ошибка проверки аномалий:', error.message);
+  }
+}
+
+// Функция для еженедельных отчетов
+async function sendWeeklyReport() {
+  try {
+    console.log('📊 Генерирую еженедельный отчет...');
+    
+    if (!ENV.GOOGLE_SERVICE_EMAIL || !ENV.GOOGLE_SERVICE_PRIVATE_KEY || !ENV.GOOGLE_SHEETS_DOC_ID) {
+      console.log('❌ Google Sheets не настроен - пропускаю еженедельный отчет');
+      return;
+    }
+    
+    const privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY;
+    const serviceAccountAuth = new JWT({
+      email: ENV.GOOGLE_SERVICE_EMAIL,
+      key: privateKey,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    
+    const doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
+    await doc.loadInfo();
+    const sheet = doc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+    
+    // Получаем текущую неделю (понедельник - воскресенье)
+    const now = new Date();
+    const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+    const currentWeekStart = new Date(utcPlus1);
+    currentWeekStart.setDate(utcPlus1.getDate() - utcPlus1.getDay() + 1); // Понедельник
+    currentWeekStart.setHours(0, 0, 0, 0);
+    
+    const currentWeekEnd = new Date(currentWeekStart);
+    currentWeekEnd.setDate(currentWeekStart.getDate() + 6); // Воскресенье
+    currentWeekEnd.setHours(23, 59, 59, 999);
+    
+    // Получаем прошлую неделю для сравнения
+    const lastWeekStart = new Date(currentWeekStart);
+    lastWeekStart.setDate(currentWeekStart.getDate() - 7);
+    
+    const lastWeekEnd = new Date(currentWeekEnd);
+    lastWeekEnd.setDate(currentWeekEnd.getDate() - 7);
+    
+    console.log(`📅 Анализирую неделю: ${currentWeekStart.toISOString().split('T')[0]} - ${currentWeekEnd.toISOString().split('T')[0]}`);
+    console.log(`📅 Сравниваю с неделей: ${lastWeekStart.toISOString().split('T')[0]} - ${lastWeekEnd.toISOString().split('T')[0]}`);
+    
+    // Фильтруем покупки текущей недели
+    const currentWeekPurchases = rows.filter(row => {
+      const createdLocal = row.get('Created Local (UTC+1)') || '';
+      const purchaseDate = new Date(createdLocal);
+      return purchaseDate >= currentWeekStart && purchaseDate <= currentWeekEnd;
+    });
+    
+    // Фильтруем покупки прошлой недели
+    const lastWeekPurchases = rows.filter(row => {
+      const createdLocal = row.get('Created Local (UTC+1)') || '';
+      const purchaseDate = new Date(createdLocal);
+      return purchaseDate >= lastWeekStart && purchaseDate <= lastWeekEnd;
+    });
+    
+    console.log(`📊 Текущая неделя: ${currentWeekPurchases.length} покупок`);
+    console.log(`📊 Прошлая неделя: ${lastWeekPurchases.length} покупок`);
+    
+    if (currentWeekPurchases.length === 0) {
+      console.log('📭 Нет покупок за текущую неделю - пропускаю еженедельный отчет');
+      return;
+    }
+    
+    // Анализируем текущую неделю
+    let currentWeekRevenue = 0;
+    const currentWeekGeo = new Map();
+    const currentWeekCreatives = new Map();
+    const dailyStats = new Map();
+    
+    for (const purchase of currentWeekPurchases) {
+      const amount = parseFloat(purchase.get('Total Amount') || '0');
+      currentWeekRevenue += amount;
+      
+      // GEO анализ
+      const geo = purchase.get('GEO') || '';
+      const country = geo.split(',')[0].trim();
+      if (country) {
+        currentWeekGeo.set(country, (currentWeekGeo.get(country) || 0) + 1);
+      }
+      
+      // Креативы анализ
+      const adName = purchase.get('Ad Name') || '';
+      if (adName) {
+        currentWeekCreatives.set(adName, (currentWeekCreatives.get(adName) || 0) + 1);
+      }
+      
+      // Дневная статистика
+      const createdLocal = purchase.get('Created Local (UTC+1)') || '';
+      const day = createdLocal.split(' ')[0];
+      if (day) {
+        if (!dailyStats.has(day)) {
+          dailyStats.set(day, { sales: 0, revenue: 0 });
+        }
+        const dayStats = dailyStats.get(day);
+        dayStats.sales += 1;
+        dayStats.revenue += amount;
+      }
+    }
+    
+    // Анализируем прошлую неделю для сравнения
+    let lastWeekRevenue = 0;
+    for (const purchase of lastWeekPurchases) {
+      const amount = parseFloat(purchase.get('Total Amount') || '0');
+      lastWeekRevenue += amount;
+    }
+    
+    // Рассчитываем рост/падение
+    const revenueGrowth = lastWeekRevenue > 0 ? 
+      ((currentWeekRevenue - lastWeekRevenue) / lastWeekRevenue * 100).toFixed(1) : 0;
+    const salesGrowth = lastWeekPurchases.length > 0 ? 
+      ((currentWeekPurchases.length - lastWeekPurchases.length) / lastWeekPurchases.length * 100).toFixed(1) : 0;
+    
+    // ТОП-3 страны
+    const topCountries = Array.from(currentWeekGeo.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3);
+    
+    // ТОП-3 креатива
+    const topCreatives = Array.from(currentWeekCreatives.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3);
+    
+    // Дневная разбивка
+    const dailyBreakdown = Array.from(dailyStats.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([day, stats]) => {
+        const dayName = new Date(day).toLocaleDateString('en-US', { weekday: 'short' });
+        return `• ${dayName} (${day}): ${stats.sales} sales, $${stats.revenue.toFixed(2)}`;
+      });
+    
+    // Формируем отчет
+    const weekStartStr = currentWeekStart.toISOString().split('T')[0];
+    const weekEndStr = currentWeekEnd.toISOString().split('T')[0];
+    
+    const reportText = `📊 **Weekly Report (${weekStartStr} - ${weekEndStr})**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 **Total Revenue:** $${currentWeekRevenue.toFixed(2)}
+📈 **Revenue Growth:** ${revenueGrowth > 0 ? '+' : ''}${revenueGrowth}% vs last week
+🛒 **Total Sales:** ${currentWeekPurchases.length}
+📊 **Sales Growth:** ${salesGrowth > 0 ? '+' : ''}${salesGrowth}% vs last week
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🌍 **Top Countries:**
+${topCountries.map(([country, count], i) => `${i + 1}. ${country}: ${count} sales`).join('\n')}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎨 **Top Creatives:**
+${topCreatives.map(([creative, count], i) => `${i + 1}. ${creative}: ${count} sales`).join('\n')}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📅 **Daily Breakdown:**
+${dailyBreakdown.join('\n')}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏰ **Report generated:** ${utcPlus1.toLocaleString('ru-RU', { timeZone: 'Europe/Berlin' })} UTC+1`;
+    
+    console.log('📤 Отправляю еженедельный отчет:', reportText);
+    
+    // Отправляем в Telegram
+    if (!ENV.NOTIFICATIONS_DISABLED && ENV.TELEGRAM_BOT_TOKEN && ENV.TELEGRAM_CHAT_ID) {
+      try {
+        await sendTelegram(reportText);
+        console.log('✅ Weekly report sent to Telegram');
+      } catch (error) {
+        console.error('❌ Ошибка отправки еженедельного отчета в Telegram:', error.message);
+      }
+    }
+    
+    // Отправляем в Slack
+    if (!ENV.NOTIFICATIONS_DISABLED && ENV.SLACK_BOT_TOKEN && ENV.SLACK_CHANNEL_ID) {
+      try {
+        await sendSlack(reportText);
+        console.log('✅ Weekly report sent to Slack');
+      } catch (error) {
+        console.error('❌ Ошибка отправки еженедельного отчета в Slack:', error.message);
+      }
+    }
+    
+  } catch (error) {
+    console.error('❌ Ошибка генерации еженедельного отчета:', error.message);
+  }
+}
+
 // Функция для анализа креативов и отправки ТОП-5 алертов
 async function sendCreativeAlert() {
   try {
@@ -418,7 +708,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/memory-status', '/health', '/webhook/stripe']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/health', '/webhook/stripe']
 }));
 
 // Исправляем ошибки favicon
@@ -492,6 +782,42 @@ app.get('/api/creative-alert', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Creative alert error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Endpoint для ручного запуска еженедельного отчета
+app.get('/api/weekly-report', async (req, res) => {
+  try {
+    console.log('📊 Ручной запуск еженедельного отчета...');
+    await sendWeeklyReport();
+    res.json({
+      success: true,
+      message: 'Weekly report sent successfully'
+    });
+  } catch (error) {
+    console.error('❌ Weekly report error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Endpoint для ручной проверки аномалий
+app.get('/api/anomaly-check', async (req, res) => {
+  try {
+    console.log('🚨 Ручная проверка аномалий...');
+    await checkSalesAnomalies();
+    res.json({
+      success: true,
+      message: 'Anomaly check completed'
+    });
+  } catch (error) {
+    console.error('❌ Anomaly check error:', error.message);
     res.status(500).json({
       success: false,
       error: error.message
@@ -1224,6 +1550,36 @@ app.listen(ENV.PORT, () => {
                setInterval(() => {
                  checkCreativeAlertTime();
                }, 2 * 60 * 1000); // 2 минуты
+               
+               // ЕЖЕНЕДЕЛЬНЫЕ ОТЧЕТЫ каждое воскресенье в 20:00 UTC+1
+               console.log('📊 ЕЖЕНЕДЕЛЬНЫЕ ОТЧЕТЫ ВКЛЮЧЕНЫ - каждое воскресенье в 20:00 UTC+1');
+               
+               // Функция для проверки времени еженедельного отчета
+               function checkWeeklyReportTime() {
+                 const now = new Date();
+                 const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+                 const dayOfWeek = utcPlus1.getDay(); // 0 = воскресенье
+                 const hour = utcPlus1.getUTCHours();
+                 const minute = utcPlus1.getUTCMinutes();
+                 
+                 // Проверяем воскресенье в 20:00 UTC+1 (с допуском ±2 минуты)
+                 if (dayOfWeek === 0 && hour === 20 && minute >= 0 && minute <= 2) {
+                   console.log('📊 ВРЕМЯ ЕЖЕНЕДЕЛЬНОГО ОТЧЕТА:', utcPlus1.toISOString());
+                   sendWeeklyReport();
+                 }
+               }
+               
+               // Проверяем каждые 2 минуты
+               setInterval(() => {
+                 checkWeeklyReportTime();
+               }, 2 * 60 * 1000); // 2 минуты
+               
+               // АНОМАЛИИ МОНИТОРИНГ каждые 30 минут
+               console.log('🚨 АНОМАЛИИ МОНИТОРИНГ ВКЛЮЧЕН - каждые 30 минут');
+               setInterval(() => {
+                 console.log('🚨 ПРОВЕРКА АНОМАЛИЙ: Анализирую продажи...');
+                 checkSalesAnomalies();
+               }, 30 * 60 * 1000); // 30 минут
                
              } else {
                console.log('🛑 АВТОСИНХРОНИЗАЦИЯ ОТКЛЮЧЕНА');
