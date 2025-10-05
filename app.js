@@ -1460,7 +1460,7 @@ function formatTelegram(purchaseData, customerMetadata = {}) {
   const adset_name = m.adset_name || '';
   const campaign_name = m.campaign_name || m.utm_campaign || '';
 
-  // Новый формат уведомления в Telegram для покупок Stripe
+  // English format for Telegram notifications for Stripe purchases
   const lines = [
     `🟢 Purchase ${paymentId} was processed!`,
     `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
@@ -1477,7 +1477,7 @@ function formatTelegram(purchaseData, customerMetadata = {}) {
     ad_name && `• Ad: ${ad_name}`,
     adset_name && `• Adset: ${adset_name}`,
     campaign_name && `• Campaign: ${campaign_name}`
-  ].filter(Boolean); // Убираем пустые строки
+  ].filter(Boolean); // Remove empty lines
 
   let text = lines.join('\n');
   if (text.length > 4096) text = text.slice(0, 4093) + '...';
