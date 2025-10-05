@@ -183,27 +183,6 @@ app.post('/api/sync-payments', async (req, res) => {
           continue;
         }
         
-        // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: email + amount + date для предотвращения дублей от разных customer ID
-        const email = customer?.email || firstPayment.receipt_email || '';
-        const amount = (group.totalAmount / 100).toFixed(2);
-        const purchaseDate = new Date(firstPayment.created * 1000).toISOString().split('T')[0]; // YYYY-MM-DD
-        
-        const duplicateByEmail = rows.some((row) => {
-          const rowEmail = row.get('Customer Email') || '';
-          const rowAmount = row.get('Total Amount') || '';
-          const rowDate = row.get('Created Local (UTC+1)') || '';
-          const rowDateOnly = rowDate.split(' ')[0]; // Extract date part
-          
-          return rowEmail === email && 
-                 rowAmount === amount && 
-                 rowDateOnly === purchaseDate;
-        });
-        
-        if (duplicateByEmail) {
-          console.log(`⏭️ SKIP: Duplicate email+amount+date found: ${email} ${amount} ${purchaseDate}`);
-          continue; // Пропускаем дубли по email
-        }
-        
         console.log(`✅ NEW: ${purchaseId} - adding to sheets...`);
 
         // Format GEO data
