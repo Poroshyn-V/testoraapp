@@ -1242,17 +1242,12 @@ app.post('/api/sync-payments', async (req, res) => {
         // ПРОСТАЯ ЛОГИКА: используем timestamp для уникальности
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${(customer?.id || 'unknown').replace('cus_', '')}`;
 
-        // ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ДЛЯ ОТЛАДКИ ДУБЛЕЙ
-        console.log(`\n🔍 === ОТЛАДКА ДУБЛЕЙ ===`);
-        console.log(`🔍 Purchase ID: ${purchaseId}`);
-        console.log(`🔍 Customer ID: ${customer?.id}`);
-        console.log(`🔍 Group payments count: ${group.payments.length}`);
-        console.log(`🔍 Total rows in sheets: ${rows.length}`);
+        // УПРОЩЕННОЕ ЛОГИРОВАНИЕ ДЛЯ ОТЛАДКИ ДУБЛЕЙ
+        console.log(`🔍 Processing: ${purchaseId} (${group.payments.length} payments)`);
         
         // ПРОВЕРКА ДУБЛИКАТОВ: только по Purchase ID
         const existsInSheets = rows.some((row) => {
           const rowPurchaseId = row.get('Purchase ID') || '';
-          console.log(`🔍 Comparing with existing: ${rowPurchaseId}`);
           return rowPurchaseId === purchaseId;
         });
         
@@ -1270,8 +1265,6 @@ app.post('/api/sync-payments', async (req, res) => {
         // Отмечаем как обработанную
         processedPurchaseIds.add(purchaseId);
         console.log(`✅ NEW: ${purchaseId} - processing...`);
-        
-        console.log(`🆕 NEW: ${purchaseId} - ADDING (${group.payments.length} payments)`);
         
         // НЕ ОТПРАВЛЯЕМ УВЕДОМЛЕНИЯ СРАЗУ - сначала сохраняем в Google Sheets
 
@@ -1318,10 +1311,6 @@ app.post('/api/sync-payments', async (req, res) => {
         let savedToSheets = false;
         if (sheet) {
           try {
-            console.log(`💾 Saving to Google Sheets: ${purchaseId}`);
-            
-            // УБИРАЕМ СЛОЖНУЮ ПРОВЕРКУ - используем только простую проверку выше
-            
             // Добавляем задержку для избежания превышения лимитов Google Sheets API
             await new Promise(resolve => setTimeout(resolve, 1000)); // 1 секунда задержки
             
@@ -1354,7 +1343,7 @@ app.post('/api/sync-payments', async (req, res) => {
             
             // Сохраняем данные в Google Sheets
             await sheet.addRow(rowData);
-            console.log('✅ Payment data saved to Google Sheets:', purchaseId);
+            console.log(`✅ Saved: ${purchaseId}`);
             savedToSheets = true;
             
             // Добавляем задержку после сохранения для избежания превышения лимитов
@@ -1366,12 +1355,11 @@ app.post('/api/sync-payments', async (req, res) => {
             savedToSheets = false;
           }
         } else {
-          console.log('⚠️ Google Sheets not available, skipping save for:', purchaseId);
+          console.log(`⚠️ Google Sheets not available, skipping: ${purchaseId}`);
           savedToSheets = false;
         }
 
         // ВРЕМЕННО ОТКЛЮЧАЕМ УВЕДОМЛЕНИЯ - чтобы не спамить
-        console.log('🚫 Notifications temporarily disabled - no spam');
 
         // ИСПРАВЛЕНО: Увеличиваем счетчики ТОЛЬКО если покупка действительно сохранена
         if (savedToSheets) {
@@ -1579,11 +1567,7 @@ app.listen(ENV.PORT, () => {
         // Функция синхронизации - ИСПРАВЛЕННАЯ ЛОГИКА
         async function runSync() {
           try {
-            console.log('🤖 АВТОМАТИЧЕСКАЯ РАБОТА БОТА:');
-            console.log('   🔍 Проверяю Stripe на новые покупки...');
-            console.log('⏰ Время проверки:', new Date().toISOString());
-            console.log(`🔍 === СИНХРОНИЗАЦИЯ ЗАПУЩЕНА ===`);
-            console.log(`🔍 ProcessedPurchaseIds size: ${processedPurchaseIds.size}`);
+            console.log('🤖 Auto-sync: Checking for new purchases...');
             
             // ИСПРАВЛЕНО: Используем правильный endpoint с проверкой savedToSheets
             const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
@@ -1597,19 +1581,10 @@ app.listen(ENV.PORT, () => {
             }
             
             const result = await response.json();
-            console.log('✅ Auto-sync completed:', result);
-            
-            console.log(`🤖 АВТОМАТИЧЕСКАЯ РАБОТА ЗАВЕРШЕНА:`);
-            console.log(`   ✅ Обработано новых покупок: ${result.processed || 0}`);
-            console.log(`   📊 Всего групп в Stripe: ${result.total_groups || 0}`);
-            console.log(`   ⏰ Следующая проверка через 5 минут`);
-            console.log(`🔍 === СИНХРОНИЗАЦИЯ ЗАВЕРШЕНА ===`);
-            console.log(`🔍 ProcessedPurchaseIds size: ${processedPurchaseIds.size}`);
+            console.log(`✅ Auto-sync completed: ${result.processed || 0} new purchases processed`);
             
           } catch (error) {
             console.error('❌ Auto-sync failed:', error.message);
-            console.log(`🔍 === ОШИБКА СИНХРОНИЗАЦИИ ===`);
-            console.log(`🔍 ProcessedPurchaseIds size: ${processedPurchaseIds.size}`);
           }
         }
         

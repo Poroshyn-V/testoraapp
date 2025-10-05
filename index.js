@@ -169,17 +169,12 @@ app.post('/api/sync-payments', async (req, res) => {
         // Create unique purchase ID (old format without date)
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${(customer?.id || 'unknown').replace('cus_', '')}`;
 
-        // ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ДЛЯ ОТЛАДКИ ДУБЛЕЙ
-        console.log(`\n🔍 === ОТЛАДКА ДУБЛЕЙ ===`);
-        console.log(`🔍 Purchase ID: ${purchaseId}`);
-        console.log(`🔍 Customer ID: ${customer?.id}`);
-        console.log(`🔍 Group payments count: ${group.payments.length}`);
-        console.log(`🔍 Total rows in sheets: ${rows.length}`);
+        // УПРОЩЕННОЕ ЛОГИРОВАНИЕ ДЛЯ ОТЛАДКИ ДУБЛЕЙ
+        console.log(`🔍 Processing: ${purchaseId} (${group.payments.length} payments)`);
         
         // Check if purchase already exists
         const exists = rows.some((row) => {
           const rowPurchaseId = row.get('Purchase ID') || '';
-          console.log(`🔍 Comparing with existing: ${rowPurchaseId}`);
           return rowPurchaseId === purchaseId;
         });
 
@@ -188,7 +183,7 @@ app.post('/api/sync-payments', async (req, res) => {
           continue;
         }
         
-        console.log(`✅ NEW: ${purchaseId} - processing...`);
+        console.log(`✅ NEW: ${purchaseId} - adding to sheets...`);
 
         // Format GEO data
         let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
