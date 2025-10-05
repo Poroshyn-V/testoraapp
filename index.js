@@ -169,13 +169,26 @@ app.post('/api/sync-payments', async (req, res) => {
         // Create unique purchase ID (old format without date)
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${(customer?.id || 'unknown').replace('cus_', '')}`;
 
+        // ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ДЛЯ ОТЛАДКИ ДУБЛЕЙ
+        console.log(`\n🔍 === ОТЛАДКА ДУБЛЕЙ ===`);
+        console.log(`🔍 Purchase ID: ${purchaseId}`);
+        console.log(`🔍 Customer ID: ${customer?.id}`);
+        console.log(`🔍 Group payments count: ${group.payments.length}`);
+        console.log(`🔍 Total rows in sheets: ${rows.length}`);
+        
         // Check if purchase already exists
-        const exists = rows.some((row) => row.get('Purchase ID') === purchaseId);
+        const exists = rows.some((row) => {
+          const rowPurchaseId = row.get('Purchase ID') || '';
+          console.log(`🔍 Comparing with existing: ${rowPurchaseId}`);
+          return rowPurchaseId === purchaseId;
+        });
 
         if (exists) {
-          console.log(`⏭️ Purchase already exists: ${purchaseId}`);
+          console.log(`⏭️ SKIP: ${purchaseId} already exists in sheets`);
           continue;
         }
+        
+        console.log(`✅ NEW: ${purchaseId} - processing...`);
 
         // Format GEO data
         let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
@@ -220,7 +233,7 @@ app.post('/api/sync-payments', async (req, res) => {
           const telegramText = formatTelegram(purchaseData, customer?.metadata || {});
           await sendTelegram(telegramText);
           console.log('📱 Telegram notification sent for:', purchaseId);
-  } catch (error) {
+      } catch (error) {
           console.error('Error sending Telegram:', error.message);
         }
 
@@ -239,7 +252,7 @@ app.post('/api/sync-payments', async (req, res) => {
           amount: purchaseData.amount,
           payments_count: purchaseData.payment_count
         });
-      } catch (error) {
+  } catch (error) {
         console.error(`Error processing purchase ${dateKey}:`, error.message);
       }
     }

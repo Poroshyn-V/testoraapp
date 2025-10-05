@@ -1235,9 +1235,17 @@ app.post('/api/sync-payments', async (req, res) => {
         // ПРОСТАЯ ЛОГИКА: используем timestamp для уникальности
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${(customer?.id || 'unknown').replace('cus_', '')}`;
 
+        // ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ДЛЯ ОТЛАДКИ ДУБЛЕЙ
+        console.log(`\n🔍 === ОТЛАДКА ДУБЛЕЙ ===`);
+        console.log(`🔍 Purchase ID: ${purchaseId}`);
+        console.log(`🔍 Customer ID: ${customer?.id}`);
+        console.log(`🔍 Group payments count: ${group.payments.length}`);
+        console.log(`🔍 Total rows in sheets: ${rows.length}`);
+        
         // ПРОВЕРКА ДУБЛИКАТОВ: только по Purchase ID
         const existsInSheets = rows.some((row) => {
           const rowPurchaseId = row.get('Purchase ID') || '';
+          console.log(`🔍 Comparing with existing: ${rowPurchaseId}`);
           return rowPurchaseId === purchaseId;
         });
         
@@ -1254,6 +1262,7 @@ app.post('/api/sync-payments', async (req, res) => {
         
         // Отмечаем как обработанную
         processedPurchaseIds.add(purchaseId);
+        console.log(`✅ NEW: ${purchaseId} - processing...`);
         
         console.log(`🆕 NEW: ${purchaseId} - ADDING (${group.payments.length} payments)`);
         
@@ -1566,6 +1575,8 @@ app.listen(ENV.PORT, () => {
             console.log('🤖 АВТОМАТИЧЕСКАЯ РАБОТА БОТА:');
             console.log('   🔍 Проверяю Stripe на новые покупки...');
             console.log('⏰ Время проверки:', new Date().toISOString());
+            console.log(`🔍 === СИНХРОНИЗАЦИЯ ЗАПУЩЕНА ===`);
+            console.log(`🔍 ProcessedPurchaseIds size: ${processedPurchaseIds.size}`);
             
             // ИСПРАВЛЕНО: Используем правильный endpoint с проверкой savedToSheets
             const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
@@ -1585,9 +1596,13 @@ app.listen(ENV.PORT, () => {
             console.log(`   ✅ Обработано новых покупок: ${result.processed || 0}`);
             console.log(`   📊 Всего групп в Stripe: ${result.total_groups || 0}`);
             console.log(`   ⏰ Следующая проверка через 5 минут`);
+            console.log(`🔍 === СИНХРОНИЗАЦИЯ ЗАВЕРШЕНА ===`);
+            console.log(`🔍 ProcessedPurchaseIds size: ${processedPurchaseIds.size}`);
             
           } catch (error) {
             console.error('❌ Auto-sync failed:', error.message);
+            console.log(`🔍 === ОШИБКА СИНХРОНИЗАЦИИ ===`);
+            console.log(`🔍 ProcessedPurchaseIds size: ${processedPurchaseIds.size}`);
           }
         }
         
