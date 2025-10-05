@@ -29,6 +29,119 @@ const existingPurchases = new Set();
 
 const stripe = new Stripe(ENV.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
 
+// Функция для анализа креативов и отправки ТОП-5 алертов
+async function sendCreativeAlert() {
+  try {
+    console.log('🎨 Анализирую креативы за сегодня...');
+    
+    if (!ENV.GOOGLE_SERVICE_EMAIL || !ENV.GOOGLE_SERVICE_PRIVATE_KEY || !ENV.GOOGLE_SHEETS_DOC_ID) {
+      console.log('❌ Google Sheets не настроен - пропускаю анализ креативов');
+      return;
+    }
+    
+    const privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY;
+    const serviceAccountAuth = new JWT({
+      email: ENV.GOOGLE_SERVICE_EMAIL,
+      key: privateKey,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    
+    const doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
+    await doc.loadInfo();
+    const sheet = doc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+    
+    // Получаем сегодняшнюю дату в UTC+1
+    const today = new Date();
+    const utcPlus1 = new Date(today.getTime() + 60 * 60 * 1000);
+    const todayStr = utcPlus1.toISOString().split('T')[0]; // YYYY-MM-DD
+    
+    console.log(`📅 Анализирую креативы за ${todayStr} (UTC+1)`);
+    
+    // Фильтруем покупки за сегодня
+    const todayPurchases = rows.filter(row => {
+      const createdLocal = row.get('Created Local (UTC+1)') || '';
+      return createdLocal.includes(todayStr);
+    });
+    
+    console.log(`📊 Найдено ${todayPurchases.length} покупок за сегодня`);
+    
+    if (todayPurchases.length === 0) {
+      console.log('📭 Нет покупок за сегодня - пропускаю креатив алерт');
+      return;
+    }
+    
+    // Анализируем креативы (ad_name)
+    const creativeStats = new Map();
+    
+    for (const purchase of todayPurchases) {
+      const adName = purchase.get('Ad Name') || '';
+      if (adName && adName.trim() !== '') {
+        if (creativeStats.has(adName)) {
+          creativeStats.set(adName, creativeStats.get(adName) + 1);
+        } else {
+          creativeStats.set(adName, 1);
+        }
+      }
+    }
+    
+    if (creativeStats.size === 0) {
+      console.log('📭 Нет креативов за сегодня - пропускаю креатив алерт');
+      return;
+    }
+    
+    // Сортируем по количеству покупок
+    const sortedCreatives = Array.from(creativeStats.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+    
+    // Формируем ТОП-5 креативов
+    const top5 = [];
+    for (let i = 0; i < sortedCreatives.length; i++) {
+      const [creative, count] = sortedCreatives[i];
+      const rank = i + 1;
+      top5.push(`${rank}. ${creative} - ${count} покупок`);
+    }
+    
+    // Получаем текущее время UTC+1
+    const now = new Date();
+    const utcPlus1Now = new Date(now.getTime() + 60 * 60 * 1000);
+    const timeStr = utcPlus1Now.toLocaleTimeString('ru-RU', { 
+      timeZone: 'Europe/Berlin',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+    
+    // Формируем сообщение
+    const alertText = `🎨 **TOP-5 Creative Performance for today (${todayStr})**\n\n${top5.join('\n')}\n\n📈 Total purchases: ${todayPurchases.length}\n⏰ Report time: ${timeStr} UTC+1`;
+    
+    console.log('📤 Отправляю креатив алерт:', alertText);
+    
+    // Отправляем в Telegram
+    if (!ENV.NOTIFICATIONS_DISABLED && ENV.TELEGRAM_BOT_TOKEN && ENV.TELEGRAM_CHAT_ID) {
+      try {
+        await sendTelegram(alertText);
+        console.log('✅ Creative alert sent to Telegram');
+      } catch (error) {
+        console.error('❌ Ошибка отправки креатив алерта в Telegram:', error.message);
+      }
+    }
+    
+    // Отправляем в Slack
+    if (!ENV.NOTIFICATIONS_DISABLED && ENV.SLACK_BOT_TOKEN && ENV.SLACK_CHANNEL_ID) {
+      try {
+        await sendSlack(alertText);
+        console.log('✅ Creative alert sent to Slack');
+      } catch (error) {
+        console.error('❌ Ошибка отправки креатив алерта в Slack:', error.message);
+      }
+    }
+    
+  } catch (error) {
+    console.error('❌ Ошибка анализа креативов:', error.message);
+  }
+}
+
 // Функция для анализа GEO данных и отправки ТОП-3 алертов
 async function sendGeoAlert() {
   try {
@@ -305,7 +418,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/memory-status', '/health', '/webhook/stripe']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/memory-status', '/health', '/webhook/stripe']
 }));
 
 // Исправляем ошибки favicon
@@ -361,6 +474,24 @@ app.get('/api/geo-alert', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ GEO alert error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Endpoint для ручного запуска креатив алерта
+app.get('/api/creative-alert', async (req, res) => {
+  try {
+    console.log('🎨 Ручной запуск креатив алерта...');
+    await sendCreativeAlert();
+    res.json({
+      success: true,
+      message: 'Creative alert sent successfully'
+    });
+  } catch (error) {
+    console.error('❌ Creative alert error:', error.message);
     res.status(500).json({
       success: false,
       error: error.message
@@ -1070,6 +1201,29 @@ app.listen(ENV.PORT, () => {
                  console.log('🌍 АВТОМАТИЧЕСКИЙ GEO АНАЛИЗ: Анализирую ТОП-3 стран...');
                  sendGeoAlert();
                }, 60 * 60 * 1000); // 60 минут
+               
+               // КРЕАТИВ АЛЕРТЫ 2 раза в день (10:00 и 22:00 UTC+1)
+               console.log('🎨 КРЕАТИВ АЛЕРТЫ ВКЛЮЧЕНЫ - 2 раза в день (10:00 и 22:00 UTC+1)');
+               
+               // Функция для проверки времени и отправки креатив алерта
+               function checkCreativeAlertTime() {
+                 const now = new Date();
+                 const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+                 const hour = utcPlus1.getUTCHours();
+                 const minute = utcPlus1.getUTCMinutes();
+                 
+                 // Проверяем 10:00 и 22:00 UTC+1 (с допуском ±2 минуты)
+                 if ((hour === 10 && minute >= 0 && minute <= 2) || 
+                     (hour === 22 && minute >= 0 && minute <= 2)) {
+                   console.log('🎨 ВРЕМЯ КРЕАТИВ АЛЕРТА:', utcPlus1.toISOString());
+                   sendCreativeAlert();
+                 }
+               }
+               
+               // Проверяем каждые 2 минуты
+               setInterval(() => {
+                 checkCreativeAlertTime();
+               }, 2 * 60 * 1000); // 2 минуты
                
              } else {
                console.log('🛑 АВТОСИНХРОНИЗАЦИЯ ОТКЛЮЧЕНА');
