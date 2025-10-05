@@ -101,7 +101,7 @@ app.post('/api/sync-payments', async (req, res) => {
     const successfulPayments = payments.data.filter(p => p.status === 'succeeded' && p.customer);
     console.log(`📊 Found ${successfulPayments.length} successful payments`);
     
-    // Group purchases by customer + date
+    // Group purchases by customer + date (fixed logic)
     const groupedPurchases = new Map();
     
     for (const payment of successfulPayments) {
@@ -139,6 +139,7 @@ app.post('/api/sync-payments', async (req, res) => {
     
     let newPurchases = 0;
     const processedPurchases = [];
+    const processedPurchaseIds = new Set(); // Prevent duplicates within single run
 
     // Initialize Google Sheets
     const serviceAccountAuth = new JWT({
@@ -169,13 +170,22 @@ app.post('/api/sync-payments', async (req, res) => {
         // Create unique purchase ID (simple format)
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${customer?.id || 'unknown'}`;
 
-        // Check if purchase already exists
+        // Check if purchase already exists in Google Sheets
         const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
 
         if (exists) {
-          console.log(`⏭️ Purchase already exists: ${purchaseId}`);
+          console.log(`⏭️ Purchase already exists in sheets: ${purchaseId}`);
           continue;
         }
+
+        // Check if purchase already processed in this run
+        if (processedPurchaseIds.has(purchaseId)) {
+          console.log(`⏭️ Purchase already processed in this run: ${purchaseId}`);
+          continue;
+        }
+
+        // Mark as processed
+        processedPurchaseIds.add(purchaseId);
 
         // Format GEO data
         let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
@@ -283,9 +293,9 @@ async function sendTelegram(text) {
     const result = await response.json();
     if (result.ok) {
       console.log('Telegram notification sent successfully');
-    } else {
+              } else {
       console.error('Telegram API error:', result.description);
-    }
+            }
           } catch (error) {
     console.error('Error sending Telegram notification:', error);
   }
@@ -369,10 +379,10 @@ async function sendSlack(text) {
     
     if (result.ok) {
       console.log('✅ Slack notification sent successfully');
-              } else {
+      } else {
       console.error('❌ Slack API error:', result.error);
-            }
-          } catch (error) {
+    }
+  } catch (error) {
     console.error('❌ Error sending Slack notification:', error);
   }
 }
