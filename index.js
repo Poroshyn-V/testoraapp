@@ -166,7 +166,7 @@ app.post('/api/sync-payments', async (req, res) => {
           const firstPayment = group.firstPayment;
         const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
 
-        // Create unique purchase ID
+        // Create unique purchase ID (simple format for compatibility)
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
         // Check if purchase already exists
