@@ -160,6 +160,9 @@ app.post('/api/sync-payments', async (req, res) => {
     const rows = await sheet.getRows();
     console.log(`📋 Existing rows in sheet: ${rows.length}`);
 
+    // Create a Set of existing purchase IDs for faster lookup
+    const existingPurchaseIds = new Set(rows.map(row => row.get('purchase_id')));
+
     for (const [dateKey, group] of groupedPurchases.entries()) {
       try {
           const customer = group.customer;
@@ -169,13 +172,13 @@ app.post('/api/sync-payments', async (req, res) => {
         // Create unique purchase ID (original format to match existing records)
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
-        // Check if purchase already exists
-        const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
-
-        if (exists) {
+        // Check if purchase already exists using Set for faster lookup
+        if (existingPurchaseIds.has(purchaseId)) {
           console.log(`⏭️ Purchase already exists: ${purchaseId}`);
           continue;
         }
+
+        console.log(`✅ Processing new purchase: ${purchaseId}`);
 
         // Format GEO data
         let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
