@@ -101,7 +101,7 @@ app.post('/api/sync-payments', async (req, res) => {
     const successfulPayments = payments.data.filter(p => p.status === 'succeeded' && p.customer);
     console.log(`📊 Found ${successfulPayments.length} successful payments`);
     
-    // Group purchases by customer + date (fixed logic)
+    // Group purchases by customer + date
     const groupedPurchases = new Map();
     
     for (const payment of successfulPayments) {
@@ -139,7 +139,6 @@ app.post('/api/sync-payments', async (req, res) => {
     
     let newPurchases = 0;
     const processedPurchases = [];
-    const processedPurchaseIds = new Set(); // Prevent duplicates within single run
 
     // Initialize Google Sheets
     const serviceAccountAuth = new JWT({
@@ -167,25 +166,17 @@ app.post('/api/sync-payments', async (req, res) => {
           const firstPayment = group.firstPayment;
         const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
 
-        // Create unique purchase ID (simple format)
-        const purchaseId = `purchase_${customer?.id || 'unknown'}_${customer?.id || 'unknown'}`;
+        // Create unique purchase ID (with timestamp to match existing records)
+        const timestamp = firstPayment.created;
+        const purchaseId = `purchase_${customer?.id || 'unknown'}_${customer?.id || 'unknown'}_${timestamp}`;
 
-        // Check if purchase already exists in Google Sheets
+        // Check if purchase already exists
         const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
 
         if (exists) {
-          console.log(`⏭️ Purchase already exists in sheets: ${purchaseId}`);
+          console.log(`⏭️ Purchase already exists: ${purchaseId}`);
           continue;
         }
-
-        // Check if purchase already processed in this run
-        if (processedPurchaseIds.has(purchaseId)) {
-          console.log(`⏭️ Purchase already processed in this run: ${purchaseId}`);
-          continue;
-        }
-
-        // Mark as processed
-        processedPurchaseIds.add(purchaseId);
 
         // Format GEO data
         let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
