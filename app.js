@@ -1210,10 +1210,11 @@ app.post('/api/sync-payments', async (req, res) => {
         // ИСПОЛЬЗУЕМ Payment Intent ID как уникальный идентификатор
         const purchaseId = payment.id; // Это уникальный ID от Stripe
 
-        // ПРОВЕРКА ДУБЛИКАТОВ: по Payment Intent ID
+        // ПРОВЕРКА ДУБЛИКАТОВ: по Payment Intent ID (проверяем оба поля)
         const existsInSheets = rows.some((row) => {
           const rowPurchaseId = row.get('Purchase ID') || '';
-          return rowPurchaseId === purchaseId;
+          const rowPaymentIntentId = row.get('Payment Intent ID') || '';
+          return rowPurchaseId === purchaseId || rowPaymentIntentId === payment.id;
         });
         
         if (existsInSheets) {
@@ -1280,7 +1281,8 @@ app.post('/api/sync-payments', async (req, res) => {
             const utcPlus1Formatted = utcPlus1.toISOString().replace('T', ' ').replace('Z', ' UTC+1');
             
             const rowData = {
-              'Purchase ID': purchaseData.purchase_id,
+              'Purchase ID': purchaseData.purchase_id, // Теперь это Payment Intent ID
+              'Payment Intent ID': payment.id, // Дополнительное поле для ясности
               'Total Amount': purchaseData.amount,
               'Currency': purchaseData.currency,
               'Status': purchaseData.payment_status,
