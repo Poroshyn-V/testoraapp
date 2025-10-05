@@ -1087,8 +1087,41 @@ app.post('/api/sync-payments', async (req, res) => {
     const successfulPayments = payments.data.filter(p => p.status === 'succeeded' && p.customer);
     console.log(`📊 Found ${successfulPayments.length} successful payments`);
     
-    // НЕ ГРУППИРУЕМ - обрабатываем каждый платеж отдельно
-    console.log(`📊 Обрабатываем ${successfulPayments.length} платежей отдельно`);
+    // ГРУППИРУЕМ ПОКУПКИ: по customer + date (основной + доп продукты)
+    const groupedPurchases = new Map();
+    
+    for (const payment of successfulPayments) {
+      if (payment.customer) {
+        let customer = null;
+        try {
+          customer = await stripe.customers.retrieve(payment.customer);
+          if (customer && 'deleted' in customer && customer.deleted) {
+            customer = null;
+          }
+        } catch (err) {
+          console.error(`Error retrieving customer ${payment.customer}:`, err);
+        }
+
+        const customerId = customer?.id || 'unknown_customer';
+        const purchaseDate = new Date(payment.created * 1000);
+        const dateKey = `${customerId}_${purchaseDate.toISOString().split('T')[0]}`;
+
+        if (!groupedPurchases.has(dateKey)) {
+          groupedPurchases.set(dateKey, {
+            customer,
+            payments: [],
+            totalAmount: 0,
+            firstPayment: payment
+          });
+        }
+
+        const group = groupedPurchases.get(dateKey);
+        group.payments.push(payment);
+        group.totalAmount += payment.amount;
+      }
+    }
+
+    console.log(`📊 Сгруппировано покупок: ${groupedPurchases.size}`);
 
     let newPurchases = 0;
     const processedPurchases = [];
@@ -1186,43 +1219,33 @@ app.post('/api/sync-payments', async (req, res) => {
     }
 
     // ПРОСТАЯ РАБОЧАЯ ЛОГИКА С RENDER: проверяем каждую покупку индивидуально
-    console.log(`✅ Processing ${successfulPayments.length} Stripe payments against ${rows.length} existing rows in Google Sheets`);
+    console.log(`✅ Processing ${groupedPurchases.size} grouped purchases against ${rows.length} existing rows in Google Sheets`);
     
     // Упрощенная отладка Google Sheets
     console.log(`📊 Google Sheets: ${rows.length} строк, колонки: ${sheet.headerValues.length}`);
 
-    // ПРОСТАЯ ЛОГИКА: обрабатываем каждый платеж отдельно
-    for (const payment of successfulPayments) {
+    // ПРОСТАЯ ЛОГИКА: обрабатываем каждую группу покупок
+    for (const [dateKey, group] of groupedPurchases.entries()) {
       try {
-        // Получаем данные клиента
-        let customer = null;
-        try {
-          customer = await stripe.customers.retrieve(payment.customer);
-          if (customer && 'deleted' in customer && customer.deleted) {
-            customer = null;
-          }
-        } catch (err) {
-          console.error(`Error retrieving customer ${payment.customer}:`, err);
-        }
+        const customer = group.customer;
+        const firstPayment = group.firstPayment;
+        const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
 
-        const m = { ...payment.metadata, ...(customer?.metadata || {}) };
+        // ИСПОЛЬЗУЕМ уникальный ID группы (customer + date)
+        const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
-        // ИСПОЛЬЗУЕМ Payment Intent ID как уникальный идентификатор
-        const purchaseId = payment.id; // Это уникальный ID от Stripe
-
-        // ПРОВЕРКА ДУБЛИКАТОВ: по Payment Intent ID (проверяем оба поля)
+        // ПРОВЕРКА ДУБЛИКАТОВ: по Purchase ID
         const existsInSheets = rows.some((row) => {
           const rowPurchaseId = row.get('Purchase ID') || '';
-          const rowPaymentIntentId = row.get('Payment Intent ID') || '';
-          return rowPurchaseId === purchaseId || rowPaymentIntentId === payment.id;
+          return rowPurchaseId === purchaseId;
         });
         
         if (existsInSheets) {
-          console.log(`⏭️ SKIP: Payment Intent ${purchaseId} already exists in sheets`);
+          console.log(`⏭️ SKIP: ${purchaseId} already exists in sheets`);
           continue; // Пропускаем существующие
         }
         
-        console.log(`🆕 NEW: Payment Intent ${purchaseId} - ADDING`);
+        console.log(`🆕 NEW: ${purchaseId} - ADDING (${group.payments.length} payments)`);
 
         // ИСПРАВЛЕНО: GEO data - Country, City формат
         let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
@@ -1232,12 +1255,12 @@ app.post('/api/sync-payments', async (req, res) => {
         // GEO формат: Country, City
 
         const purchaseData = {
-          created_at: new Date(payment.created * 1000).toISOString(),
+          created_at: new Date(firstPayment.created * 1000).toISOString(),
           purchase_id: purchaseId,
           payment_status: 'succeeded',
-          amount: (payment.amount / 100).toFixed(2),
-          currency: (payment.currency || 'usd').toUpperCase(),
-          email: customer?.email || payment.receipt_email || 'N/A',
+          amount: (group.totalAmount / 100).toFixed(2),
+          currency: (firstPayment.currency || 'usd').toUpperCase(),
+          email: customer?.email || firstPayment.receipt_email || 'N/A',
           country: country,
           gender: m.gender || '',
           age: m.age || '',
@@ -1254,11 +1277,11 @@ app.post('/api/sync-payments', async (req, res) => {
           campaign_name: m.campaign_name || m.utm_campaign || '',
           web_campaign: m.web_campaign || '',
           customer_id: customer?.id || 'N/A',
-          client_reference_id: payment.client_secret || '',
-          mode: payment.setup_future_usage ? 'setup' : 'payment',
-          status: payment.status || '',
+          client_reference_id: firstPayment.client_secret || '',
+          mode: firstPayment.setup_future_usage ? 'setup' : 'payment',
+          status: firstPayment.status || '',
           raw_metadata_json: JSON.stringify(m),
-          payment_count: 1 // Каждый платеж = 1 покупка
+          payment_count: group.payments.length // Количество платежей в группе
         };
 
         // Валидация данных покупки
@@ -1281,8 +1304,8 @@ app.post('/api/sync-payments', async (req, res) => {
             const utcPlus1Formatted = utcPlus1.toISOString().replace('T', ' ').replace('Z', ' UTC+1');
             
             const rowData = {
-              'Purchase ID': purchaseData.purchase_id, // Теперь это Payment Intent ID
-              'Payment Intent ID': payment.id, // Дополнительное поле для ясности
+              'Purchase ID': purchaseData.purchase_id, // Уникальный ID группы
+              'Payment Intent IDs': group.payments.map(p => p.id).join(', '), // Все Payment Intent ID в группе
               'Total Amount': purchaseData.amount,
               'Currency': purchaseData.currency,
               'Status': purchaseData.payment_status,
@@ -1329,17 +1352,19 @@ app.post('/api/sync-payments', async (req, res) => {
             purchase_id: purchaseId,
             email: purchaseData.email,
             amount: purchaseData.amount,
-            payment_intent_id: payment.id
+            payment_count: purchaseData.payment_count,
+            payment_intent_ids: group.payments.map(p => p.id)
           });
         }
       } catch (error) {
-        console.error(`Error processing payment ${payment.id}:`, error.message);
+        console.error(`Error processing purchase ${dateKey}:`, error.message);
       }
     }
     
     res.json({
       success: true,
-      message: `Sync completed! Processed ${newPurchases} payment(s)`,
+      message: `Sync completed! Processed ${newPurchases} purchase(s)`,
+      total_groups: groupedPurchases.size,
       total_payments: successfulPayments.length,
       processed: newPurchases,
       purchases: processedPurchases
