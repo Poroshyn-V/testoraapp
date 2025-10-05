@@ -1125,6 +1125,7 @@ app.post('/api/sync-payments', async (req, res) => {
 
     let newPurchases = 0;
     const processedPurchases = [];
+    const processedPurchaseIds = new Set(); // Защита от дублей в рамках одного запуска
 
     // Initialize Google Sheets
     console.log('🔍 Google Sheets debug info:');
@@ -1234,22 +1235,25 @@ app.post('/api/sync-payments', async (req, res) => {
         // ПРОСТАЯ ЛОГИКА: используем timestamp для уникальности
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${(customer?.id || 'unknown').replace('cus_', '')}`;
 
-        // ПРОСТАЯ ПРОВЕРКА ДУБЛИКАТОВ: только по Purchase ID
-        console.log(`🔍 Checking purchaseId: ${purchaseId}`);
-        console.log(`📊 Total rows to check: ${rows.length}`);
-        
+        // ПРОВЕРКА ДУБЛИКАТОВ: только по Purchase ID
         const existsInSheets = rows.some((row) => {
           const rowPurchaseId = row.get('Purchase ID') || '';
-          console.log(`🔍 Comparing with: ${rowPurchaseId}`);
           return rowPurchaseId === purchaseId;
         });
         
         if (existsInSheets) {
-          console.log(`⏭️ SKIP: ${purchaseId} already exists`);
+          console.log(`⏭️ SKIP: ${purchaseId} already exists in sheets`);
           continue; // Пропускаем существующие
         }
         
-        console.log(`✅ NEW: ${purchaseId} - adding to sheets`);
+        // Дополнительная проверка: не обрабатывали ли мы уже эту покупку в этом запуске
+        if (processedPurchaseIds.has(purchaseId)) {
+          console.log(`⏭️ SKIP: ${purchaseId} already processed in this run`);
+          continue;
+        }
+        
+        // Отмечаем как обработанную
+        processedPurchaseIds.add(purchaseId);
         
         console.log(`🆕 NEW: ${purchaseId} - ADDING (${group.payments.length} payments)`);
 
