@@ -1236,6 +1236,23 @@ app.post('/api/sync-payments', async (req, res) => {
             // Добавляем задержку для избежания превышения лимитов Google Sheets API
             await new Promise(resolve => setTimeout(resolve, 1000)); // 1 секунда задержки
             
+            // ФИНАЛЬНАЯ ПРОВЕРКА: загружаем свежие данные и проверяем дубликаты
+            const freshRows = await sheet.getRows();
+            const isDuplicate = freshRows.some((row) => {
+              const rowEmail = row.get('Customer Email') || '';
+              const rowDate = row.get('Created Local (UTC+1)') || '';
+              const rowAmount = row.get('Total Amount') || '';
+              
+              return rowEmail === customerEmail && 
+                     rowDate.includes(purchaseDate) && 
+                     rowAmount === purchaseAmount;
+            });
+            
+            if (isDuplicate) {
+              console.log(`⏭️ SKIP: Final duplicate check - Email: ${customerEmail}, Date: ${purchaseDate}, Amount: ${purchaseAmount}`);
+              continue; // Пропускаем дубликаты
+            }
+            
             // Создаем данные в том же формате что уже есть в таблице
             // ИСПРАВЛЕНО: ПРАВИЛЬНОЕ UTC+1 ВРЕМЯ
             const utcTime = new Date(purchaseData.created_at);
