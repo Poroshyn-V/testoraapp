@@ -1231,9 +1231,8 @@ app.post('/api/sync-payments', async (req, res) => {
         const firstPayment = group.firstPayment;
         const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
 
-        // Create unique purchase ID with timestamp to ensure uniqueness
-        const timestamp = firstPayment.created;
-        const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}_${timestamp}`;
+        // Create simple purchase ID without timestamp to avoid duplicates
+        const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
         // ПРОСТАЯ ПРОВЕРКА ДУБЛИКАТОВ: только по Purchase ID (как было раньше)
         const existsInMemory = existingPurchases.has(purchaseId);
