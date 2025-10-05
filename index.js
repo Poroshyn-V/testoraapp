@@ -166,11 +166,13 @@ app.post('/api/sync-payments', async (req, res) => {
           const firstPayment = group.firstPayment;
         const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
 
-        // Create unique purchase ID (original format)
-        const purchaseId = `purchase_${customer?.id || 'unknown'}_${customer?.id || 'unknown'}`;
+        // Create unique purchase ID (with timestamp to match existing records)
+        const timestamp = firstPayment.created;
+        const purchaseId = `purchase_${customer?.id || 'unknown'}_${customer?.id || 'unknown'}_${timestamp}`;
         
         console.log(`🔍 DEBUG: Created purchaseId: ${purchaseId}`);
         console.log(`🔍 DEBUG: Customer ID: ${customer?.id}`);
+        console.log(`🔍 DEBUG: Timestamp: ${timestamp}`);
 
         // Check if purchase already exists
         const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
