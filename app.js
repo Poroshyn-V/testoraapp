@@ -1308,7 +1308,24 @@ app.post('/api/sync-payments', async (req, res) => {
           try {
             console.log(`💾 Saving to Google Sheets: ${purchaseId}`);
             
-            // УБИРАЕМ ФИНАЛЬНУЮ ПРОВЕРКУ - используем только простую проверку выше
+            // СТРОГАЯ ФИНАЛЬНАЯ ПРОВЕРКА ДУБЛИКАТОВ ПЕРЕД СОХРАНЕНИЕМ
+            const freshRows = await sheet.getRows();
+            const isDuplicate = freshRows.some((row) => {
+              const rowCustomerId = row.get('Customer ID') || '';
+              const rowEmail = row.get('Customer Email') || '';
+              const rowDate = row.get('Created Local (UTC+1)') || '';
+              const rowAmount = row.get('Total Amount') || '';
+              
+              return rowCustomerId === customer?.id && 
+                     rowEmail === customerEmail && 
+                     rowDate.includes(purchaseDate) && 
+                     rowAmount === purchaseAmount;
+            });
+            
+            if (isDuplicate) {
+              console.log(`🚫 BLOCKED: Duplicate found - Customer: ${customer?.id}, Email: ${customerEmail}, Date: ${purchaseDate}, Amount: ${purchaseAmount}`);
+              continue; // БЛОКИРУЕМ дубликаты
+            }
             
             // Добавляем задержку для избежания превышения лимитов Google Sheets API
             await new Promise(resolve => setTimeout(resolve, 1000)); // 1 секунда задержки
