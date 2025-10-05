@@ -167,7 +167,7 @@ app.post('/api/sync-payments', async (req, res) => {
         const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
 
         // Create unique purchase ID (old format without date)
-        const purchaseId = `purchase_${customer?.id || 'unknown'}_${(customer?.id || 'unknown').replace('cus_', '')}`;
+        const purchaseId = `s_${(customer?.id || 'unknown').replace('cus_', '')}_${(customer?.id || 'unknown').replace('cus_', '')}`;
 
         // Check if purchase already exists
         const exists = rows.some((row) => row.get('Purchase ID') === purchaseId);
