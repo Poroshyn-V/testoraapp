@@ -27,6 +27,9 @@ const ENV = {
 // Простое хранилище для запоминания существующих покупок
 const existingPurchases = new Set();
 
+// Глобальное хранилище для отслеживания обработанных покупок в рамках одного запуска
+const processedPurchaseIds = new Set();
+
 const stripe = new Stripe(ENV.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
 
 // Функция для детекции аномалий в продажах
@@ -1065,6 +1068,10 @@ app.post('/api/sync-payments', async (req, res) => {
     await loadExistingPurchases();
     console.log(`📝 В памяти сейчас: ${existingPurchases.size} покупок`);
     
+    // Очищаем глобальное хранилище обработанных покупок для нового запуска
+    processedPurchaseIds.clear();
+    console.log(`🔄 Очищено processedPurchaseIds для нового запуска`);
+    
     // Get payments from last 7 days
     const sevenDaysAgo = Math.floor(Date.now() / 1000) - (7 * 24 * 60 * 60);
     
@@ -1125,7 +1132,7 @@ app.post('/api/sync-payments', async (req, res) => {
 
     let newPurchases = 0;
     const processedPurchases = [];
-    const processedPurchaseIds = new Set(); // Защита от дублей в рамках одного запуска
+    // processedPurchaseIds теперь глобальная переменная
 
     // Initialize Google Sheets
     console.log('🔍 Google Sheets debug info:');
