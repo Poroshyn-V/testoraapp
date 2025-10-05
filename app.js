@@ -1231,11 +1231,10 @@ app.post('/api/sync-payments', async (req, res) => {
         const firstPayment = group.firstPayment;
         const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
 
-        // ИСПОЛЬЗУЕМ уникальный ID группы с timestamp для множественных покупок
-        const timestamp = firstPayment.created;
-        const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}_${timestamp}`;
+        // ИСПОЛЬЗУЕМ Customer ID как Purchase ID (как в существующих записях)
+        const purchaseId = customer?.id || 'unknown_customer';
 
-        // ПРОВЕРКА ДУБЛИКАТОВ: по Purchase ID + дополнительная проверка по email + date + amount
+        // ПРОВЕРКА ДУБЛИКАТОВ: по Customer ID + date (основная проверка)
         const customerEmail = customer?.email || firstPayment.receipt_email || 'N/A';
         const purchaseDate = dateKey.split('_')[1];
         const purchaseAmount = (group.totalAmount / 100).toFixed(2);
@@ -1246,8 +1245,10 @@ app.post('/api/sync-payments', async (req, res) => {
           const rowDate = row.get('Created Local (UTC+1)') || '';
           const rowAmount = row.get('Total Amount') || '';
           
-          // Проверяем по Purchase ID
-          if (rowPurchaseId === purchaseId) return true;
+          // Основная проверка: Customer ID + дата
+          if (rowPurchaseId === purchaseId && rowDate.includes(purchaseDate)) {
+            return true;
+          }
           
           // Дополнительная проверка по email + date + amount
           return rowEmail === customerEmail && 
