@@ -1232,7 +1232,7 @@ app.post('/api/sync-payments', async (req, res) => {
         const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
 
         // ПРОСТАЯ ЛОГИКА: используем timestamp для уникальности
-        const purchaseId = `s_${(customer?.id || 'unknown').replace('cus_', '')}_${(customer?.id || 'unknown').replace('cus_', '')}`;
+        const purchaseId = `purchase_${customer?.id || 'unknown'}_${(customer?.id || 'unknown').replace('cus_', '')}`;
 
         // ПРОСТАЯ ПРОВЕРКА ДУБЛИКАТОВ: только по Purchase ID
         const existsInSheets = rows.some((row) => {
