@@ -139,7 +139,6 @@ app.post('/api/sync-payments', async (req, res) => {
     
     let newPurchases = 0;
     const processedPurchases = [];
-    const processedPurchaseIds = new Set(); // Track processed purchase IDs to prevent duplicates
 
     // Initialize Google Sheets
     const serviceAccountAuth = new JWT({
@@ -167,25 +166,16 @@ app.post('/api/sync-payments', async (req, res) => {
           const firstPayment = group.firstPayment;
         const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
 
-        // Create unique purchase ID (original format)
-        const purchaseId = `purchase_${customer?.id || 'unknown'}_${customer?.id || 'unknown'}`;
+        // Create unique purchase ID (simple format without timestamp)
+        const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
 
-        // Check if purchase already exists in Google Sheets
+        // Check if purchase already exists
         const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
 
         if (exists) {
-          console.log(`⏭️ Purchase already exists in sheets: ${purchaseId}`);
+          console.log(`⏭️ Purchase already exists: ${purchaseId}`);
           continue;
         }
-
-        // Check if purchase already processed in this run
-        if (processedPurchaseIds.has(purchaseId)) {
-          console.log(`⏭️ Purchase already processed in this run: ${purchaseId}`);
-          continue;
-        }
-
-        // Mark as processed
-        processedPurchaseIds.add(purchaseId);
 
         // Format GEO data
         let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
