@@ -708,7 +708,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/health', '/webhook/stripe']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/check-duplicates', '/health', '/webhook/stripe']
 }));
 
 // Исправляем ошибки favicon
@@ -751,6 +751,79 @@ app.get('/api/memory-status', (req, res) => {
     auto_sync_disabled: ENV.AUTO_SYNC_DISABLED,
     notifications_disabled: ENV.NOTIFICATIONS_DISABLED
   });
+});
+
+// Endpoint для проверки дубликатов в таблице
+app.get('/api/check-duplicates', async (req, res) => {
+  try {
+    console.log('🔍 Проверяю дубликаты в Google Sheets...');
+    
+    if (!ENV.GOOGLE_SERVICE_EMAIL || !ENV.GOOGLE_SERVICE_PRIVATE_KEY || !ENV.GOOGLE_SHEETS_DOC_ID) {
+      return res.status(500).json({
+        success: false,
+        message: 'Google Sheets not configured'
+      });
+    }
+    
+    const privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY;
+    const serviceAccountAuth = new JWT({
+      email: ENV.GOOGLE_SERVICE_EMAIL,
+      key: privateKey,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    
+    const doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
+    await doc.loadInfo();
+    const sheet = doc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+    
+    console.log(`📋 Проверяю ${rows.length} строк на дубликаты...`);
+    
+    // Ищем дубликаты по email + дата + сумма
+    const duplicates = [];
+    const seen = new Map();
+    
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const email = row.get('Customer Email') || '';
+      const date = row.get('Created Local (UTC+1)') || '';
+      const amount = row.get('Total Amount') || '';
+      
+      if (email && date && amount) {
+        const key = `${email}_${date}_${amount}`;
+        
+        if (seen.has(key)) {
+          duplicates.push({
+            row: i + 1,
+            email: email,
+            date: date,
+            amount: amount,
+            purchaseId: row.get('Purchase ID') || '',
+            duplicateOf: seen.get(key)
+          });
+        } else {
+          seen.set(key, i + 1);
+        }
+      }
+    }
+    
+    console.log(`🔍 Найдено ${duplicates.length} дубликатов`);
+    
+    res.json({
+      success: true,
+      message: `Found ${duplicates.length} duplicates in ${rows.length} rows`,
+      total_rows: rows.length,
+      duplicates_count: duplicates.length,
+      duplicates: duplicates.slice(0, 10) // Показываем первые 10
+    });
+    
+  } catch (error) {
+    console.error('❌ Error checking duplicates:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
 });
 
 // Endpoint для ручного запуска GEO алерта
@@ -1270,28 +1343,8 @@ app.post('/api/sync-payments', async (req, res) => {
           savedToSheets = false;
         }
 
-        // Отправляем уведомления ТОЛЬКО если успешно сохранили в Google Sheets И уведомления включены
-        if (savedToSheets && !ENV.NOTIFICATIONS_DISABLED) {
-          try {
-            const telegramText = formatTelegram(purchaseData, customer?.metadata || {});
-            await sendTelegram(telegramText);
-            console.log('📱 Telegram notification sent for NEW purchase:', purchaseId);
-          } catch (error) {
-            console.error('Error sending Telegram:', error.message);
-          }
-
-          try {
-            const slackText = formatSlack(purchaseData, customer?.metadata || {});
-            await sendSlack(slackText);
-            console.log('💬 Slack notification sent for NEW purchase:', purchaseId);
-          } catch (error) {
-            console.error('Error sending Slack:', error.message);
-          }
-        } else if (ENV.NOTIFICATIONS_DISABLED) {
-          console.log('🚫 Notifications disabled - skipping notifications');
-        } else {
-          console.log('🚫 Notifications skipped - purchase not saved to Google Sheets');
-        }
+        // ВРЕМЕННО ОТКЛЮЧАЕМ УВЕДОМЛЕНИЯ - чтобы не спамить
+        console.log('🚫 Notifications temporarily disabled - no spam');
 
         // ИСПРАВЛЕНО: Увеличиваем счетчики ТОЛЬКО если покупка действительно сохранена
         if (savedToSheets) {
