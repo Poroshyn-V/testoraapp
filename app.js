@@ -1231,18 +1231,33 @@ app.post('/api/sync-payments', async (req, res) => {
         const firstPayment = group.firstPayment;
         const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
 
-        // ИСПОЛЬЗУЕМ уникальный ID группы (customer + date)
-        const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}`;
+        // ИСПОЛЬЗУЕМ уникальный ID группы с timestamp для множественных покупок
+        const timestamp = firstPayment.created;
+        const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}_${timestamp}`;
 
-        // ПРОВЕРКА ДУБЛИКАТОВ: по Purchase ID
+        // ПРОВЕРКА ДУБЛИКАТОВ: по Purchase ID + дополнительная проверка по email + date + amount
+        const customerEmail = customer?.email || firstPayment.receipt_email || 'N/A';
+        const purchaseDate = dateKey.split('_')[1];
+        const purchaseAmount = (group.totalAmount / 100).toFixed(2);
+        
         const existsInSheets = rows.some((row) => {
           const rowPurchaseId = row.get('Purchase ID') || '';
-          return rowPurchaseId === purchaseId;
+          const rowEmail = row.get('Customer Email') || '';
+          const rowDate = row.get('Created Local (UTC+1)') || '';
+          const rowAmount = row.get('Total Amount') || '';
+          
+          // Проверяем по Purchase ID
+          if (rowPurchaseId === purchaseId) return true;
+          
+          // Дополнительная проверка по email + date + amount
+          return rowEmail === customerEmail && 
+                 rowDate.includes(purchaseDate) && 
+                 rowAmount === purchaseAmount;
         });
         
         if (existsInSheets) {
-          console.log(`⏭️ SKIP: ${purchaseId} already exists in sheets`);
-          continue; // Пропускаем существующие
+          console.log(`⏭️ SKIP: Duplicate found - Email: ${customerEmail}, Date: ${purchaseDate}, Amount: ${purchaseAmount}`);
+          continue; // Пропускаем дубликаты
         }
         
         console.log(`🆕 NEW: ${purchaseId} - ADDING (${group.payments.length} payments)`);
