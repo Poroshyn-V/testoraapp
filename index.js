@@ -416,7 +416,11 @@ ${campaign_name}`;
 // Start server
 app.listen(ENV.PORT, () => {
   logger.info(`Server listening on port ${ENV.PORT}`);
-  console.log('✅ Server started - manual sync only via /api/sync-payments endpoint');
+  console.log('🛑 BOT STOPPED - Manual control only');
+  console.log('📋 Available endpoints:');
+  console.log('  - GET /health (health check)');
+  console.log('  - POST /api/sync-payments (manual sync)');
+  console.log('  - POST /webhook/stripe (webhook endpoint)');
 });
 
 export default app;
