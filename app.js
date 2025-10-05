@@ -393,7 +393,7 @@ async function sendCreativeAlert() {
     for (let i = 0; i < sortedCreatives.length; i++) {
       const [creative, count] = sortedCreatives[i];
       const rank = i + 1;
-      top5.push(`${rank}. ${creative} - ${count} покупок`);
+      top5.push(`${rank}. ${creative} - ${count} purchases`);
     }
     
     // Получаем текущее время UTC+1
