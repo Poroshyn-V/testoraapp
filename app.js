@@ -1359,7 +1359,28 @@ app.post('/api/sync-payments', async (req, res) => {
           savedToSheets = false;
         }
 
-        // ВРЕМЕННО ОТКЛЮЧАЕМ УВЕДОМЛЕНИЯ - чтобы не спамить
+        // ОТПРАВЛЯЕМ УВЕДОМЛЕНИЯ В TELEGRAM И SLACK
+        if (!ENV.NOTIFICATIONS_DISABLED) {
+          try {
+            // Telegram notification
+            if (ENV.TELEGRAM_BOT_TOKEN && ENV.TELEGRAM_CHAT_ID) {
+              const telegramText = formatTelegram(purchaseData, m);
+              await sendTelegram(telegramText);
+              console.log(`📱 Telegram notification sent for ${purchaseId}`);
+            }
+            
+            // Slack notification
+            if (ENV.SLACK_BOT_TOKEN && ENV.SLACK_CHANNEL_ID) {
+              const slackText = formatSlack(purchaseData, m);
+              await sendSlack(slackText);
+              console.log(`💬 Slack notification sent for ${purchaseId}`);
+            }
+          } catch (error) {
+            console.error('❌ Error sending notifications:', error.message);
+          }
+        } else {
+          console.log('🚫 Notifications disabled');
+        }
 
         // ИСПРАВЛЕНО: Увеличиваем счетчики ТОЛЬКО если покупка действительно сохранена
         if (savedToSheets) {
@@ -1439,23 +1460,26 @@ function formatTelegram(purchaseData, customerMetadata = {}) {
   const adset_name = m.adset_name || '';
   const campaign_name = m.campaign_name || m.utm_campaign || '';
 
+  // Формат уведомления в Telegram для покупок Stripe (из памяти)
   const lines = [
-    `🟢 Purchase ${paymentId} was processed!`,
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-    `💳 Payment Method: Card`,
-    `💰 Amount: ${amount} ${currency}`,
-    `🏷️ Payments: ${paymentCount}`,
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-    `📧 Email: ${email}`,
-    `📍 Location: ${country}`,
-    `🔗 Link: quiz.testora.pro/iq1`,
-    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
-    `📊 Campaign Data:`,
-    platform_placement && `• Platform: ${platform_placement}`,
-    ad_name && `• Ad: ${ad_name}`,
-    adset_name && `• Adset: ${adset_name}`,
-    campaign_name && `• Campaign: ${campaign_name}`
-  ].filter(Boolean); // Убираем пустые строки
+    `🟢 Order ${paymentId} was processed!`,
+    `---------------------------`,
+    `💳 card`,
+    `💰 ${amount} ${currency}`,
+    `🏷️ N/A`,
+    `---------------------------`,
+    `📧 ${email}`,
+    `---------------------------`,
+    `🌪️ ${paymentId.split('_')[1] || 'N/A'}`,
+    `📍 ${country}`,
+    `🧍N/A N/A`,
+    `🔗 N/A`,
+    `meta`,
+    platform_placement || 'N/A',
+    ad_name || 'N/A',
+    adset_name || 'N/A',
+    campaign_name || 'N/A'
+  ];
 
   let text = lines.join('\n');
   if (text.length > 4096) text = text.slice(0, 4093) + '...';
