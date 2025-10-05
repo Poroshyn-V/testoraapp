@@ -1152,6 +1152,9 @@ app.post('/api/sync-payments', async (req, res) => {
             console.log(`💾 Saving to Google Sheets: ${purchaseId}`);
             
             // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: проверяем дубликаты прямо перед сохранением
+            // Добавляем задержку для избежания превышения лимитов Google Sheets API
+            await new Promise(resolve => setTimeout(resolve, 1000)); // 1 секунда задержки
+            
             const currentRows = await sheet.getRows();
             const existsInSheetsNow = currentRows.some((row) => {
               const rowPurchaseId = row.get('Purchase ID') || row.get('purchase_id') || '';
@@ -1193,6 +1196,9 @@ app.post('/api/sync-payments', async (req, res) => {
             await sheet.addRow(rowData);
             console.log('✅ Payment data saved to Google Sheets:', purchaseId);
             savedToSheets = true;
+            
+            // Добавляем задержку после сохранения для избежания превышения лимитов
+            await new Promise(resolve => setTimeout(resolve, 2000)); // 2 секунды задержки
           } catch (error) {
             console.error('❌ Error saving to Google Sheets:', error.message);
             console.error('❌ Error details:', error);
