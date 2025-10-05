@@ -1293,10 +1293,20 @@ app.post('/api/sync-payments', async (req, res) => {
           try {
             console.log(`💾 Saving to Google Sheets: ${purchaseId}`);
             
+            // СТРОГАЯ ФИНАЛЬНАЯ ПРОВЕРКА ДУБЛИКАТОВ ПЕРЕД СОХРАНЕНИЕМ
+            const freshRows = await sheet.getRows();
+            const isDuplicate = freshRows.some((row) => {
+              const rowPurchaseId = row.get('Purchase ID') || '';
+              return rowPurchaseId === purchaseId;
+            });
+            
+            if (isDuplicate) {
+              console.log(`🚫 BLOCKED: ${purchaseId} already exists in Google Sheets - SKIPPING`);
+              continue; // БЛОКИРУЕМ дубликаты
+            }
+            
             // Добавляем задержку для избежания превышения лимитов Google Sheets API
             await new Promise(resolve => setTimeout(resolve, 1000)); // 1 секунда задержки
-            
-            // УБИРАЕМ ФИНАЛЬНУЮ ПРОВЕРКУ - она уже сделана выше
             
             // Создаем данные в том же формате что уже есть в таблице
             // ИСПРАВЛЕНО: ПРАВИЛЬНОЕ UTC+1 ВРЕМЯ
