@@ -825,6 +825,76 @@ app.get('/api/anomaly-check', async (req, res) => {
   }
 });
 
+// Endpoint для просмотра последних покупок из Stripe
+app.get('/api/last-purchases', async (req, res) => {
+  try {
+    console.log('📊 Получаю последние покупки из Stripe...');
+    
+    // Get payments from last 7 days
+    const sevenDaysAgo = Math.floor(Date.now() / 1000) - (7 * 24 * 60 * 60);
+    
+    const payments = await stripe.paymentIntents.list({
+      limit: 5,
+      created: {
+        gte: sevenDaysAgo
+      }
+    });
+    
+    if (payments.data.length === 0) {
+      return res.json({ 
+        success: true, 
+        message: 'No payments found',
+        purchases: [] 
+      });
+    }
+    
+    // Filter successful payments and get customer data
+    const successfulPayments = payments.data.filter(p => p.status === 'succeeded' && p.customer);
+    const purchases = [];
+    
+    for (const payment of successfulPayments) {
+      let customer = null;
+      try {
+        customer = await stripe.customers.retrieve(payment.customer);
+        if (customer && 'deleted' in customer && customer.deleted) {
+          customer = null;
+        }
+      } catch (err) {
+        console.error(`Error retrieving customer ${payment.customer}:`, err);
+      }
+      
+      const purchase = {
+        payment_id: payment.id,
+        amount: (payment.amount / 100).toFixed(2),
+        currency: payment.currency.toUpperCase(),
+        status: payment.status,
+        created: new Date(payment.created * 1000).toISOString(),
+        customer_id: customer?.id || 'N/A',
+        customer_email: customer?.email || payment.receipt_email || 'N/A',
+        customer_name: customer?.name || 'N/A',
+        metadata: payment.metadata,
+        customer_metadata: customer?.metadata || {}
+      };
+      
+      purchases.push(purchase);
+    }
+    
+    res.json({
+      success: true,
+      message: `Found ${purchases.length} recent purchases`,
+      count: purchases.length,
+      purchases: purchases
+    });
+    
+  } catch (error) {
+    console.error('❌ Error fetching last purchases:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // ПРИНУДИТЕЛЬНАЯ АКТИВНОСТЬ чтобы Vercel не засыпал
 app.get('/ping', (_req, res) => {
   console.log('💓 PING: Поддерживаю активность Vercel...');
