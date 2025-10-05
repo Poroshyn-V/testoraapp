@@ -1235,8 +1235,12 @@ app.post('/api/sync-payments', async (req, res) => {
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${(customer?.id || 'unknown').replace('cus_', '')}`;
 
         // ПРОСТАЯ ПРОВЕРКА ДУБЛИКАТОВ: только по Purchase ID
+        console.log(`🔍 Checking purchaseId: ${purchaseId}`);
+        console.log(`📊 Total rows to check: ${rows.length}`);
+        
         const existsInSheets = rows.some((row) => {
           const rowPurchaseId = row.get('Purchase ID') || '';
+          console.log(`🔍 Comparing with: ${rowPurchaseId}`);
           return rowPurchaseId === purchaseId;
         });
         
@@ -1244,6 +1248,8 @@ app.post('/api/sync-payments', async (req, res) => {
           console.log(`⏭️ SKIP: ${purchaseId} already exists`);
           continue; // Пропускаем существующие
         }
+        
+        console.log(`✅ NEW: ${purchaseId} - adding to sheets`);
         
         console.log(`🆕 NEW: ${purchaseId} - ADDING (${group.payments.length} payments)`);
 
