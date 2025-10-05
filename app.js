@@ -1460,26 +1460,24 @@ function formatTelegram(purchaseData, customerMetadata = {}) {
   const adset_name = m.adset_name || '';
   const campaign_name = m.campaign_name || m.utm_campaign || '';
 
-  // Формат уведомления в Telegram для покупок Stripe (из памяти)
+  // Новый формат уведомления в Telegram для покупок Stripe
   const lines = [
-    `🟢 Order ${paymentId} was processed!`,
-    `---------------------------`,
-    `💳 card`,
-    `💰 ${amount} ${currency}`,
-    `🏷️ N/A`,
-    `---------------------------`,
-    `📧 ${email}`,
-    `---------------------------`,
-    `🌪️ ${paymentId.split('_')[1] || 'N/A'}`,
-    `📍 ${country}`,
-    `🧍N/A N/A`,
-    `🔗 N/A`,
-    `meta`,
-    platform_placement || 'N/A',
-    ad_name || 'N/A',
-    adset_name || 'N/A',
-    campaign_name || 'N/A'
-  ];
+    `🟢 Purchase ${paymentId} was processed!`,
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+    `💳 Payment Method: Card`,
+    `💰 Amount: ${amount} ${currency}`,
+    `🏷️ Payments: ${paymentCount}`,
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+    `📧 Email: ${email}`,
+    `📍 Location: ${country}`,
+    `🔗 Link: quiz.testora.pro/iq1`,
+    `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+    `📊 Campaign Data:`,
+    platform_placement && `• Platform: ${platform_placement}`,
+    ad_name && `• Ad: ${ad_name}`,
+    adset_name && `• Adset: ${adset_name}`,
+    campaign_name && `• Campaign: ${campaign_name}`
+  ].filter(Boolean); // Убираем пустые строки
 
   let text = lines.join('\n');
   if (text.length > 4096) text = text.slice(0, 4093) + '...';
