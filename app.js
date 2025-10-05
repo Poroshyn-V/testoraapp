@@ -1162,16 +1162,28 @@ app.post('/api/sync-payments', async (req, res) => {
         const timestamp = firstPayment.created;
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${dateKey.split('_')[1]}_${timestamp}`;
 
-        // ИСПРАВЛЕНО: ПРОВЕРЯЕМ ДУБЛИКАТЫ В ПАМЯТИ И GOOGLE SHEETS
+        // СТРОГАЯ ПРОВЕРКА ДУБЛИКАТОВ: проверяем по email + дата + сумма
+        const customerEmail = customer?.email || firstPayment.receipt_email || '';
+        const purchaseDate = new Date(firstPayment.created * 1000).toISOString().split('T')[0]; // YYYY-MM-DD
+        const purchaseAmount = (group.totalAmount / 100).toFixed(2);
+        
+        // Проверяем в памяти
         const existsInMemory = existingPurchases.has(purchaseId);
+        
+        // Проверяем в Google Sheets по email + дата + сумма
         const existsInSheets = rows.some((row) => {
-          const rowPurchaseId = row.get('Purchase ID') || row.get('purchase_id') || '';
-          return rowPurchaseId === purchaseId;
+          const rowEmail = row.get('Customer Email') || '';
+          const rowDate = row.get('Created Local (UTC+1)') || '';
+          const rowAmount = row.get('Total Amount') || '';
+          
+          return rowEmail === customerEmail && 
+                 rowDate.includes(purchaseDate) && 
+                 rowAmount === purchaseAmount;
         });
         
         if (existsInMemory || existsInSheets) {
-          console.log(`⏭️ SKIP: ${purchaseId} already exists`);
-          continue; // Пропускаем существующие
+          console.log(`⏭️ SKIP: Duplicate found - Email: ${customerEmail}, Date: ${purchaseDate}, Amount: ${purchaseAmount}`);
+          continue; // Пропускаем дубликаты
         }
         
         console.log(`🆕 NEW: ${purchaseId} - ADDING`);
@@ -1221,20 +1233,8 @@ app.post('/api/sync-payments', async (req, res) => {
           try {
             console.log(`💾 Saving to Google Sheets: ${purchaseId}`);
             
-            // ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: проверяем дубликаты прямо перед сохранением
             // Добавляем задержку для избежания превышения лимитов Google Sheets API
             await new Promise(resolve => setTimeout(resolve, 1000)); // 1 секунда задержки
-            
-            const currentRows = await sheet.getRows();
-            const existsInSheetsNow = currentRows.some((row) => {
-              const rowPurchaseId = row.get('Purchase ID') || row.get('purchase_id') || '';
-              return rowPurchaseId === purchaseId;
-            });
-            
-            if (existsInSheetsNow) {
-              console.log(`⏭️ SKIP: ${purchaseId} already exists in Google Sheets (double-check)`);
-              continue; // Пропускаем если уже есть
-            }
             
             // Создаем данные в том же формате что уже есть в таблице
             // ИСПРАВЛЕНО: ПРАВИЛЬНОЕ UTC+1 ВРЕМЯ
