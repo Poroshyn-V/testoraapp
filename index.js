@@ -170,7 +170,7 @@ app.post('/api/sync-payments', async (req, res) => {
         const purchaseId = `purchase_${customer?.id || 'unknown'}_${(customer?.id || 'unknown').replace('cus_', '')}`;
 
         // Check if purchase already exists
-        const exists = rows.some((row) => row.get('purchase_id') === purchaseId);
+        const exists = rows.some((row) => row.get('Purchase ID') === purchaseId);
 
         if (exists) {
           console.log(`⏭️ Purchase already exists: ${purchaseId}`);
