@@ -1204,6 +1204,128 @@ app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (re
   }
 });
 
+// Update existing purchases endpoint
+app.post('/api/update-existing', async (req, res) => {
+  try {
+    console.log('🔄 Starting update of existing purchases...');
+    
+    if (!ENV.GOOGLE_SERVICE_EMAIL || !ENV.GOOGLE_SERVICE_PRIVATE_KEY || !ENV.GOOGLE_SHEETS_DOC_ID) {
+      return res.status(500).json({
+        success: false,
+        message: 'Google Sheets not configured'
+      });
+    }
+    
+    const serviceAccountAuth = new JWT({
+      email: ENV.GOOGLE_SERVICE_EMAIL,
+      key: ENV.GOOGLE_SERVICE_PRIVATE_KEY,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    
+    const doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
+    await doc.loadInfo();
+    const sheet = doc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+    
+    console.log(`📊 Found ${rows.length} existing rows`);
+    
+    let updatedCount = 0;
+    
+    // Process each row and check for missing upsells
+    for (const row of rows) {
+      const customerId = row.get('Customer ID');
+      const email = row.get('Customer Email');
+      
+      if (!customerId || customerId === 'N/A' || !email || email === 'N/A') {
+        continue;
+      }
+      
+      console.log(`🔍 Checking customer: ${email} (${customerId})`);
+      
+      // Get all payments for this customer from Stripe
+      const payments = await stripe.paymentIntents.list({
+        customer: customerId,
+        limit: 100
+      });
+      
+      const successfulPayments = payments.data.filter(p => p.status === 'succeeded' && p.customer);
+      
+      if (successfulPayments.length <= 1) {
+        console.log(`   ⏭️ Only ${successfulPayments.length} payment, skipping`);
+        continue;
+      }
+      
+      // Group payments using our improved logic (within 1 hour)
+      const groupedPayments = [];
+      const processedPayments = new Set();
+      
+      for (const payment of successfulPayments) {
+        if (processedPayments.has(payment.id)) continue;
+        
+        const group = [payment];
+        processedPayments.add(payment.id);
+        
+        // Find related payments within 1 hour
+        for (const otherPayment of successfulPayments) {
+          if (processedPayments.has(otherPayment.id)) continue;
+          
+          const timeDiff = Math.abs(payment.created - otherPayment.created);
+          const hoursDiff = timeDiff / 3600;
+          
+          if (hoursDiff <= 1) {
+            group.push(otherPayment);
+            processedPayments.add(otherPayment.id);
+          }
+        }
+        
+        groupedPayments.push(group);
+      }
+      
+      // Check if we have multiple groups that should be combined
+      if (groupedPayments.length > 1) {
+        console.log(`   ⚠️ Found ${groupedPayments.length} separate groups, should be 1!`);
+        
+        // Calculate total amount and payment count
+        let totalAmount = 0;
+        let totalPayments = 0;
+        const allPaymentIds = [];
+        
+        for (const group of groupedPayments) {
+          for (const payment of group) {
+            totalAmount += payment.amount;
+            totalPayments++;
+            allPaymentIds.push(payment.id);
+          }
+        }
+        
+        // Update the row
+        row.set('Total Amount', (totalAmount / 100).toFixed(2));
+        row.set('Payment Count', totalPayments);
+        row.set('Payment Intent IDs', allPaymentIds.join(', '));
+        
+        await row.save();
+        console.log(`   ✅ Updated: $${(totalAmount / 100).toFixed(2)} (${totalPayments} payments)`);
+        updatedCount++;
+      }
+    }
+    
+    console.log(`🎉 Update completed! Updated ${updatedCount} records`);
+    
+    res.json({
+      success: true,
+      message: `Updated ${updatedCount} existing records`,
+      updated: updatedCount
+    });
+    
+  } catch (error) {
+    console.error('❌ Error updating existing purchases:', error.message);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
 // Sync payments endpoint
 app.post('/api/sync-payments', async (req, res) => {
   try {
