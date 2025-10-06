@@ -1240,7 +1240,7 @@ app.post('/api/sync-payments', async (req, res) => {
     const successfulPayments = payments.data.filter(p => p.status === 'succeeded' && p.customer);
     console.log(`📊 Found ${successfulPayments.length} successful payments`);
     
-    // ГРУППИРУЕМ ПОКУПКИ: по customer + date (основной + доп продукты)
+    // ГРУППИРУЕМ ПОКУПКИ: по customer ID (включая апсейлы в течение 24 часов)
     const groupedPurchases = new Map();
     
     for (const payment of successfulPayments) {
@@ -1256,21 +1256,38 @@ app.post('/api/sync-payments', async (req, res) => {
         }
 
         const customerId = customer?.id || 'unknown_customer';
-        const purchaseDate = new Date(payment.created * 1000);
-        const dateKey = `${customerId}_${purchaseDate.toISOString().split('T')[0]}`;
+        
+        // Проверяем, есть ли уже группа для этого customer'а
+        let existingGroup = null;
+        for (const [key, group] of groupedPurchases.entries()) {
+          if (group.customer?.id === customerId) {
+        // Проверяем, что платеж в течение 1 часа от первого платежа (для апсейлов)
+        const firstPaymentTime = group.firstPayment.created * 1000;
+        const currentPaymentTime = payment.created * 1000;
+        const timeDiff = Math.abs(currentPaymentTime - firstPaymentTime);
+        const hoursDiff = timeDiff / (1000 * 60 * 60);
+        
+        if (hoursDiff <= 1) {
+              existingGroup = group;
+              break;
+            }
+          }
+        }
 
-        if (!groupedPurchases.has(dateKey)) {
-          groupedPurchases.set(dateKey, {
+        if (existingGroup) {
+          // Добавляем к существующей группе
+          existingGroup.payments.push(payment);
+          existingGroup.totalAmount += payment.amount;
+        } else {
+          // Создаем новую группу
+          const groupKey = `${customerId}_${payment.created}`;
+          groupedPurchases.set(groupKey, {
             customer,
-            payments: [],
-            totalAmount: 0,
+            payments: [payment],
+            totalAmount: payment.amount,
             firstPayment: payment
           });
         }
-        
-        const group = groupedPurchases.get(dateKey);
-        group.payments.push(payment);
-        group.totalAmount += payment.amount;
       }
     }
 
