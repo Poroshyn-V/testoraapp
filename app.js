@@ -322,6 +322,134 @@ ${dailyBreakdown.join('\n')}
   }
 }
 
+// Функция для ежедневной статистики за вчера (7:00 UTC+1)
+async function sendDailyStatsAlert() {
+  try {
+    console.log('📊 Анализирую статистику за вчера...');
+    
+    if (!ENV.GOOGLE_SERVICE_EMAIL || !ENV.GOOGLE_SERVICE_PRIVATE_KEY || !ENV.GOOGLE_SHEETS_DOC_ID) {
+      console.log('❌ Google Sheets не настроен - пропускаю ежедневную статистику');
+      return;
+    }
+    
+    const privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY;
+    const serviceAccountAuth = new JWT({
+      email: ENV.GOOGLE_SERVICE_EMAIL,
+      key: privateKey,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    
+    const doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
+    await doc.loadInfo();
+    const sheet = doc.sheetsByIndex[0];
+    const rows = await sheet.getRows();
+    
+    // Получаем вчерашнюю дату в UTC+1
+    const today = new Date();
+    const utcPlus1 = new Date(today.getTime() + 60 * 60 * 1000);
+    const yesterday = new Date(utcPlus1);
+    yesterday.setDate(utcPlus1.getDate() - 1);
+    const yesterdayStr = yesterday.toISOString().split('T')[0]; // YYYY-MM-DD
+    
+    console.log(`📅 Анализирую статистику за ${yesterdayStr} (UTC+1)`);
+    
+    // Фильтруем покупки за вчера
+    const yesterdayPurchases = rows.filter(row => {
+      const createdLocal = row.get('Created Local (UTC+1)') || '';
+      return createdLocal.includes(yesterdayStr);
+    });
+    
+    console.log(`📊 Найдено ${yesterdayPurchases.length} покупок за вчера`);
+    
+    if (yesterdayPurchases.length === 0) {
+      console.log('📭 Нет покупок за вчера - пропускаю ежедневную статистику');
+      return;
+    }
+    
+    // T1 страны (первый уровень)
+    const t1Countries = ['US', 'CA', 'AU', 'GB', 'DE', 'FR', 'IT', 'ES', 'NL', 'SE', 'NO', 'DK', 'FI', 'CH', 'AT', 'BE', 'IE', 'PT', 'GR', 'LU', 'MT', 'CY'];
+    
+    // Анализируем статистику
+    const stats = {
+      US: { main: 0, additional: 0, total: 0 },
+      T1: { main: 0, additional: 0, total: 0 },
+      WW: { main: 0, additional: 0, total: 0 }
+    };
+    
+    for (const purchase of yesterdayPurchases) {
+      const geo = purchase.get('GEO') || '';
+      const amount = parseFloat(purchase.get('Total Amount') || '0');
+      const country = geo.split(',')[0].trim();
+      
+      // Определяем категорию страны
+      let category = 'WW';
+      if (country === 'US') {
+        category = 'US';
+      } else if (t1Countries.includes(country)) {
+        category = 'T1';
+      }
+      
+      // Определяем тип покупки
+      const isMain = amount <= 9.99;
+      const isAdditional = amount > 9.99;
+      
+      if (isMain) {
+        stats[category].main++;
+      }
+      if (isAdditional) {
+        stats[category].additional++;
+      }
+      stats[category].total++;
+    }
+    
+    // Формируем сообщение
+    const alertText = `📊 **Daily Stats for ${yesterdayStr}**
+
+🇺🇸 **US Market:**
+• Main purchases (≤$9.99): ${stats.US.main}
+• Additional sales (>$9.99): ${stats.US.additional}
+• Total: ${stats.US.total}
+
+🌍 **T1 Countries:**
+• Main purchases (≤$9.99): ${stats.T1.main}
+• Additional sales (>$9.99): ${stats.T1.additional}
+• Total: ${stats.T1.total}
+
+🌎 **WW (Rest of World):**
+• Main purchases (≤$9.99): ${stats.WW.main}
+• Additional sales (>$9.99): ${stats.WW.additional}
+• Total: ${stats.WW.total}
+
+📈 **Overall Total:** ${yesterdayPurchases.length} purchases
+⏰ Report time: 07:00 UTC+1`;
+    
+    console.log('📤 Отправляю ежедневную статистику:', alertText);
+    
+    // Отправляем в Telegram
+    if (!ENV.NOTIFICATIONS_DISABLED && ENV.TELEGRAM_BOT_TOKEN && ENV.TELEGRAM_CHAT_ID) {
+      try {
+        await sendTelegram(alertText);
+        console.log('✅ Daily stats sent to Telegram');
+      } catch (error) {
+        console.error('❌ Ошибка отправки ежедневной статистики в Telegram:', error.message);
+      }
+    }
+    
+    // Отправляем в Slack
+    if (!ENV.NOTIFICATIONS_DISABLED && ENV.SLACK_BOT_TOKEN && ENV.SLACK_CHANNEL_ID) {
+      try {
+        await sendSlack(alertText);
+        console.log('✅ Daily stats sent to Slack');
+      } catch (error) {
+        console.error('❌ Ошибка отправки ежедневной статистики в Slack:', error.message);
+      }
+    }
+    
+  } catch (error) {
+    console.error('❌ Ошибка ежедневной статистики:', error.message);
+  }
+}
+
 // Функция для анализа креативов и отправки ТОП-5 алертов
 async function sendCreativeAlert() {
   try {
@@ -711,7 +839,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/check-duplicates', '/health', '/webhook/stripe']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/check-duplicates', '/health', '/webhook/stripe']
 }));
 
 // Исправляем ошибки favicon
@@ -840,6 +968,24 @@ app.get('/api/geo-alert', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ GEO alert error:', error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Endpoint для ручного запуска ежедневной статистики
+app.get('/api/daily-stats', async (req, res) => {
+  try {
+    console.log('📊 Ручной запуск ежедневной статистики...');
+    await sendDailyStatsAlert();
+    res.json({
+      success: true,
+      message: 'Daily stats alert sent successfully'
+    });
+  } catch (error) {
+    console.error('❌ Daily stats error:', error.message);
     res.status(500).json({
       success: false,
       error: error.message
@@ -1728,6 +1874,28 @@ app.listen(ENV.PORT, () => {
                  console.log('🚨 ПРОВЕРКА АНОМАЛИЙ: Анализирую продажи...');
                  checkSalesAnomalies();
                }, 30 * 60 * 1000); // 30 минут
+               
+               // ЕЖЕДНЕВНАЯ СТАТИСТИКА каждое утро в 7:00 UTC+1
+               console.log('📊 ЕЖЕДНЕВНАЯ СТАТИСТИКА ВКЛЮЧЕНА - каждое утро в 7:00 UTC+1');
+               
+               // Функция для проверки времени ежедневной статистики
+               function checkDailyStatsTime() {
+                 const now = new Date();
+                 const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+                 const hour = utcPlus1.getUTCHours();
+                 const minute = utcPlus1.getUTCMinutes();
+                 
+                 // Проверяем 7:00 UTC+1 (с допуском ±2 минуты)
+                 if (hour === 7 && minute >= 0 && minute <= 2) {
+                   console.log('📊 ВРЕМЯ ЕЖЕДНЕВНОЙ СТАТИСТИКИ:', utcPlus1.toISOString());
+                   sendDailyStatsAlert();
+                 }
+               }
+               
+               // Проверяем каждые 2 минуты
+               setInterval(() => {
+                 checkDailyStatsTime();
+               }, 2 * 60 * 1000); // 2 минуты
                
              } else {
                console.log('🛑 АВТОСИНХРОНИЗАЦИЯ ОТКЛЮЧЕНА');
