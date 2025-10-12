@@ -1,6 +1,28 @@
 // Data formatting utilities
 import { logInfo } from './logging.js';
 
+// Format campaign names with proper separators
+function formatCampaignName(name) {
+  if (!name || name === 'N/A') return name;
+  
+  // Add separators for common patterns
+  return name
+    // Add separators before numbers
+    .replace(/([a-zA-Z])(\d)/g, '$1_$2')
+    // Add separators after numbers before letters
+    .replace(/(\d)([a-zA-Z])/g, '$1_$2')
+    // Add separators before uppercase letters (camelCase)
+    .replace(/([a-z])([A-Z])/g, '$1_$2')
+    // Add separators for common abbreviations
+    .replace(/([a-zA-Z])(WEB|EN|US|CA|AU|Broad|testora|LC|ABO|Core|ABO|cpi|fcb)([a-zA-Z])/g, '$1_$2_$3')
+    // Add separators for dates
+    .replace(/(\d{2})\.(\d{2})\.(\d{4})/g, '$1.$2.$3')
+    // Clean up multiple underscores
+    .replace(/_+/g, '_')
+    // Remove leading/trailing underscores
+    .replace(/^_|_$/g, '');
+}
+
 // Format payment data for Google Sheets
 export function formatPaymentForSheets(payment, customer, metadata = {}) {
   const m = { ...payment.metadata, ...(customer?.metadata || {}), ...metadata };
@@ -89,11 +111,16 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
   const geoCity = m.geo_city || customer?.address?.city || 'Unknown';
   const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
   
-  // Get data from metadata or passed sheet data
-  const adName = (metadata['Ad Name'] && metadata['Ad Name'] !== 'N/A') || (m.ad_name && m.ad_name !== 'N/A') ? (metadata['Ad Name'] || m.ad_name) : null;
-  const adsetName = (metadata['Adset Name'] && metadata['Adset Name'] !== 'N/A') || (m.adset_name && m.adset_name !== 'N/A') ? (metadata['Adset Name'] || m.adset_name) : null;
-  const campaignName = (metadata['Campaign Name'] && metadata['Campaign Name'] !== 'N/A') || (m.campaign_name && m.campaign_name !== 'N/A') ? (metadata['Campaign Name'] || m.campaign_name) : null;
+  // Get data from metadata or passed sheet data and format it nicely
+  const rawAdName = (metadata['Ad Name'] && metadata['Ad Name'] !== 'N/A') || (m.ad_name && m.ad_name !== 'N/A') ? (metadata['Ad Name'] || m.ad_name) : null;
+  const rawAdsetName = (metadata['Adset Name'] && metadata['Adset Name'] !== 'N/A') || (m.adset_name && m.adset_name !== 'N/A') ? (metadata['Adset Name'] || m.adset_name) : null;
+  const rawCampaignName = (metadata['Campaign Name'] && metadata['Campaign Name'] !== 'N/A') || (m.campaign_name && m.campaign_name !== 'N/A') ? (metadata['Campaign Name'] || m.campaign_name) : null;
   const creativeLink = (metadata['Creative Link'] && metadata['Creative Link'] !== 'N/A') || (m.creative_link && m.creative_link !== 'N/A') ? (metadata['Creative Link'] || m.creative_link) : null;
+  
+  // Format names with proper separators
+  const adName = rawAdName ? formatCampaignName(rawAdName) : null;
+  const adsetName = rawAdsetName ? formatCampaignName(rawAdsetName) : null;
+  const campaignName = rawCampaignName ? formatCampaignName(rawCampaignName) : null;
   
   // Create STRUCTURED notification message
   let message = `🟢 Purchase purchase_cus_${customer?.id || 'unknown'} was processed!
@@ -205,11 +232,16 @@ export function formatSlackNotification(payment, customer, metadata = {}) {
   const geoCity = m.geo_city || customer?.address?.city || 'Unknown';
   const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
   
-  // Get data from metadata or passed sheet data
-  const adName = (metadata['Ad Name'] && metadata['Ad Name'] !== 'N/A') || (m.ad_name && m.ad_name !== 'N/A') ? (metadata['Ad Name'] || m.ad_name) : null;
-  const adsetName = (metadata['Adset Name'] && metadata['Adset Name'] !== 'N/A') || (m.adset_name && m.adset_name !== 'N/A') ? (metadata['Adset Name'] || m.adset_name) : null;
-  const campaignName = (metadata['Campaign Name'] && metadata['Campaign Name'] !== 'N/A') || (m.campaign_name && m.campaign_name !== 'N/A') ? (metadata['Campaign Name'] || m.campaign_name) : null;
+  // Get data from metadata or passed sheet data and format it nicely
+  const rawAdName = (metadata['Ad Name'] && metadata['Ad Name'] !== 'N/A') || (m.ad_name && m.ad_name !== 'N/A') ? (metadata['Ad Name'] || m.ad_name) : null;
+  const rawAdsetName = (metadata['Adset Name'] && metadata['Adset Name'] !== 'N/A') || (m.adset_name && m.adset_name !== 'N/A') ? (metadata['Adset Name'] || m.adset_name) : null;
+  const rawCampaignName = (metadata['Campaign Name'] && metadata['Campaign Name'] !== 'N/A') || (m.campaign_name && m.campaign_name !== 'N/A') ? (metadata['Campaign Name'] || m.campaign_name) : null;
   const creativeLink = (metadata['Creative Link'] && metadata['Creative Link'] !== 'N/A') || (m.creative_link && m.creative_link !== 'N/A') ? (metadata['Creative Link'] || m.creative_link) : null;
+  
+  // Format names with proper separators
+  const adName = rawAdName ? formatCampaignName(rawAdName) : null;
+  const adsetName = rawAdsetName ? formatCampaignName(rawAdsetName) : null;
+  const campaignName = rawCampaignName ? formatCampaignName(rawCampaignName) : null;
   
   // Create STRUCTURED notification message (SAME AS TELEGRAM)
   let message = `🟢 Purchase purchase_cus_${customer?.id || 'unknown'} was processed!

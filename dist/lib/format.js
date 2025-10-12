@@ -1,5 +1,27 @@
 import Stripe from 'stripe';
 
+// Format campaign names with proper separators
+function formatCampaignName(name: string): string {
+  if (!name || name === 'N/A') return name;
+  
+  // Add separators for common patterns
+  return name
+    // Add separators before numbers
+    .replace(/([a-zA-Z])(\d)/g, '$1_$2')
+    // Add separators after numbers before letters
+    .replace(/(\d)([a-zA-Z])/g, '$1_$2')
+    // Add separators before uppercase letters (camelCase)
+    .replace(/([a-z])([A-Z])/g, '$1_$2')
+    // Add separators for common abbreviations
+    .replace(/([a-zA-Z])(WEB|EN|US|CA|AU|Broad|testora|LC|ABO|Core|ABO|cpi|fcb)([a-zA-Z])/g, '$1_$2_$3')
+    // Add separators for dates
+    .replace(/(\d{2})\.(\d{2})\.(\d{4})/g, '$1.$2.$3')
+    // Clean up multiple underscores
+    .replace(/_+/g, '_')
+    // Remove leading/trailing underscores
+    .replace(/^_|_$/g, '');
+}
+
 export function maskEmail(email?: string): string {
   if (!email) return '-';
   const [u, d] = email.split('@');
@@ -24,11 +46,16 @@ export function formatTelegram(session: Stripe.Checkout.Session, customerMetadat
   const geoCity = m.geo_city || session.customer_details?.address?.city || 'Unknown';
   const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
   
-  // Get data from metadata (same as Google Sheets)
-  const adName = m.ad_name && m.ad_name !== 'N/A' ? m.ad_name : null;
-  const adsetName = m.adset_name && m.adset_name !== 'N/A' ? m.adset_name : null;
-  const campaignName = m.campaign_name && m.campaign_name !== 'N/A' ? m.campaign_name : null;
+  // Get data from metadata and format it nicely
+  const rawAdName = m.ad_name && m.ad_name !== 'N/A' ? m.ad_name : null;
+  const rawAdsetName = m.adset_name && m.adset_name !== 'N/A' ? m.adset_name : null;
+  const rawCampaignName = m.campaign_name && m.campaign_name !== 'N/A' ? m.campaign_name : null;
   const creativeLink = m.creative_link && m.creative_link !== 'N/A' ? m.creative_link : null;
+  
+  // Format names with proper separators
+  const adName = rawAdName ? formatCampaignName(rawAdName) : null;
+  const adsetName = rawAdsetName ? formatCampaignName(rawAdsetName) : null;
+  const campaignName = rawCampaignName ? formatCampaignName(rawCampaignName) : null;
   
   // Create STRUCTURED notification message
   let message = `🟢 Purchase purchase_cus_${session.customer || 'unknown'} was processed!
