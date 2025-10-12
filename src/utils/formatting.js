@@ -89,11 +89,11 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
   const geoCity = m.geo_city || customer?.address?.city || 'Unknown';
   const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
   
-  // Get beautiful names from Google Sheets data (metadata)
-  const adName = m['Ad Name'] && m['Ad Name'] !== 'N/A' ? m['Ad Name'] : null;
-  const adsetName = m['Adset Name'] && m['Adset Name'] !== 'N/A' ? m['Adset Name'] : null;
-  const campaignName = m['UTM Campaign'] && m['UTM Campaign'] !== 'N/A' ? m['UTM Campaign'] : null;
-  const creativeLink = m['Creative Link'] && m['Creative Link'] !== 'N/A' ? m['Creative Link'] : null;
+  // Get data from metadata (same as Google Sheets)
+  const adName = m.ad_name && m.ad_name !== 'N/A' ? m.ad_name : null;
+  const adsetName = m.adset_name && m.adset_name !== 'N/A' ? m.adset_name : null;
+  const campaignName = m.campaign_name && m.campaign_name !== 'N/A' ? m.campaign_name : null;
+  const creativeLink = m.creative_link && m.creative_link !== 'N/A' ? m.creative_link : null;
   
   // Create STRUCTURED notification message
   let message = `🟢 Purchase purchase_cus_${customer?.id || 'unknown'}_${payment.created} was processed!
@@ -205,11 +205,11 @@ export function formatSlackNotification(payment, customer, metadata = {}) {
   const geoCity = m.geo_city || customer?.address?.city || 'Unknown';
   const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
   
-  // Get beautiful names from Google Sheets data (metadata)
-  const adName = m['Ad Name'] && m['Ad Name'] !== 'N/A' ? m['Ad Name'] : null;
-  const adsetName = m['Adset Name'] && m['Adset Name'] !== 'N/A' ? m['Adset Name'] : null;
-  const campaignName = m['UTM Campaign'] && m['UTM Campaign'] !== 'N/A' ? m['UTM Campaign'] : null;
-  const creativeLink = m['Creative Link'] && m['Creative Link'] !== 'N/A' ? m['Creative Link'] : null;
+  // Get data from metadata (same as Google Sheets)
+  const adName = m.ad_name && m.ad_name !== 'N/A' ? m.ad_name : null;
+  const adsetName = m.adset_name && m.adset_name !== 'N/A' ? m.adset_name : null;
+  const campaignName = m.campaign_name && m.campaign_name !== 'N/A' ? m.campaign_name : null;
+  const creativeLink = m.creative_link && m.creative_link !== 'N/A' ? m.creative_link : null;
   
   // Create STRUCTURED notification message (SAME AS TELEGRAM)
   let message = `🟢 Purchase purchase_cus_${customer?.id || 'unknown'}_${payment.created} was processed!
