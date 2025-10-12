@@ -236,9 +236,14 @@ app.post('/api/sync-payments', async (req, res) => {
             'Payment Intent IDs': paymentIdsAll.join(', ')
           });
           
-          // Send notification for new payments (upsells)
-          if (payments.length > 0) {
-            logger.info('Sending notification for customer update', { customerId });
+          // Send notification for upsells (when payment count increases)
+          const currentPaymentCount = parseInt(existingCustomers[0].get('Payment Count') || '0');
+          if (payments.length > 0 && allSuccessfulPayments.length > currentPaymentCount) {
+            logger.info('Sending notification for upsell', { 
+              customerId, 
+              currentCount: currentPaymentCount,
+              newCount: allSuccessfulPayments.length 
+            });
             await sendNotifications(firstPayment, customer);
           }
           
