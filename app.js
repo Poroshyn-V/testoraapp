@@ -1393,38 +1393,22 @@ app.post('/api/sync-payments', async (req, res) => {
       });
     }
     
-    // Filter successful payments and exclude Subscription updates
-    const successfulPayments = payments.data.filter(p => {
+    // Filter successful payments - ТОЛЬКО "Subscription creation" (первые покупки)
+    const firstPurchases = payments.data.filter(p => {
       if (p.status !== 'succeeded' || !p.customer) return false;
       
-      // Exclude Subscription updates - they are not new purchases from ads
-      if (p.description && p.description.toLowerCase().includes('subscription update')) {
-        console.log(`⏭️ Skipping Subscription update: ${p.id}`);
-        return false;
+      // Включаем ТОЛЬКО "Subscription creation" - это первые покупки
+      if (p.description && p.description.toLowerCase().includes('subscription creation')) {
+        console.log(`✅ Subscription creation: ${p.id} - $${(p.amount / 100).toFixed(2)}`);
+        return true;
       }
       
-      return true;
+      // Пропускаем все остальное (Subscription update, другие типы)
+      console.log(`⏭️ Пропускаем: ${p.description || 'No description'} - ${p.id}`);
+      return false;
     });
     
-    // НОВАЯ ЛОГИКА: Оставляем только первые покупки каждого клиента
-    const firstPurchasesOnly = new Map();
-    
-    for (const payment of successfulPayments) {
-      const customerId = payment.customer;
-      
-      if (!firstPurchasesOnly.has(customerId)) {
-        // Это первая покупка клиента - добавляем
-        firstPurchasesOnly.set(customerId, payment);
-        console.log(`✅ Первая покупка клиента ${customerId}: $${(payment.amount / 100).toFixed(2)}`);
-      } else {
-        // Это не первая покупка - пропускаем (апсейл)
-        console.log(`⏭️ Пропускаем апсейл клиента ${customerId}: $${(payment.amount / 100).toFixed(2)}`);
-      }
-    }
-    
-    const firstPurchases = Array.from(firstPurchasesOnly.values());
-    console.log(`📊 Из ${successfulPayments.length} платежей оставлено ${firstPurchases.length} первых покупок`);
-    console.log(`📊 Found ${successfulPayments.length} successful payments (excluding Subscription updates)`);
+    console.log(`📊 Найдено ${firstPurchases.length} первых покупок (Subscription creation)`);
     
     // ГРУППИРУЕМ ПОКУПКИ: только первые покупки (без апсейлов)
     const groupedPurchases = new Map();
