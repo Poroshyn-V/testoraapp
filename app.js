@@ -179,6 +179,7 @@ app.post('/api/sync-payments', async (req, res) => {
           
           // Update row
           await googleSheets.updateRow(existingCustomer, {
+            'Purchase ID': `purchase_${payment.customer}_${allSuccessfulPayments[0].created}`,
             'Total Amount': (totalAmount / 100).toFixed(2),
             'Payment Count': paymentCount.toString(),
             'Payment Intent IDs': paymentIds.join(', ')
