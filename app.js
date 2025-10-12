@@ -141,27 +141,56 @@ app.post('/api/sync-payments', async (req, res) => {
     
     logger.info('Found successful payments', { count: successfulPayments.length });
     
+    // GROUP PAYMENTS BY CUSTOMER (like before)
+    const groupedPurchases = new Map();
+    
+    for (const payment of successfulPayments) {
+      const customer = await getCustomer(payment.customer);
+      const customerId = customer?.id;
+      
+      if (!groupedPurchases.has(customerId)) {
+        groupedPurchases.set(customerId, {
+          customer,
+          payments: [],
+          totalAmount: 0,
+          firstPayment: payment
+        });
+      }
+      
+      const group = groupedPurchases.get(customerId);
+      group.payments.push(payment);
+      group.totalAmount += payment.amount;
+    }
+    
+    logger.info('Grouped payments by customer', { 
+      totalPayments: successfulPayments.length,
+      uniqueCustomers: groupedPurchases.size 
+    });
+    
     let processedCount = 0;
     let newPurchases = 0;
     
-    // Process each payment
-    for (const payment of successfulPayments) {
+    // Process each customer group
+    for (const [customerId, group] of groupedPurchases) {
       try {
-        const customer = await getCustomer(payment.customer);
+        const customer = group.customer;
+        const payments = group.payments;
+        const totalAmount = group.totalAmount;
+        const firstPayment = group.firstPayment;
         
-        // Check if customer already exists (find ALL records for this customer)
-        const existingCustomers = await googleSheets.findRows({ 'Customer ID': payment.customer });
+        // Check if customer already exists
+        const existingCustomers = await googleSheets.findRows({ 'Customer ID': customerId });
         
         if (existingCustomers.length > 0) {
-          // Update existing customer (use first record as base)
-          const existingCustomer = existingCustomers[0];
+          // Update existing customer
           logger.info('Updating existing customer', { 
-            customerId: payment.customer, 
-            existingRecords: existingCustomers.length 
+            customerId, 
+            existingRecords: existingCustomers.length,
+            newPayments: payments.length 
           });
           
-          // Get all payments for this customer to recalculate totals
-          const allPayments = await getCustomerPayments(payment.customer);
+          // Calculate totals from ALL payments for this customer
+          const allPayments = await getCustomerPayments(customerId);
           const allSuccessfulPayments = allPayments.filter(p => {
             if (p.status !== 'succeeded' || !p.customer) return false;
             if (p.description && p.description.toLowerCase().includes('subscription update')) {
@@ -171,28 +200,28 @@ app.post('/api/sync-payments', async (req, res) => {
           });
           
           // Calculate totals
-          let totalAmount = 0;
-          let paymentCount = 0;
-          const paymentIds = [];
+          let totalAmountAll = 0;
+          let paymentCountAll = 0;
+          const paymentIdsAll = [];
           
           for (const p of allSuccessfulPayments) {
-            totalAmount += p.amount;
-            paymentCount++;
-            paymentIds.push(p.id);
+            totalAmountAll += p.amount;
+            paymentCountAll++;
+            paymentIdsAll.push(p.id);
           }
           
           // Update first row with consolidated data
-          await googleSheets.updateRow(existingCustomer, {
-            'Purchase ID': `purchase_${payment.customer}_${allSuccessfulPayments[0].created}`,
-            'Total Amount': (totalAmount / 100).toFixed(2),
-            'Payment Count': paymentCount.toString(),
-            'Payment Intent IDs': paymentIds.join(', ')
+          await googleSheets.updateRow(existingCustomers[0], {
+            'Purchase ID': `purchase_${customerId}_${allSuccessfulPayments[0].created}`,
+            'Total Amount': (totalAmountAll / 100).toFixed(2),
+            'Payment Count': paymentCountAll.toString(),
+            'Payment Intent IDs': paymentIdsAll.join(', ')
           });
           
           // Delete duplicate rows (keep only the first one)
           if (existingCustomers.length > 1) {
             logger.info('Removing duplicate customer records', { 
-              customerId: payment.customer, 
+              customerId, 
               duplicatesToRemove: existingCustomers.length - 1 
             });
             
@@ -204,17 +233,20 @@ app.post('/api/sync-payments', async (req, res) => {
           newPurchases++;
         } else {
           // Add new customer
-          logger.info('Adding new customer', { customerId: payment.customer });
+          logger.info('Adding new customer', { 
+            customerId, 
+            paymentsCount: payments.length 
+          });
           
-          const rowData = formatPaymentForSheets(payment, customer);
-          rowData['Total Amount'] = (payment.amount / 100).toFixed(2);
-          rowData['Payment Count'] = '1';
-          rowData['Payment Intent IDs'] = payment.id;
+          const rowData = formatPaymentForSheets(firstPayment, customer);
+          rowData['Total Amount'] = (totalAmount / 100).toFixed(2);
+          rowData['Payment Count'] = payments.length.toString();
+          rowData['Payment Intent IDs'] = payments.map(p => p.id).join(', ');
           
           await googleSheets.addRow(rowData);
           
-          // Send notification
-          await sendNotifications(payment, customer);
+          // Send notification for the first payment
+          await sendNotifications(firstPayment, customer);
           
           newPurchases++;
         }
@@ -222,7 +254,7 @@ app.post('/api/sync-payments', async (req, res) => {
         processedCount++;
         
       } catch (error) {
-        logger.error('Error processing payment', error, { paymentId: payment.id });
+        logger.error('Error processing customer group', error, { customerId });
       }
     }
     
