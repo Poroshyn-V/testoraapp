@@ -34,7 +34,7 @@ export function formatTelegram(session: Stripe.Checkout.Session, customerMetadat
   const creativeLink = m.creative_link && m.creative_link !== 'N/A' ? m.creative_link : null;
   
   // Create STRUCTURED notification message
-  let message = `🟢 Purchase purchase_${session.customer || 'unknown'}_${session.created} was processed!
+  let message = `🟢 Purchase purchase_cus_${session.customer || 'unknown'}_${session.created} was processed!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 💳 Payment Method: Card
 💰 Amount: ${amount} ${currency}
