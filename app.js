@@ -285,7 +285,39 @@ app.post('/api/sync-payments', async (req, res) => {
       return true;
     });
     
-    logger.info('Found successful payments', { count: successfulPayments.length });
+    // Get existing payment IDs from Google Sheets to avoid duplicates
+    const existingRows = await googleSheets.getAllRows();
+    const existingPaymentIds = new Set();
+    
+    for (const row of existingRows) {
+      const paymentIds = row.get('Payment Intent IDs');
+      if (paymentIds && paymentIds !== 'N/A') {
+        const ids = paymentIds.split(', ').map(id => id.trim());
+        ids.forEach(id => existingPaymentIds.add(id));
+      }
+    }
+    
+    // Filter out already processed payments
+    const newPayments = successfulPayments.filter(p => !existingPaymentIds.has(p.id));
+    
+    logger.info('Payment filtering', { 
+      total: successfulPayments.length, 
+      existing: existingPaymentIds.size,
+      new: newPayments.length 
+    });
+    
+    logger.info('Found new payments to process', { count: newPayments.length });
+    
+    // If no new payments, return early
+    if (newPayments.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No new payments to process',
+        total_payments: successfulPayments.length,
+        processed: 0,
+        new_purchases: 0
+      });
+    }
     
     // Initialize counters
     let processedCount = 0;
@@ -294,7 +326,7 @@ app.post('/api/sync-payments', async (req, res) => {
     // GROUP PAYMENTS BY CUSTOMER FIRST
     const customerGroups = new Map();
     
-    for (const payment of successfulPayments) {
+    for (const payment of newPayments) {
       const customer = await getCustomer(payment.customer);
       const customerId = customer?.id;
       
@@ -433,7 +465,7 @@ app.post('/api/sync-payments', async (req, res) => {
     }
     
     logger.info('Processed customer groups', { 
-      totalPayments: successfulPayments.length,
+      totalPayments: newPayments.length,
       uniqueCustomers: customerGroups.size,
       processed: processedCount,
       newPurchases: newPurchases
@@ -442,7 +474,7 @@ app.post('/api/sync-payments', async (req, res) => {
     res.json({
       success: true,
       message: `Sync completed! Processed ${processedCount} purchase(s)`,
-      total_payments: successfulPayments.length,
+      total_payments: newPayments.length,
       processed: processedCount,
       new_purchases: newPurchases
     });
