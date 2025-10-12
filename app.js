@@ -1272,7 +1272,7 @@ app.post('/api/update-existing', async (req, res) => {
           const timeDiff = Math.abs(payment.created - otherPayment.created);
           const hoursDiff = timeDiff / 3600;
           
-          if (hoursDiff <= 1) {
+          if (hoursDiff <= 3) {
             group.push(otherPayment);
             processedPayments.add(otherPayment.id);
           }
@@ -1553,15 +1553,24 @@ app.post('/api/sync-payments', async (req, res) => {
         
         // НЕ ОТПРАВЛЯЕМ УВЕДОМЛЕНИЯ СРАЗУ - сначала сохраняем в Google Sheets
 
-        // ИСПРАВЛЕНО: GEO data - Country, City формат
-        let geoCountry = m.geo_country || m.country || customer?.address?.country || 'N/A';
-        let geoCity = m.geo_city || m.city || '';
+        // ИСПРАВЛЕНО: GEO data using customer metadata (correct format: Country, City)
+        const customerMetadata = customer?.metadata || {};
+        let geoCountry = customerMetadata.geo_country || customer?.address?.country || 'N/A';
+        let geoCity = customerMetadata.geo_city || '';
         const country = geoCity ? `${geoCountry}, ${geoCity}` : geoCountry;
         
         // GEO формат: Country, City
 
+        // CORRECT UTC+1 format: "2025-10-11 20:02:40.000 UTC+1"
+        const createdUtc = new Date(firstPayment.created * 1000).toISOString();
+        const createdUtcPlus1 = new Date(firstPayment.created * 1000 + 60 * 60 * 1000)
+          .toISOString()
+          .replace('T', ' ')
+          .replace('Z', ' UTC+1');
+
         const purchaseData = {
-          created_at: new Date(firstPayment.created * 1000).toISOString(),
+          created_at: createdUtc,
+          created_local_utc_plus_1: createdUtcPlus1, // CORRECT format: "2025-10-11 20:02:40.000 UTC+1"
           purchase_id: purchaseId,
           payment_status: 'succeeded',
           amount: (group.totalAmount / 100).toFixed(2),
@@ -1572,15 +1581,15 @@ app.post('/api/sync-payments', async (req, res) => {
           age: m.age || '',
           product_tag: m.product_tag || '',
           creative_link: m.creative_link || '',
-          utm_source: m.utm_source || '',
-          utm_medium: m.utm_medium || '',
-          utm_campaign: m.utm_campaign || '',
-          utm_content: m.utm_content || '',
-          utm_term: m.utm_term || '',
-          platform_placement: m.platform_placement || '',
-          ad_name: m.ad_name || '',
-          adset_name: m.adset_name || '',
-          campaign_name: m.campaign_name || m.utm_campaign || '',
+          utm_source: customerMetadata.utm_source || '',
+          utm_medium: customerMetadata.utm_medium || '',
+          utm_campaign: customerMetadata.utm_campaign || '',
+          utm_content: customerMetadata.utm_content || '',
+          utm_term: customerMetadata.utm_term || '',
+          platform_placement: customerMetadata.platform_placement || '',
+          ad_name: customerMetadata.ad_name || '',
+          adset_name: customerMetadata.adset_name || '',
+          campaign_name: customerMetadata.campaign_name || customerMetadata.utm_campaign || '',
           web_campaign: m.web_campaign || '',
           customer_id: customer?.id || 'N/A',
           client_reference_id: firstPayment.client_secret || '',
