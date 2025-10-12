@@ -166,70 +166,74 @@ async function sendWeeklyReport() {
     const sheet = doc.sheetsByIndex[0];
     const rows = await sheet.getRows();
     
-    // Получаем текущую неделю (понедельник - воскресенье)
+    // Получаем ПРОШЛУЮ неделю (понедельник - воскресенье) для анализа
     const now = new Date();
     const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
     const currentWeekStart = new Date(utcPlus1);
-    currentWeekStart.setDate(utcPlus1.getDate() - utcPlus1.getDay() + 1); // Понедельник
+    currentWeekStart.setDate(utcPlus1.getDate() - utcPlus1.getDay() + 1); // Понедельник текущей недели
     currentWeekStart.setHours(0, 0, 0, 0);
     
-    const currentWeekEnd = new Date(currentWeekStart);
-    currentWeekEnd.setDate(currentWeekStart.getDate() + 6); // Воскресенье
-    currentWeekEnd.setHours(23, 59, 59, 999);
-    
-    // Получаем прошлую неделю для сравнения
+    // Анализируем ПРОШЛУЮ неделю (не текущую!)
     const lastWeekStart = new Date(currentWeekStart);
-    lastWeekStart.setDate(currentWeekStart.getDate() - 7);
+    lastWeekStart.setDate(currentWeekStart.getDate() - 7); // Понедельник прошлой недели
     
-    const lastWeekEnd = new Date(currentWeekEnd);
-    lastWeekEnd.setDate(currentWeekEnd.getDate() - 7);
+    const lastWeekEnd = new Date(lastWeekStart);
+    lastWeekEnd.setDate(lastWeekStart.getDate() + 6); // Воскресенье прошлой недели
+    lastWeekEnd.setHours(23, 59, 59, 999);
     
-    console.log(`📅 Анализирую неделю: ${currentWeekStart.toISOString().split('T')[0]} - ${currentWeekEnd.toISOString().split('T')[0]}`);
-    console.log(`📅 Сравниваю с неделей: ${lastWeekStart.toISOString().split('T')[0]} - ${lastWeekEnd.toISOString().split('T')[0]}`);
+    // Получаем неделю до прошлой для сравнения
+    const weekBeforeLastStart = new Date(lastWeekStart);
+    weekBeforeLastStart.setDate(lastWeekStart.getDate() - 7);
     
-    // Фильтруем покупки текущей недели
-    const currentWeekPurchases = rows.filter(row => {
-      const createdLocal = row.get('Created Local (UTC+1)') || '';
-      const purchaseDate = new Date(createdLocal);
-      return purchaseDate >= currentWeekStart && purchaseDate <= currentWeekEnd;
-    });
+    const weekBeforeLastEnd = new Date(lastWeekEnd);
+    weekBeforeLastEnd.setDate(lastWeekEnd.getDate() - 7);
     
-    // Фильтруем покупки прошлой недели
+    console.log(`📅 Анализирую ПРОШЛУЮ неделю: ${lastWeekStart.toISOString().split('T')[0]} - ${lastWeekEnd.toISOString().split('T')[0]}`);
+    console.log(`📅 Сравниваю с неделей до прошлой: ${weekBeforeLastStart.toISOString().split('T')[0]} - ${weekBeforeLastEnd.toISOString().split('T')[0]}`);
+    
+    // Фильтруем покупки ПРОШЛОЙ недели (анализируем эту)
     const lastWeekPurchases = rows.filter(row => {
       const createdLocal = row.get('Created Local (UTC+1)') || '';
       const purchaseDate = new Date(createdLocal);
       return purchaseDate >= lastWeekStart && purchaseDate <= lastWeekEnd;
     });
     
-    console.log(`📊 Текущая неделя: ${currentWeekPurchases.length} покупок`);
-    console.log(`📊 Прошлая неделя: ${lastWeekPurchases.length} покупок`);
+    // Фильтруем покупки недели до прошлой (для сравнения)
+    const weekBeforeLastPurchases = rows.filter(row => {
+      const createdLocal = row.get('Created Local (UTC+1)') || '';
+      const purchaseDate = new Date(createdLocal);
+      return purchaseDate >= weekBeforeLastStart && purchaseDate <= weekBeforeLastEnd;
+    });
     
-    if (currentWeekPurchases.length === 0) {
-      console.log('📭 Нет покупок за текущую неделю - пропускаю еженедельный отчет');
+    console.log(`📊 Прошлая неделя: ${lastWeekPurchases.length} покупок`);
+    console.log(`📊 Неделя до прошлой: ${weekBeforeLastPurchases.length} покупок`);
+    
+    if (lastWeekPurchases.length === 0) {
+      console.log('📭 Нет покупок за прошлую неделю - пропускаю еженедельный отчет');
       return;
     }
     
-    // Анализируем текущую неделю
-    let currentWeekRevenue = 0;
-    const currentWeekGeo = new Map();
-    const currentWeekCreatives = new Map();
+    // Анализируем ПРОШЛУЮ неделю (основной анализ)
+    let lastWeekRevenue = 0;
+    const lastWeekGeo = new Map();
+    const lastWeekCreatives = new Map();
     const dailyStats = new Map();
     
-    for (const purchase of currentWeekPurchases) {
+    for (const purchase of lastWeekPurchases) {
       const amount = parseFloat(purchase.get('Total Amount') || '0');
-      currentWeekRevenue += amount;
+      lastWeekRevenue += amount;
       
       // GEO анализ
       const geo = purchase.get('GEO') || '';
       const country = geo.split(',')[0].trim();
       if (country) {
-        currentWeekGeo.set(country, (currentWeekGeo.get(country) || 0) + 1);
+        lastWeekGeo.set(country, (lastWeekGeo.get(country) || 0) + 1);
       }
       
       // Креативы анализ
       const adName = purchase.get('Ad Name') || '';
       if (adName) {
-        currentWeekCreatives.set(adName, (currentWeekCreatives.get(adName) || 0) + 1);
+        lastWeekCreatives.set(adName, (lastWeekCreatives.get(adName) || 0) + 1);
       }
       
       // Дневная статистика
@@ -245,26 +249,26 @@ async function sendWeeklyReport() {
       }
     }
     
-    // Анализируем прошлую неделю для сравнения
-    let lastWeekRevenue = 0;
-    for (const purchase of lastWeekPurchases) {
+    // Анализируем неделю до прошлой для сравнения
+    let weekBeforeLastRevenue = 0;
+    for (const purchase of weekBeforeLastPurchases) {
       const amount = parseFloat(purchase.get('Total Amount') || '0');
-      lastWeekRevenue += amount;
+      weekBeforeLastRevenue += amount;
     }
     
-    // Рассчитываем рост/падение
-    const revenueGrowth = lastWeekRevenue > 0 ? 
-      ((currentWeekRevenue - lastWeekRevenue) / lastWeekRevenue * 100).toFixed(1) : 0;
-    const salesGrowth = lastWeekPurchases.length > 0 ? 
-      ((currentWeekPurchases.length - lastWeekPurchases.length) / lastWeekPurchases.length * 100).toFixed(1) : 0;
+    // Рассчитываем рост/падение (сравниваем прошлую неделю с неделей до прошлой)
+    const revenueGrowth = weekBeforeLastRevenue > 0 ? 
+      ((lastWeekRevenue - weekBeforeLastRevenue) / weekBeforeLastRevenue * 100).toFixed(1) : 0;
+    const salesGrowth = weekBeforeLastPurchases.length > 0 ? 
+      ((lastWeekPurchases.length - weekBeforeLastPurchases.length) / weekBeforeLastPurchases.length * 100).toFixed(1) : 0;
     
-    // ТОП-3 страны
-    const topCountries = Array.from(currentWeekGeo.entries())
+    // ТОП-3 страны за прошлую неделю
+    const topCountries = Array.from(lastWeekGeo.entries())
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3);
     
-    // ТОП-3 креатива
-    const topCreatives = Array.from(currentWeekCreatives.entries())
+    // ТОП-3 креатива за прошлую неделю
+    const topCreatives = Array.from(lastWeekCreatives.entries())
       .sort((a, b) => b[1] - a[1])
       .slice(0, 3);
     
@@ -277,23 +281,23 @@ async function sendWeeklyReport() {
       });
     
     // Формируем отчет
-    const weekStartStr = currentWeekStart.toISOString().split('T')[0];
-    const weekEndStr = currentWeekEnd.toISOString().split('T')[0];
+    const weekStartStr = lastWeekStart.toISOString().split('T')[0];
+    const weekEndStr = lastWeekEnd.toISOString().split('T')[0];
     
-    const reportText = `📊 **Weekly Report (${weekStartStr} - ${weekEndStr})**
+    const reportText = `📊 **Weekly Report - Past Week (${weekStartStr} - ${weekEndStr})**
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-💰 **Total Revenue:** $${currentWeekRevenue.toFixed(2)}
-📈 **Revenue Growth:** ${revenueGrowth > 0 ? '+' : ''}${revenueGrowth}% vs last week
-🛒 **Total Sales:** ${currentWeekPurchases.length}
-📊 **Sales Growth:** ${salesGrowth > 0 ? '+' : ''}${salesGrowth}% vs last week
+💰 **Total Revenue:** $${lastWeekRevenue.toFixed(2)}
+📈 **Revenue Growth:** ${revenueGrowth > 0 ? '+' : ''}${revenueGrowth}% vs week before
+🛒 **Total Sales:** ${lastWeekPurchases.length}
+📊 **Sales Growth:** ${salesGrowth > 0 ? '+' : ''}${salesGrowth}% vs week before
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🌍 **Top Countries:**
+🌍 **Top Countries (Past Week):**
 ${topCountries.map(([country, count], i) => `${i + 1}. ${country}: ${count} sales`).join('\n')}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎨 **Top Creatives:**
+🎨 **Top Creatives (Past Week):**
 ${topCreatives.map(([creative, count], i) => `${i + 1}. ${creative}: ${count} sales`).join('\n')}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📅 **Daily Breakdown:**
+📅 **Daily Breakdown (Past Week):**
 ${dailyBreakdown.join('\n')}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ⏰ **Report generated:** ${utcPlus1.toLocaleString('ru-RU', { timeZone: 'Europe/Berlin' })} UTC+1`;
@@ -2166,20 +2170,20 @@ app.listen(ENV.PORT, () => {
                  checkCreativeAlertTime();
                }, 2 * 60 * 1000); // 2 минуты
                
-               // ЕЖЕНЕДЕЛЬНЫЕ ОТЧЕТЫ каждое воскресенье в 20:00 UTC+1
-               console.log('📊 ЕЖЕНЕДЕЛЬНЫЕ ОТЧЕТЫ ВКЛЮЧЕНЫ - каждое воскресенье в 20:00 UTC+1');
+               // ЕЖЕНЕДЕЛЬНЫЕ ОТЧЕТЫ каждый понедельник в 8:00 UTC+1
+               console.log('📊 ЕЖЕНЕДЕЛЬНЫЕ ОТЧЕТЫ ВКЛЮЧЕНЫ - каждый понедельник в 8:00 UTC+1');
                
                // Функция для проверки времени еженедельного отчета
                function checkWeeklyReportTime() {
                  const now = new Date();
                  const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
-                 const dayOfWeek = utcPlus1.getDay(); // 0 = воскресенье
+                 const dayOfWeek = utcPlus1.getDay(); // 0 = воскресенье, 1 = понедельник
                  const hour = utcPlus1.getUTCHours();
                  const minute = utcPlus1.getUTCMinutes();
                  
-                 // Проверяем воскресенье в 20:00 UTC+1 (с допуском ±2 минуты)
-                 if (dayOfWeek === 0 && hour === 20 && minute >= 0 && minute <= 2) {
-                   console.log('📊 ВРЕМЯ ЕЖЕНЕДЕЛЬНОГО ОТЧЕТА:', utcPlus1.toISOString());
+                 // Проверяем понедельник в 8:00 UTC+1 (с допуском ±2 минуты)
+                 if (dayOfWeek === 1 && hour === 8 && minute >= 0 && minute <= 2) {
+                   console.log('📊 ВРЕМЯ ЕЖЕНЕДЕЛЬНОГО ОТЧЕТА (Понедельник 8:00):', utcPlus1.toISOString());
                    sendWeeklyReport();
                  }
                }
