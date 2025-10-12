@@ -141,6 +141,10 @@ app.post('/api/sync-payments', async (req, res) => {
     
     logger.info('Found successful payments', { count: successfulPayments.length });
     
+    // Initialize counters
+    let processedCount = 0;
+    let newPurchases = 0;
+    
     // SIMPLE LOGIC: Group payments by customer only (no time window)
     const groupedPurchases = new Map();
     
@@ -230,9 +234,6 @@ app.post('/api/sync-payments', async (req, res) => {
       totalPayments: successfulPayments.length,
       uniqueCustomers: groupedPurchases.size 
     });
-    
-    let processedCount = 0;
-    let newPurchases = 0;
     
     // Process only new customers (existing ones already processed above)
     for (const [customerId, group] of groupedPurchases) {
