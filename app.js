@@ -149,12 +149,16 @@ app.post('/api/sync-payments', async (req, res) => {
       try {
         const customer = await getCustomer(payment.customer);
         
-        // Check if customer already exists
-        const existingCustomer = await googleSheets.getCustomer(payment.customer);
+        // Check if customer already exists (find ALL records for this customer)
+        const existingCustomers = await googleSheets.findRows({ 'Customer ID': payment.customer });
         
-        if (existingCustomer) {
-          // Update existing customer
-          logger.info('Updating existing customer', { customerId: payment.customer });
+        if (existingCustomers.length > 0) {
+          // Update existing customer (use first record as base)
+          const existingCustomer = existingCustomers[0];
+          logger.info('Updating existing customer', { 
+            customerId: payment.customer, 
+            existingRecords: existingCustomers.length 
+          });
           
           // Get all payments for this customer to recalculate totals
           const allPayments = await getCustomerPayments(payment.customer);
@@ -177,13 +181,25 @@ app.post('/api/sync-payments', async (req, res) => {
             paymentIds.push(p.id);
           }
           
-          // Update row
+          // Update first row with consolidated data
           await googleSheets.updateRow(existingCustomer, {
             'Purchase ID': `purchase_${payment.customer}_${allSuccessfulPayments[0].created}`,
             'Total Amount': (totalAmount / 100).toFixed(2),
             'Payment Count': paymentCount.toString(),
             'Payment Intent IDs': paymentIds.join(', ')
           });
+          
+          // Delete duplicate rows (keep only the first one)
+          if (existingCustomers.length > 1) {
+            logger.info('Removing duplicate customer records', { 
+              customerId: payment.customer, 
+              duplicatesToRemove: existingCustomers.length - 1 
+            });
+            
+            for (let i = 1; i < existingCustomers.length; i++) {
+              await existingCustomers[i].delete();
+            }
+          }
           
           newPurchases++;
         } else {
