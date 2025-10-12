@@ -480,6 +480,49 @@ app.listen(ENV.PORT, () => {
   console.log(`🛡️ Rate limiting: ${getRateLimitStats().maxRequests} requests per ${getRateLimitStats().window / 1000 / 60} minutes`);
   console.log(`💾 Cache system: Google Sheets caching enabled`);
   console.log(`📝 Structured logging: JSON format with timestamps`);
+  
+  // Start automatic synchronization
+  if (!ENV.AUTO_SYNC_DISABLED) {
+    console.log('🔄 Starting automatic sync every 5 minutes...');
+    
+    // First sync after 30 seconds
+    setTimeout(async () => {
+      try {
+        console.log('🚀 Running initial sync...');
+        const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const result = await response.json();
+        console.log(`✅ Initial sync completed: ${result.total_payments || 0} payments processed`);
+      } catch (error) {
+        console.error('❌ Initial sync failed:', error.message);
+      }
+    }, 30000);
+    
+    // Then every 5 minutes
+    setInterval(async () => {
+      try {
+        console.log('🔄 Running scheduled sync...');
+        const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        const result = await response.json();
+        console.log(`✅ Scheduled sync completed: ${result.total_payments || 0} payments processed`);
+      } catch (error) {
+        console.error('❌ Scheduled sync failed:', error.message);
+      }
+    }, 5 * 60 * 1000); // 5 minutes
+    
+    console.log('🤖 AUTOMATIC SYNC ENABLED:');
+    console.log('   ✅ Checks Stripe every 5 minutes');
+    console.log('   ✅ Adds new purchases to Google Sheets');
+    console.log('   ✅ Sends notifications to Telegram and Slack');
+    console.log('   ✅ Works WITHOUT manual intervention');
+  } else {
+    console.log('⏸️ Automatic sync is DISABLED (AUTO_SYNC_DISABLED=true)');
+  }
 });
 
 export default app;
