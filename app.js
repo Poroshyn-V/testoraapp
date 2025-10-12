@@ -182,8 +182,24 @@ app.post('/api/sync-payments', async (req, res) => {
           paymentIdsAll.push(p.id);
         }
         
-        // Update existing row
-        await googleSheets.updateRow(existingCustomer, {
+        // Delete duplicate rows first (keep only the first one)
+        if (existingCustomers.length > 1) {
+          for (let i = 1; i < existingCustomers.length; i++) {
+            await existingCustomers[i].delete();
+          }
+        }
+        
+        // Get fresh row data after deleting duplicates
+        const freshCustomers = await googleSheets.findRows({ 'Customer ID': customerId });
+        if (freshCustomers.length === 0) {
+          logger.warn('Customer row disappeared after cleanup, skipping update', { customerId });
+          continue;
+        }
+        
+        const freshCustomer = freshCustomers[0];
+        
+        // Update existing row with fresh data
+        await googleSheets.updateRow(freshCustomer, {
           'Purchase ID': `purchase_${customerId}_${allSuccessfulPayments[0].created}`,
           'Total Amount': (totalAmountAll / 100).toFixed(2),
           'Payment Count': paymentCountAll.toString(),
@@ -191,7 +207,7 @@ app.post('/api/sync-payments', async (req, res) => {
         });
         
         // Send notification for upsell
-        const currentPaymentCount = parseInt(existingCustomer.get('Payment Count') || '0');
+        const currentPaymentCount = parseInt(freshCustomer.get('Payment Count') || '0');
         if (allSuccessfulPayments.length > currentPaymentCount) {
           logger.info('Sending notification for upsell', { 
             customerId, 
@@ -199,13 +215,6 @@ app.post('/api/sync-payments', async (req, res) => {
             newCount: allSuccessfulPayments.length 
           });
           await sendNotifications(payment, customer);
-        }
-        
-        // Delete duplicate rows if any
-        if (existingCustomers.length > 1) {
-          for (let i = 1; i < existingCustomers.length; i++) {
-            await existingCustomers[i].delete();
-          }
         }
         
         newPurchases++;
