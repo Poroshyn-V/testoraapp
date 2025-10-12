@@ -363,12 +363,21 @@ app.post('/api/sync-payments', async (req, res) => {
       customerGroups.get(customerId).payments.push(payment);
     }
     
+    // Track processed customers in this sync to avoid duplicates
+    const processedCustomersInThisSync = new Set();
+    
     // First, handle existing customers with new payments
     for (const payment of newPayments) {
       const customer = await getCustomer(payment.customer);
       const customerId = customer?.id;
       
       if (!customerId) continue;
+      
+      // Skip if we already processed this customer in this sync
+      if (processedCustomersInThisSync.has(customerId)) {
+        logger.info(`Customer ${customerId} already processed in this sync, skipping`);
+        continue;
+      }
       
       // If customer already exists, update their record
       if (existingCustomerIds.has(customerId)) {
@@ -451,6 +460,9 @@ app.post('/api/sync-payments', async (req, res) => {
         
         newPurchases++;
         processedCount++;
+        
+        // Mark customer as processed in this sync
+        processedCustomersInThisSync.add(customerId);
       }
     }
     
@@ -458,6 +470,12 @@ app.post('/api/sync-payments', async (req, res) => {
     for (const [customerId, group] of customerGroups) {
       const customer = group.customer;
       const payments = group.payments;
+      
+      // Skip if we already processed this customer in this sync
+      if (processedCustomersInThisSync.has(customerId)) {
+        logger.info(`Customer ${customerId} already processed in this sync, skipping group processing`);
+        continue;
+      }
       
       // Check if customer already exists in Google Sheets (double check)
       const existingCustomers = await googleSheets.findRows({ 'Customer ID': customerId });
@@ -573,6 +591,9 @@ app.post('/api/sync-payments', async (req, res) => {
         
         newPurchases++;
         processedCount++;
+        
+        // Mark customer as processed in this sync
+        processedCustomersInThisSync.add(customerId);
       }
     }
     
