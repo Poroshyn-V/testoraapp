@@ -104,12 +104,13 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
   const m = { ...payment.metadata, ...(customer?.metadata || {}), ...metadata };
   
   // Extract data
-  const amount = (payment.amount / 100).toFixed(2);
+  const amount = metadata['Total Amount'] || (payment.amount / 100).toFixed(2);
   const currency = payment.currency?.toUpperCase() || 'USD';
   const email = customer?.email || 'N/A';
   const geoCountry = m.geo_country || customer?.address?.country || 'Unknown';
   const geoCity = m.geo_city || customer?.address?.city || 'Unknown';
   const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
+  const paymentCount = metadata['Payment Count'] || '1';
   
   // Get data from metadata or passed sheet data and format it nicely
   const rawAdName = (metadata['Ad Name'] && metadata['Ad Name'] !== 'N/A') || (m.ad_name && m.ad_name !== 'N/A') ? (metadata['Ad Name'] || m.ad_name) : null;
@@ -127,7 +128,7 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 💳 Payment Method: Card
 💰 Amount: ${amount} ${currency}
-🏷️ Payments: 1
+🏷️ Payments: ${paymentCount}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📧 Email: ${email}
 📍 Location: ${geo}`;
@@ -225,12 +226,13 @@ export function formatSlackNotification(payment, customer, metadata = {}) {
   const m = { ...payment.metadata, ...(customer?.metadata || {}), ...metadata };
   
   // Extract data
-  const amount = (payment.amount / 100).toFixed(2);
+  const amount = metadata['Total Amount'] || (payment.amount / 100).toFixed(2);
   const currency = payment.currency?.toUpperCase() || 'USD';
   const email = customer?.email || 'N/A';
   const geoCountry = m.geo_country || customer?.address?.country || 'Unknown';
   const geoCity = m.geo_city || customer?.address?.city || 'Unknown';
   const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
+  const paymentCount = metadata['Payment Count'] || '1';
   
   // Get data from metadata or passed sheet data and format it nicely
   const rawAdName = (metadata['Ad Name'] && metadata['Ad Name'] !== 'N/A') || (m.ad_name && m.ad_name !== 'N/A') ? (metadata['Ad Name'] || m.ad_name) : null;
@@ -248,7 +250,7 @@ export function formatSlackNotification(payment, customer, metadata = {}) {
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 💳 Payment Method: Card
 💰 Amount: ${amount} ${currency}
-🏷️ Payments: 1
+🏷️ Payments: ${paymentCount}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📧 Email: ${email}
 📍 Location: ${geo}`;

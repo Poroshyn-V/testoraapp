@@ -387,8 +387,12 @@ app.post('/api/sync-payments', async (req, res) => {
             'Campaign Name': freshCustomer.get('Campaign Name') || 'N/A',
             'Creative Link': freshCustomer.get('Creative Link') || 'N/A'
           };
-          // Send notification for the latest payment only
+          // Send notification for the latest payment with grouping info
           const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
+          // Add grouping information to sheetData
+          sheetData['Total Amount'] = (totalAmountAll / 100).toFixed(2);
+          sheetData['Payment Count'] = paymentCountAll.toString();
+          sheetData['Payment Intent IDs'] = paymentIdsAll.join(', ');
           await sendNotifications(latestPayment, customer, sheetData);
         }
         
@@ -416,12 +420,15 @@ app.post('/api/sync-payments', async (req, res) => {
         
         await googleSheets.addRow(rowData);
         
-        // Send notification for the first payment with sheet data
+        // Send notification for the first payment with sheet data and grouping info
         const sheetData = {
           'Ad Name': rowData['Ad Name'] || 'N/A',
           'Adset Name': rowData['Adset Name'] || 'N/A',
           'Campaign Name': rowData['Campaign Name'] || 'N/A',
-          'Creative Link': rowData['Creative Link'] || 'N/A'
+          'Creative Link': rowData['Creative Link'] || 'N/A',
+          'Total Amount': (totalAmount / 100).toFixed(2),
+          'Payment Count': payments.length.toString(),
+          'Payment Intent IDs': payments.map(p => p.id).join(', ')
         };
         await sendNotifications(firstPayment, customer, sheetData);
         
