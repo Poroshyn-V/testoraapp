@@ -188,7 +188,7 @@ ${topCreatives.map(([creative, count], i) => `${i + 1}. ${creative}: ${count} sa
 ⏰ **Alert generated:** ${new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Berlin' })} UTC+1`;
 }
 
-// Format notification message for Slack (clean structured format)
+// Format notification message for Slack (same format as Telegram)
 export function formatSlackNotification(payment, customer, metadata = {}) {
   const m = { ...payment.metadata, ...(customer?.metadata || {}), ...metadata };
   
@@ -200,42 +200,37 @@ export function formatSlackNotification(payment, customer, metadata = {}) {
   const geoCity = m.geo_city || customer?.address?.city || 'Unknown';
   const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
   
-  // Format ad data (only include if not N/A)
-  const adName = m.ad_name && m.ad_name !== 'N/A' ? m.ad_name : null;
-  const adsetName = m.adset_name && m.adset_name !== 'N/A' ? m.adset_name : null;
-  const campaignName = m.campaign_name && m.campaign_name !== 'N/A' ? m.campaign_name : null;
-  const creativeLink = m.creative_link && m.creative_link !== 'N/A' ? m.creative_link : null;
+  // Format UTM data
+  const utmSource = m.utm_source || 'N/A';
+  const utmMedium = m.utm_medium || 'N/A';
+  const utmCampaign = m.utm_campaign || 'N/A';
+  const utmContent = m.utm_content || 'N/A';
+  const utmTerm = m.utm_term || 'N/A';
   
-  // Create clean notification message for Slack
-  let message = `🟢 Purchase purchase_${customer?.id || 'unknown'}_${payment.created} was processed!
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-💳 Payment Method: Card
-💰 Amount: ${amount} ${currency}
-🏷️ Payments: 1
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📧 Email: ${email}
-📍 Location: ${geo}`;
-
-  // Add creative link if available
-  if (creativeLink) {
-    message += `\n🔗 Link: ${creativeLink}`;
-  }
-
-  // Add campaign data section if any data is available
-  const hasCampaignData = adName || adsetName || campaignName;
-  if (hasCampaignData) {
-    message += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 Campaign Data:`;
-    
-    if (adName) {
-      message += `\n• Ad: ${adName}`;
-    }
-    if (adsetName) {
-      message += `\n• Adset: ${adsetName}`;
-    }
-    if (campaignName) {
-      message += `\n• Campaign: ${campaignName}`;
-    }
-  }
+  // Format ad data
+  const adName = m.ad_name || 'N/A';
+  const adsetName = m.adset_name || 'N/A';
+  const campaignName = m.campaign_name || 'N/A';
+  
+  // Create notification message (EXACT same format as Telegram)
+  const message = `🟢 Order ${payment.id.substring(0, 7)} was processed!
+---------------------------
+💳 card
+💰 ${amount} ${currency}
+🏷️ ${m.product_tag || 'N/A'}
+---------------------------
+📧 ${email}
+---------------------------
+🌪️ ${m.utm_id || 'N/A'}
+📍 ${geo}
+🧍${m.gender || 'N/A'} ${m.age || 'N/A'}
+🔗 ${m.creative_link || 'N/A'}
+meta
+${utmSource}
+${utmMedium}
+${adName}
+${adsetName}
+${campaignName}`;
 
   return message;
 }
