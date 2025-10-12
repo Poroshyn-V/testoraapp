@@ -1393,27 +1393,33 @@ app.post('/api/sync-payments', async (req, res) => {
       });
     }
     
-    // Filter successful payments - ТОЛЬКО "Subscription creation" (первые покупки)
-    const firstPurchases = payments.data.filter(p => {
+    // Filter successful payments - "Subscription creation" И "Subscription update" (переходы с триала)
+    const validPurchases = payments.data.filter(p => {
       if (p.status !== 'succeeded' || !p.customer) return false;
       
-      // Включаем ТОЛЬКО "Subscription creation" - это первые покупки
+      // Включаем "Subscription creation" - первые покупки
       if (p.description && p.description.toLowerCase().includes('subscription creation')) {
         console.log(`✅ Subscription creation: ${p.id} - $${(p.amount / 100).toFixed(2)}`);
         return true;
       }
       
-      // Пропускаем все остальное (Subscription update, другие типы)
+      // Включаем "Subscription update" - переходы с триала на полную версию
+      if (p.description && p.description.toLowerCase().includes('subscription update')) {
+        console.log(`✅ Subscription update (триал→полная): ${p.id} - $${(p.amount / 100).toFixed(2)}`);
+        return true;
+      }
+      
+      // Пропускаем все остальное
       console.log(`⏭️ Пропускаем: ${p.description || 'No description'} - ${p.id}`);
       return false;
     });
     
-    console.log(`📊 Найдено ${firstPurchases.length} первых покупок (Subscription creation)`);
+    console.log(`📊 Найдено ${validPurchases.length} валидных покупок (Subscription creation + update)`);
     
-    // ГРУППИРУЕМ ПОКУПКИ: только первые покупки (без апсейлов)
+    // ГРУППИРУЕМ ПОКУПКИ: Subscription creation и update (переходы с триала)
     const groupedPurchases = new Map();
     
-    for (const payment of firstPurchases) {
+    for (const payment of validPurchases) {
       if (payment.customer) {
         let customer = null;
         try {
