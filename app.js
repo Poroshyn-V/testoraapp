@@ -424,6 +424,104 @@ app.get('/api/last-purchases', async (req, res) => {
 });
 
 // Debug endpoint to check specific customer
+// Fix Google Sheets data endpoint
+app.post('/api/fix-sheets-data', async (req, res) => {
+  try {
+    logger.info('Starting Google Sheets data fix...');
+    
+    // Get all rows from Google Sheets
+    const rows = await googleSheets.getAllRows();
+    logger.info(`Found ${rows.length} rows to check`);
+    
+    let fixedCount = 0;
+    
+    for (const row of rows) {
+      const customerId = row.get('Customer ID');
+      const email = row.get('Email');
+      
+      if (!customerId || customerId === 'N/A') continue;
+      
+      logger.info(`Checking customer: ${email} (${customerId})`);
+      
+      // Get customer data from Stripe
+      const customer = await getCustomer(customerId);
+      if (!customer) {
+        logger.warn(`Customer not found in Stripe: ${customerId}`);
+        continue;
+      }
+      
+      // Get customer's payments to find metadata
+      const payments = await getCustomerPayments(customerId);
+      const successfulPayments = payments.filter(p => p.status === 'succeeded');
+      
+      if (successfulPayments.length === 0) {
+        logger.warn(`No successful payments found for: ${customerId}`);
+        continue;
+      }
+      
+      // Get metadata from the first successful payment
+      const payment = successfulPayments[0];
+      const m = { ...payment.metadata, ...(customer?.metadata || {}) };
+      
+      // Check if we need to update any fields
+      const currentAdName = row.get('Ad Name');
+      const currentAdsetName = row.get('Adset Name');
+      const currentCampaignName = row.get('Campaign Name');
+      const currentCreativeLink = row.get('Creative Link');
+      
+      const newAdName = m.ad_name || m['Ad Name'] || 'N/A';
+      const newAdsetName = m.adset_name || m['Adset Name'] || 'N/A';
+      const newCampaignName = m.campaign_name || m['Campaign Name'] || m.utm_campaign || 'N/A';
+      const newCreativeLink = m.creative_link || m['Creative Link'] || 'N/A';
+      
+      // Check if any field needs updating
+      const needsUpdate = 
+        (currentAdName === 'N/A' && newAdName !== 'N/A') ||
+        (currentAdsetName === 'N/A' && newAdsetName !== 'N/A') ||
+        (currentCampaignName === 'N/A' && newCampaignName !== 'N/A') ||
+        (currentCreativeLink === 'N/A' && newCreativeLink !== 'N/A');
+      
+      if (needsUpdate) {
+        logger.info(`Updating data for: ${email}`, {
+          adName: `${currentAdName} → ${newAdName}`,
+          adsetName: `${currentAdsetName} → ${newAdsetName}`,
+          campaignName: `${currentCampaignName} → ${newCampaignName}`,
+          creativeLink: `${currentCreativeLink} → ${newCreativeLink}`
+        });
+        
+        await googleSheets.updateRow(row, {
+          'Ad Name': newAdName,
+          'Adset Name': newAdsetName,
+          'Campaign Name': newCampaignName,
+          'Creative Link': newCreativeLink
+        });
+        
+        fixedCount++;
+      }
+      
+      // Small delay to avoid rate limits
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    logger.info(`Fix completed! Updated ${fixedCount} rows`);
+    
+    res.json({
+      success: true,
+      message: `Google Sheets data fix completed!`,
+      total_rows: rows.length,
+      fixed_rows: fixedCount
+    });
+    
+  } catch (error) {
+    logger.error('Error fixing Google Sheets data', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error fixing Google Sheets data',
+      error: error.message
+    });
+  }
+});
+
 app.get('/api/debug-customer/:customerId', async (req, res) => {
   try {
     const { customerId } = req.params;
