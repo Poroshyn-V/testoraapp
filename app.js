@@ -122,6 +122,56 @@ app.get('/api/test', (req, res) => {
   });
 });
 
+// Clean duplicates endpoint
+app.post('/api/clean-duplicates', async (req, res) => {
+  try {
+    logger.info('Starting duplicate cleanup...');
+    
+    const rows = await googleSheets.getAllRows();
+    const customerMap = new Map();
+    let duplicatesRemoved = 0;
+    
+    // Group rows by Customer ID
+    for (const row of rows) {
+      const customerId = row.get('Customer ID');
+      if (!customerId || customerId === 'N/A') continue;
+      
+      if (!customerMap.has(customerId)) {
+        customerMap.set(customerId, []);
+      }
+      customerMap.get(customerId).push(row);
+    }
+    
+    // Remove duplicates for each customer
+    for (const [customerId, customerRows] of customerMap) {
+      if (customerRows.length > 1) {
+        logger.info(`Found ${customerRows.length} duplicates for customer ${customerId}`);
+        
+        // Keep the first row, delete the rest
+        for (let i = 1; i < customerRows.length; i++) {
+          await customerRows[i].delete();
+          duplicatesRemoved++;
+        }
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Duplicate cleanup completed! Removed ${duplicatesRemoved} duplicate rows`,
+      total_rows: rows.length,
+      duplicates_removed: duplicatesRemoved
+    });
+    
+  } catch (error) {
+    logger.error('Error cleaning duplicates', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error cleaning duplicates',
+      error: error.message
+    });
+  }
+});
+
 // Test Telegram API directly
 app.post('/api/test-telegram', async (req, res) => {
   try {
