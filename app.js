@@ -316,13 +316,13 @@ app.post('/api/sync-payments', async (req, res) => {
         
         // Update existing row with fresh data
         await googleSheets.updateRow(freshCustomer, {
-          'Purchase ID': `purchase_${customerId}_${allSuccessfulPayments[0].created}`,
+          'Purchase ID': `purchase_${customerId}`,
           'Total Amount': (totalAmountAll / 100).toFixed(2),
           'Payment Count': paymentCountAll.toString(),
           'Payment Intent IDs': paymentIdsAll.join(', ')
         });
         
-        // Send notification for upsell
+        // Send notification for upsell only if there are new payments
         const currentPaymentCount = parseInt(freshCustomer.get('Payment Count') || '0');
         if (allSuccessfulPayments.length > currentPaymentCount) {
           logger.info('Sending notification for upsell', { 
@@ -337,7 +337,9 @@ app.post('/api/sync-payments', async (req, res) => {
             'Campaign Name': freshCustomer.get('Campaign Name') || 'N/A',
             'Creative Link': freshCustomer.get('Creative Link') || 'N/A'
           };
-          await sendNotifications(payment, customer, sheetData);
+          // Send notification for the latest payment only
+          const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
+          await sendNotifications(latestPayment, customer, sheetData);
         }
         
         newPurchases++;

@@ -68,7 +68,7 @@ export function formatPaymentForSheets(payment, customer, metadata = {}) {
   const createdLocal = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.000 UTC+1`;
   
   return {
-    'Purchase ID': `purchase_${customerId}_${payment.created}`,
+    'Purchase ID': `purchase_${customerId}`,
     'Created UTC': createdUTC,
     'Created Local (UTC+1)': createdLocal,
     'Payment Intent IDs': payment.id,
