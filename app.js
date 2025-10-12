@@ -1584,22 +1584,55 @@ app.post('/api/sync-payments', async (req, res) => {
           rowPaymentIds.forEach(id => existingPaymentIds.add(id));
         }
         
-        // Быстрая проверка дубликатов
-        let existsInSheets = false;
+        // Проверяем, есть ли уже запись для этого клиента
+        let existingRow = null;
+        let isNewCustomer = true;
         
         if (existingPurchaseIds.has(purchaseId)) {
           console.log(`⏭️ SKIP: ${purchaseId} already exists by Purchase ID`);
-          existsInSheets = true;
+          continue;
         } else if (customerEmail && existingEmails.has(customerEmail)) {
-          console.log(`⏭️ SKIP: ${purchaseId} already exists by email: ${customerEmail}`);
-          existsInSheets = true;
+          // НАЙДЕН СУЩЕСТВУЮЩИЙ КЛИЕНТ - обновляем его запись
+          console.log(`🔄 UPDATE: Found existing customer by email: ${customerEmail}`);
+          isNewCustomer = false;
+          
+          // Находим существующую строку
+          for (const row of rows) {
+            const rowEmail = (row.get('Email') || '').toLowerCase().trim();
+            if (rowEmail === customerEmail) {
+              existingRow = row;
+              break;
+            }
+          }
         } else if (groupPaymentIds.some(id => existingPaymentIds.has(id))) {
           console.log(`⏭️ SKIP: ${purchaseId} already exists by Payment Intent ID`);
-          existsInSheets = true;
+          continue;
         }
         
-        if (existsInSheets) {
-          continue; // Пропускаем существующие
+        if (existingRow) {
+          // ОБНОВЛЯЕМ СУЩЕСТВУЮЩУЮ ЗАПИСЬ (апсейл)
+          console.log(`🔄 Updating existing customer record for ${customerEmail}`);
+          
+          // Получаем текущие данные
+          const currentPaymentIds = (existingRow.get('Payment Intent IDs') || '').split(', ').filter(id => id);
+          const currentTotalAmount = parseFloat(existingRow.get('Total Amount') || '0');
+          const currentPaymentCount = parseInt(existingRow.get('Payment Count') || '1');
+          
+          // Добавляем новые Payment Intent IDs
+          const newPaymentIds = [...new Set([...currentPaymentIds, ...groupPaymentIds])];
+          const newTotalAmount = currentTotalAmount + (group.totalAmount / 100);
+          const newPaymentCount = currentPaymentCount + group.payments.length;
+          
+          // Обновляем строку
+          existingRow.set('Payment Intent IDs', newPaymentIds.join(', '));
+          existingRow.set('Total Amount', newTotalAmount.toFixed(2));
+          existingRow.set('Payment Count', newPaymentCount.toString());
+          
+          await existingRow.save();
+          console.log(`✅ Updated customer: $${newTotalAmount.toFixed(2)} (${newPaymentCount} payments)`);
+          
+          newPurchases++;
+          continue;
         }
         
         // Дополнительная проверка: не обрабатывали ли мы уже эту покупку в этом запуске
@@ -1616,8 +1649,27 @@ app.post('/api/sync-payments', async (req, res) => {
 
         // ИСПРАВЛЕНО: GEO data using customer metadata (correct format: Country, City)
         const customerMetadata = customer?.metadata || {};
-        let geoCountry = customerMetadata.geo_country || customer?.address?.country || 'N/A';
-        let geoCity = customerMetadata.geo_city || '';
+        let geoCountry = customerMetadata.geo_country || customer?.address?.country || 'Unknown';
+        let geoCity = customerMetadata.geo_city || customer?.address?.city || '';
+        
+        // Fallback: если нет GEO данных, пробуем получить из payment methods
+        if (geoCountry === 'Unknown' && customer?.id) {
+          try {
+            const paymentMethods = await stripe.paymentMethods.list({
+              customer: customer.id,
+              type: 'card',
+              limit: 1
+            });
+            
+            if (paymentMethods.data.length > 0 && paymentMethods.data[0].card && paymentMethods.data[0].card.country) {
+              geoCountry = paymentMethods.data[0].card.country;
+              console.log(`💳 Используем страну из карты: ${geoCountry}`);
+            }
+          } catch (pmError) {
+            // Игнорируем ошибки получения payment methods
+          }
+        }
+        
         const country = geoCity ? `${geoCountry}, ${geoCity}` : geoCountry;
         
         // GEO формат: Country, City
