@@ -1559,8 +1559,8 @@ app.post('/api/sync-payments', async (req, res) => {
         const firstPayment = group.firstPayment;
         const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
 
-        // ПРАВИЛЬНАЯ ЛОГИКА: используем только customer ID для группировки
-        const purchaseId = `purchase_${customer?.id || 'unknown'}`;
+        // ПРАВИЛЬНАЯ ЛОГИКА: используем customer ID + timestamp для уникальности
+        const purchaseId = `purchase_${customer?.id || 'unknown'}_${firstPayment.created}`;
 
         // УПРОЩЕННОЕ ЛОГИРОВАНИЕ ДЛЯ ОТЛАДКИ ДУБЛЕЙ
         console.log(`🔍 Processing: ${purchaseId} (${group.payments.length} payments)`);
