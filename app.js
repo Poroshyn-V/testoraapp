@@ -916,7 +916,7 @@ app.get('/api/check-duplicates', async (req, res) => {
     
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      const email = row.get('Customer Email') || '';
+      const email = row.get('Email') || '';
       const date = row.get('Created Local (UTC+1)') || '';
       const amount = row.get('Total Amount') || '';
       
@@ -1070,8 +1070,17 @@ app.get('/api/last-purchases', async (req, res) => {
       });
     }
     
-    // Filter successful payments and get customer data
-    const successfulPayments = payments.data.filter(p => p.status === 'succeeded' && p.customer);
+    // Filter successful payments and get customer data (excluding Subscription updates)
+    const successfulPayments = payments.data.filter(p => {
+      if (p.status !== 'succeeded' || !p.customer) return false;
+      
+      // Exclude Subscription updates - they are not new purchases from ads
+      if (p.description && p.description.toLowerCase().includes('subscription update')) {
+        return false;
+      }
+      
+      return true;
+    });
     const purchases = [];
     
     for (const payment of successfulPayments) {
@@ -1234,7 +1243,7 @@ app.post('/api/update-existing', async (req, res) => {
     // Process each row and check for missing upsells
     for (const row of rows) {
       const customerId = row.get('Customer ID');
-      const email = row.get('Customer Email');
+      const email = row.get('Email');
       
       if (!customerId || customerId === 'N/A' || !email || email === 'N/A') {
         continue;
@@ -1248,7 +1257,16 @@ app.post('/api/update-existing', async (req, res) => {
         limit: 100
       });
       
-      const successfulPayments = payments.data.filter(p => p.status === 'succeeded' && p.customer);
+      const successfulPayments = payments.data.filter(p => {
+        if (p.status !== 'succeeded' || !p.customer) return false;
+        
+        // Exclude Subscription updates - they are not new purchases from ads
+        if (p.description && p.description.toLowerCase().includes('subscription update')) {
+          return false;
+        }
+        
+        return true;
+      });
       
       if (successfulPayments.length <= 1) {
         console.log(`   ⏭️ Only ${successfulPayments.length} payment, skipping`);
@@ -1358,9 +1376,19 @@ app.post('/api/sync-payments', async (req, res) => {
       });
     }
     
-    // Filter successful payments
-    const successfulPayments = payments.data.filter(p => p.status === 'succeeded' && p.customer);
-    console.log(`📊 Found ${successfulPayments.length} successful payments`);
+    // Filter successful payments and exclude Subscription updates
+    const successfulPayments = payments.data.filter(p => {
+      if (p.status !== 'succeeded' || !p.customer) return false;
+      
+      // Exclude Subscription updates - they are not new purchases from ads
+      if (p.description && p.description.toLowerCase().includes('subscription update')) {
+        console.log(`⏭️ Skipping Subscription update: ${p.id}`);
+        return false;
+      }
+      
+      return true;
+    });
+    console.log(`📊 Found ${successfulPayments.length} successful payments (excluding Subscription updates)`);
     
     // ГРУППИРУЕМ ПОКУПКИ: по customer ID (включая апсейлы в течение 24 часов)
     const groupedPurchases = new Map();
@@ -1484,7 +1512,7 @@ app.post('/api/sync-payments', async (req, res) => {
           console.log(`  - Purchase ID: "${row.get('Purchase ID')}"`);
           console.log(`  - purchase_id: "${row.get('purchase_id')}"`);
           console.log(`  - Customer ID: "${row.get('Customer ID')}"`);
-          console.log(`  - Email: "${row.get('Customer Email')}"`);
+          console.log(`  - Email: "${row.get('Email')}"`);
           console.log(`  - All data:`, row._rawData);
         }
       }
@@ -1623,7 +1651,7 @@ app.post('/api/sync-payments', async (req, res) => {
               'Created UTC': purchaseData.created_at,
               'Created Local (UTC+1)': utcPlus1Formatted,
               'Customer ID': purchaseData.customer_id,
-              'Customer Email': purchaseData.email,
+              'Email': purchaseData.email,
               'GEO': purchaseData.country,
               'UTM Source': purchaseData.utm_source,
               'UTM Medium': purchaseData.utm_medium,
