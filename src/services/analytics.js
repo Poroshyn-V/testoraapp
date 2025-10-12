@@ -65,7 +65,7 @@ export class AnalyticsService {
       const dailyStats = new Map();
       
       for (const purchase of lastWeekPurchases) {
-        const amount = parseFloat(purchase.get('Amount') || '0');
+        const amount = parseFloat(purchase.get('Total Amount') || '0');
         lastWeekRevenue += amount;
         
         // GEO analysis
@@ -97,7 +97,7 @@ export class AnalyticsService {
       // Analyze week before last for comparison
       let weekBeforeLastRevenue = 0;
       for (const purchase of weekBeforeLastPurchases) {
-        const amount = parseFloat(purchase.get('Amount') || '0');
+        const amount = parseFloat(purchase.get('Total Amount') || '0');
         weekBeforeLastRevenue += amount;
       }
       

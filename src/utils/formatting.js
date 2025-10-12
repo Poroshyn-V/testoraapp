@@ -35,7 +35,15 @@ export function formatPaymentForSheets(payment, customer, metadata = {}) {
   // Format dates
   const createdDate = new Date(payment.created * 1000);
   const createdUTC = createdDate.toISOString();
-  const createdLocal = new Date(createdDate.getTime() + 60 * 60 * 1000).toISOString(); // UTC+1
+  // Format UTC+1 properly: YYYY-MM-DD HH:MM:SS.000 UTC+1
+  const utcPlus1Date = new Date(createdDate.getTime() + 60 * 60 * 1000);
+  const year = utcPlus1Date.getFullYear();
+  const month = String(utcPlus1Date.getMonth() + 1).padStart(2, '0');
+  const day = String(utcPlus1Date.getDate()).padStart(2, '0');
+  const hours = String(utcPlus1Date.getHours()).padStart(2, '0');
+  const minutes = String(utcPlus1Date.getMinutes()).padStart(2, '0');
+  const seconds = String(utcPlus1Date.getSeconds()).padStart(2, '0');
+  const createdLocal = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.000 UTC+1`;
   
   return {
     'Created UTC': createdUTC,
