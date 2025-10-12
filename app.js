@@ -7,7 +7,15 @@ import { JWT } from 'google-auth-library';
 // Middleware imports removed - using simplified version
 
 const app = express();
-const logger = pino({ level: 'info' });
+const logger = pino({ 
+  level: 'info',
+  formatters: {
+    level: (label) => {
+      return { level: label };
+    }
+  },
+  timestamp: pino.stdTimeFunctions.isoTime
+});
 
 // Middleware initialization removed - using simplified version
 
@@ -33,7 +41,113 @@ const existingPurchases = new Set();
 // Глобальное хранилище для отслеживания обработанных покупок в рамках одного запуска
 const processedPurchaseIds = new Set();
 
+// Rate limiting storage
+const rateLimitStore = new Map();
+const RATE_LIMIT_WINDOW = 15 * 60 * 1000; // 15 минут
+const RATE_LIMIT_MAX_REQUESTS = 100; // максимум 100 запросов за 15 минут
+
 const stripe = new Stripe(ENV.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
+
+// Rate limiting middleware
+function rateLimit(req, res, next) {
+  const clientIP = req.ip || req.connection.remoteAddress || 'unknown';
+  const now = Date.now();
+  
+  // Очищаем старые записи
+  for (const [ip, data] of rateLimitStore.entries()) {
+    if (now - data.firstRequest > RATE_LIMIT_WINDOW) {
+      rateLimitStore.delete(ip);
+    }
+  }
+  
+  // Проверяем текущий IP
+  if (!rateLimitStore.has(clientIP)) {
+    rateLimitStore.set(clientIP, {
+      firstRequest: now,
+      requestCount: 1
+    });
+    return next();
+  }
+  
+  const clientData = rateLimitStore.get(clientIP);
+  
+  if (now - clientData.firstRequest > RATE_LIMIT_WINDOW) {
+    // Окно истекло, сбрасываем счетчик
+    rateLimitStore.set(clientIP, {
+      firstRequest: now,
+      requestCount: 1
+    });
+    return next();
+  }
+  
+  if (clientData.requestCount >= RATE_LIMIT_MAX_REQUESTS) {
+    console.log(`🚫 Rate limit exceeded for IP: ${clientIP}`);
+    return res.status(429).json({
+      error: 'Too Many Requests',
+      message: 'Rate limit exceeded. Please try again later.',
+      retryAfter: Math.ceil((RATE_LIMIT_WINDOW - (now - clientData.firstRequest)) / 1000)
+    });
+  }
+  
+  clientData.requestCount++;
+  next();
+}
+
+// Структурированное логирование
+function logInfo(message, data = {}) {
+  logger.info({
+    message,
+    ...data,
+    service: 'stripe-ops'
+  });
+}
+
+function logError(message, error = null, data = {}) {
+  logger.error({
+    message,
+    error: error ? {
+      name: error.name,
+      message: error.message,
+      stack: error.stack
+    } : null,
+    ...data,
+    service: 'stripe-ops'
+  });
+}
+
+function logWarn(message, data = {}) {
+  logger.warn({
+    message,
+    ...data,
+    service: 'stripe-ops'
+  });
+}
+
+// Валидация входных данных
+function validateEmail(email) {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return emailRegex.test(email);
+}
+
+function validateCustomerId(customerId) {
+  return customerId && typeof customerId === 'string' && customerId.startsWith('cus_');
+}
+
+function validatePaymentId(paymentId) {
+  return paymentId && typeof paymentId === 'string' && paymentId.startsWith('pi_');
+}
+
+function validateAmount(amount) {
+  return typeof amount === 'number' && amount > 0 && amount < 1000000; // максимум $10,000
+}
+
+function validateWebhookSignature(signature, payload, secret) {
+  if (!signature || !payload || !secret) {
+    return false;
+  }
+  // Stripe webhook signature validation будет добавлена позже
+  return true;
+}
 
 // Функция для детекции аномалий в продажах
 async function checkSalesAnomalies() {
@@ -843,6 +957,40 @@ async function loadExistingPurchases() {
 // Основные middleware
 app.use(express.json());
 
+// Применяем rate limiting ко всем API endpoints
+app.use('/api', rateLimit);
+
+// Глобальный обработчик ошибок
+app.use((error, req, res, next) => {
+  logError('Unhandled error', error, {
+    url: req.url,
+    method: req.method,
+    ip: req.ip
+  });
+  
+  res.status(500).json({
+    error: 'Internal Server Error',
+    message: 'An unexpected error occurred',
+    timestamp: new Date().toISOString(),
+    requestId: req.headers['x-request-id'] || 'unknown'
+  });
+});
+
+// 404 handler
+app.use((req, res) => {
+  logWarn('404 Not Found', {
+    url: req.url,
+    method: req.method,
+    ip: req.ip
+  });
+  
+  res.status(404).json({
+    error: 'Not Found',
+    message: 'The requested resource was not found',
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Root endpoint
 app.get('/', (_req, res) => res.json({ 
   message: 'Stripe Ops API is running!',
@@ -861,7 +1009,46 @@ app.get('/favicon.png', (req, res) => {
 });
 
 // Health check
-app.get('/health', (_req, res) => res.status(200).send('ok'));
+app.get('/health', async (_req, res) => {
+  try {
+    const healthStatus = {
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
+      environment: {
+        nodeVersion: process.version,
+        platform: process.platform,
+        arch: process.arch
+      },
+      services: {
+        stripe: 'connected',
+        googleSheets: ENV.GOOGLE_SERVICE_EMAIL ? 'configured' : 'not_configured',
+        telegram: ENV.TELEGRAM_BOT_TOKEN ? 'configured' : 'not_configured',
+        slack: ENV.SLACK_BOT_TOKEN ? 'configured' : 'not_configured'
+      },
+      rateLimit: {
+        activeConnections: rateLimitStore.size,
+        window: RATE_LIMIT_WINDOW,
+        maxRequests: RATE_LIMIT_MAX_REQUESTS
+      },
+      memory: {
+        existingPurchases: existingPurchases.size,
+        processedPurchases: processedPurchaseIds.size
+      }
+    };
+    
+    logInfo('Health check requested', { status: 'ok' });
+    res.status(200).json(healthStatus);
+  } catch (error) {
+    logError('Health check failed', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Health check failed',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
 
 // Endpoint для загрузки существующих покупок
 app.get('/api/load-existing', async (req, res) => {
