@@ -236,6 +236,12 @@ app.post('/api/sync-payments', async (req, res) => {
             'Payment Intent IDs': paymentIdsAll.join(', ')
           });
           
+          // Send notification for new payments (upsells)
+          if (payments.length > 0) {
+            logger.info('Sending notification for customer update', { customerId });
+            await sendNotifications(firstPayment, customer);
+          }
+          
           // Delete duplicate rows (keep only the first one)
           if (existingCustomers.length > 1) {
             logger.info('Removing duplicate customer records', { 

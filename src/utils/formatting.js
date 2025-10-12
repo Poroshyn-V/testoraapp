@@ -92,7 +92,10 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
   // Format ad data (only include if not N/A)
   const adName = m.ad_name && m.ad_name !== 'N/A' ? m.ad_name : null;
   const adsetName = m.adset_name && m.adset_name !== 'N/A' ? m.adset_name : null;
-  const campaignName = m.campaign_name && m.campaign_name !== 'N/A' ? m.campaign_name : null;
+  const campaignName = (m.campaign_name && m.campaign_name !== 'N/A') || 
+                      (m.campaign && m.campaign !== 'N/A') || 
+                      (m.campaign_id && m.campaign_id !== 'N/A') ? 
+                      (m.campaign_name || m.campaign || m.campaign_id) : null;
   const creativeLink = m.creative_link && m.creative_link !== 'N/A' ? m.creative_link : null;
   
   // Create structured notification message for Telegram
@@ -208,7 +211,10 @@ export function formatSlackNotification(payment, customer, metadata = {}) {
   // Format ad data (only include if not N/A)
   const adName = m.ad_name && m.ad_name !== 'N/A' ? m.ad_name : null;
   const adsetName = m.adset_name && m.adset_name !== 'N/A' ? m.adset_name : null;
-  const campaignName = m.campaign_name && m.campaign_name !== 'N/A' ? m.campaign_name : null;
+  const campaignName = (m.campaign_name && m.campaign_name !== 'N/A') || 
+                      (m.campaign && m.campaign !== 'N/A') || 
+                      (m.campaign_id && m.campaign_id !== 'N/A') ? 
+                      (m.campaign_name || m.campaign || m.campaign_id) : null;
   const creativeLink = m.creative_link && m.creative_link !== 'N/A' ? m.creative_link : null;
   
   // Create structured notification message for Slack
