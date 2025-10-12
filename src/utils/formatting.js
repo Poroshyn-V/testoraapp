@@ -17,10 +17,10 @@ export function formatPaymentForSheets(payment, customer, metadata = {}) {
   const utmContent = m.utm_content || 'N/A';
   const utmTerm = m.utm_term || 'N/A';
   
-  // Format ad data
-  const adName = m.ad_name || 'N/A';
-  const adsetName = m.adset_name || 'N/A';
-  const campaignName = m.campaign_name || 'N/A';
+  // Format ad data (check multiple possible field names)
+  const adName = m.ad_name || m['Ad Name'] || 'N/A';
+  const adsetName = m.adset_name || m['Adset Name'] || 'N/A';
+  const campaignName = m.campaign_name || m['Campaign Name'] || m.utm_campaign || 'N/A';
   
   // Format customer data
   const customerName = customer?.name || 'N/A';
@@ -58,7 +58,7 @@ export function formatPaymentForSheets(payment, customer, metadata = {}) {
     'Gender': m.gender || 'N/A',
     'Age': m.age || 'N/A',
     'Product Tag': m.product_tag || 'N/A',
-    'Creative Link': m.creative_link || 'N/A',
+    'Creative Link': m.creative_link || m['Creative Link'] || 'N/A',
     'UTM Source': utmSource,
     'UTM Medium': utmMedium,
     'UTM Campaign': utmCampaign,
