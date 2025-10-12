@@ -4,9 +4,15 @@ import pino from 'pino';
 import Stripe from 'stripe';
 import { GoogleSpreadsheet } from 'google-spreadsheet';
 import { JWT } from 'google-auth-library';
+import CachingMiddleware from './middleware/caching.js';
+import SecurityMiddleware from './middleware/security.js';
+import ErrorHandler from './middleware/errorHandler.js';
 
 const app = express();
 const logger = pino({ level: 'info' });
+
+// Инициализация обработчиков ошибок
+ErrorHandler.initialize();
 
 // Environment variables
 const ENV = {
@@ -831,7 +837,18 @@ async function loadExistingPurchases() {
   }
 }
 
-// Middleware
+// Middleware для безопасности
+app.use(SecurityMiddleware.securityHeaders);
+app.use(SecurityMiddleware.sanitizeRequest);
+app.use(SecurityMiddleware.rateLimit(100, 15 * 60 * 1000)); // 100 запросов за 15 минут
+app.use(SecurityMiddleware.validateRequestSize(1024 * 1024)); // 1MB лимит
+app.use(SecurityMiddleware.securityLog);
+
+// Middleware для производительности
+app.use(CachingMiddleware.performanceMonitoring);
+app.use(CachingMiddleware.optimizeRequests);
+
+// Основные middleware
 app.use(express.json());
 
 // Root endpoint
@@ -1388,12 +1405,31 @@ app.post('/api/sync-payments', async (req, res) => {
       
       return true;
     });
-    console.log(`📊 Found ${successfulPayments.length} successful payments (excluding Subscription updates)`);
     
-    // ГРУППИРУЕМ ПОКУПКИ: по customer ID (включая апсейлы в течение 3 часов)
-    const groupedPurchases = new Map();
+    // НОВАЯ ЛОГИКА: Оставляем только первые покупки каждого клиента
+    const firstPurchasesOnly = new Map();
     
     for (const payment of successfulPayments) {
+      const customerId = payment.customer;
+      
+      if (!firstPurchasesOnly.has(customerId)) {
+        // Это первая покупка клиента - добавляем
+        firstPurchasesOnly.set(customerId, payment);
+        console.log(`✅ Первая покупка клиента ${customerId}: $${(payment.amount / 100).toFixed(2)}`);
+      } else {
+        // Это не первая покупка - пропускаем (апсейл)
+        console.log(`⏭️ Пропускаем апсейл клиента ${customerId}: $${(payment.amount / 100).toFixed(2)}`);
+      }
+    }
+    
+    const firstPurchases = Array.from(firstPurchasesOnly.values());
+    console.log(`📊 Из ${successfulPayments.length} платежей оставлено ${firstPurchases.length} первых покупок`);
+    console.log(`📊 Found ${successfulPayments.length} successful payments (excluding Subscription updates)`);
+    
+    // ГРУППИРУЕМ ПОКУПКИ: только первые покупки (без апсейлов)
+    const groupedPurchases = new Map();
+    
+    for (const payment of firstPurchases) {
       if (payment.customer) {
         let customer = null;
         try {
@@ -1407,37 +1443,14 @@ app.post('/api/sync-payments', async (req, res) => {
 
         const customerId = customer?.id || 'unknown_customer';
         
-        // Проверяем, есть ли уже группа для этого customer'а
-        let existingGroup = null;
-        for (const [key, group] of groupedPurchases.entries()) {
-          if (group.customer?.id === customerId) {
-        // Проверяем, что платеж в течение 3 часов от первого платежа (для апсейлов)
-        const firstPaymentTime = group.firstPayment.created * 1000;
-        const currentPaymentTime = payment.created * 1000;
-        const timeDiff = Math.abs(currentPaymentTime - firstPaymentTime);
-        const hoursDiff = timeDiff / (1000 * 60 * 60);
-        
-        if (hoursDiff <= 3) {
-              existingGroup = group;
-              break;
-            }
-          }
-        }
-
-        if (existingGroup) {
-          // Добавляем к существующей группе
-          existingGroup.payments.push(payment);
-          existingGroup.totalAmount += payment.amount;
-        } else {
-          // Создаем новую группу
-          const groupKey = `${customerId}_${payment.created}`;
-          groupedPurchases.set(groupKey, {
-            customer,
-            payments: [payment],
-            totalAmount: payment.amount,
-            firstPayment: payment
-          });
-        }
+        // Создаем новую группу для каждой первой покупки (без группировки апсейлов)
+        const groupKey = `${customerId}_${payment.created}`;
+        groupedPurchases.set(groupKey, {
+          customer,
+          payments: [payment],
+          totalAmount: payment.amount,
+          firstPayment: payment
+        });
       }
     }
 
@@ -1906,6 +1919,15 @@ ${ad_name ? `• Ad: ${ad_name}` : ''}
 ${adset_name ? `• Adset: ${adset_name}` : ''}
 ${campaign_name ? `• Campaign: ${campaign_name}` : ''}`;
 }
+
+// Обработчики ошибок
+app.use(ErrorHandler.handleStripeError);
+app.use(ErrorHandler.handleGoogleSheetsError);
+app.use(ErrorHandler.handleValidationError);
+app.use(ErrorHandler.handleAuthError);
+app.use(ErrorHandler.handleNetworkError);
+app.use(ErrorHandler.handleDatabaseError);
+app.use(ErrorHandler.handleGeneralError);
 
 // Start server
 app.listen(ENV.PORT, () => {
