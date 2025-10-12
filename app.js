@@ -1809,7 +1809,7 @@ app.post('/api/sync-payments', async (req, res) => {
       success: true,
       message: `Sync completed! Processed ${newPurchases} purchase(s)`,
       total_groups: groupedPurchases.size,
-      total_payments: successfulPayments.length,
+      total_payments: validPurchases.length,
       processed: newPurchases,
       purchases: processedPurchases
     });
