@@ -1613,29 +1613,81 @@ app.post('/api/sync-payments', async (req, res) => {
         }
         
         if (existingRow) {
-          // ОБНОВЛЯЕМ СУЩЕСТВУЮЩУЮ ЗАПИСЬ (апсейл)
+          // ОБНОВЛЯЕМ СУЩЕСТВУЮЩУЮ ЗАПИСЬ - ПЕРЕСЧИТЫВАЕМ ВСЕ ПЛАТЕЖИ ИЗ STRIPE
           console.log(`🔄 Updating existing customer record for ${customerEmail}`);
           
-          // Получаем текущие данные
-          const currentPaymentIds = (existingRow.get('Payment Intent IDs') || '').split(', ').filter(id => id);
-          const currentTotalAmount = parseFloat(existingRow.get('Total Amount') || '0');
-          const currentPaymentCount = parseInt(existingRow.get('Payment Count') || '1');
-          
-          // Добавляем новые Payment Intent IDs
-          const newPaymentIds = [...new Set([...currentPaymentIds, ...groupPaymentIds])];
-          const newTotalAmount = currentTotalAmount + (group.totalAmount / 100);
-          const newPaymentCount = currentPaymentCount + group.payments.length;
-          
-          // Обновляем строку
-          existingRow.set('Payment Intent IDs', newPaymentIds.join(', '));
-          existingRow.set('Total Amount', newTotalAmount.toFixed(2));
-          existingRow.set('Payment Count', newPaymentCount.toString());
-          
-          await existingRow.save();
-          console.log(`✅ Updated customer: $${newTotalAmount.toFixed(2)} (${newPaymentCount} payments)`);
-          
-          newPurchases++;
-          continue;
+          try {
+            // Получаем ВСЕ платежи клиента из Stripe для правильного пересчета
+            const allPayments = await stripe.paymentIntents.list({
+              customer: customer.id,
+              limit: 100
+            });
+            
+            const allSuccessfulPayments = allPayments.data.filter(p => {
+              if (p.status !== 'succeeded' || !p.customer) return false;
+              if (p.description && p.description.toLowerCase().includes('subscription update')) {
+                return false;
+              }
+              return true;
+            });
+            
+            // Группируем все платежи в течение 3 часов
+            const allGroupedPayments = [];
+            const allProcessedPayments = new Set();
+            
+            for (const payment of allSuccessfulPayments) {
+              if (allProcessedPayments.has(payment.id)) continue;
+              
+              const group = [payment];
+              allProcessedPayments.add(payment.id);
+              
+              for (const otherPayment of allSuccessfulPayments) {
+                if (allProcessedPayments.has(otherPayment.id)) continue;
+                
+                const timeDiff = Math.abs(payment.created - otherPayment.created);
+                const hoursDiff = timeDiff / 3600;
+                
+                if (hoursDiff <= 3) {
+                  group.push(otherPayment);
+                  allProcessedPayments.add(otherPayment.id);
+                }
+              }
+              
+              allGroupedPayments.push(group);
+            }
+            
+            // Вычисляем ПРАВИЛЬНЫЕ суммы из всех платежей
+            let correctTotalAmount = 0;
+            let correctPaymentCount = 0;
+            const correctPaymentIds = [];
+            
+            for (const group of allGroupedPayments) {
+              for (const payment of group) {
+                correctTotalAmount += payment.amount;
+                correctPaymentCount++;
+                correctPaymentIds.push(payment.id);
+              }
+            }
+            
+            const correctTotalAmountFormatted = (correctTotalAmount / 100).toFixed(2);
+            const correctPaymentIdsString = correctPaymentIds.join(', ');
+            
+            // Обновляем строку ПРАВИЛЬНЫМИ данными
+            existingRow.set('Payment Intent IDs', correctPaymentIdsString);
+            existingRow.set('Total Amount', correctTotalAmountFormatted);
+            existingRow.set('Payment Count', correctPaymentCount.toString());
+            
+            await existingRow.save();
+            console.log(`✅ Updated customer with CORRECT data: $${correctTotalAmountFormatted} (${correctPaymentCount} payments)`);
+            
+            newPurchases++;
+            continue;
+            
+          } catch (error) {
+            console.log(`❌ Error getting all payments for ${customer.id}: ${error.message}`);
+            // Если не можем получить данные из Stripe, пропускаем
+            continue;
+          }
         }
         
         // Дополнительная проверка: не обрабатывали ли мы уже эту покупку в этом запуске
