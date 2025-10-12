@@ -344,6 +344,69 @@ app.get('/api/last-purchases', async (req, res) => {
   }
 });
 
+// Debug endpoint for GEO alert data
+app.get('/api/debug-geo', async (req, res) => {
+  try {
+    const rows = await googleSheets.getAllRows();
+    
+    // Get today's date
+    const today = new Date();
+    const utcPlus1 = new Date(today.getTime() + 60 * 60 * 1000);
+    const todayStart = new Date(utcPlus1);
+    todayStart.setHours(0, 0, 0, 0);
+    
+    const todayEnd = new Date(utcPlus1);
+    todayEnd.setHours(23, 59, 59, 999);
+    
+    // Filter today's purchases
+    const todayPurchases = rows.filter(row => {
+      const createdLocal = row.get('Created Local (UTC+1)') || '';
+      const purchaseDate = new Date(createdLocal);
+      return purchaseDate >= todayStart && purchaseDate <= todayEnd;
+    });
+    
+    // Analyze GEO data
+    const geoStats = new Map();
+    
+    for (const purchase of todayPurchases) {
+      const geo = purchase.get('GEO') || '';
+      const country = geo.split(',')[0].trim();
+      if (country) {
+        geoStats.set(country, (geoStats.get(country) || 0) + 1);
+      }
+    }
+    
+    // Top countries
+    const topCountries = Array.from(geoStats.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10);
+    
+    res.json({
+      success: true,
+      debug: {
+        totalRows: rows.length,
+        todayStart: todayStart.toISOString(),
+        todayEnd: todayEnd.toISOString(),
+        todayPurchases: todayPurchases.length,
+        topCountries: topCountries,
+        sampleDates: todayPurchases.slice(0, 5).map(p => ({
+          date: p.get('Created Local (UTC+1)'),
+          geo: p.get('GEO'),
+          amount: p.get('Amount')
+        }))
+      }
+    });
+    
+  } catch (error) {
+    logger.error('Error in debug-geo endpoint', error);
+    res.status(500).json({
+      success: false,
+      message: 'Debug failed',
+      error: error.message
+    });
+  }
+});
+
 // Error handlers
 app.use(errorHandler);
 app.use(notFoundHandler);
