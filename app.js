@@ -141,12 +141,30 @@ app.post('/api/sync-payments', async (req, res) => {
     
     logger.info('Found successful payments', { count: successfulPayments.length });
     
-    // GROUP PAYMENTS BY CUSTOMER (like before)
+    // GROUP PAYMENTS BY CUSTOMER (optimized)
     const groupedPurchases = new Map();
+    const customerCache = new Map();
     
+    // First, get all unique customer IDs
+    const uniqueCustomerIds = [...new Set(successfulPayments.map(p => p.customer).filter(Boolean))];
+    
+    // Fetch all customers in parallel
+    const customerPromises = uniqueCustomerIds.map(async (customerId) => {
+      try {
+        const customer = await getCustomer(customerId);
+        customerCache.set(customerId, customer);
+      } catch (error) {
+        logger.error('Error fetching customer', error, { customerId });
+        customerCache.set(customerId, null);
+      }
+    });
+    
+    await Promise.all(customerPromises);
+    
+    // Now group payments by customer
     for (const payment of successfulPayments) {
-      const customer = await getCustomer(payment.customer);
-      const customerId = customer?.id;
+      const customer = customerCache.get(payment.customer);
+      const customerId = customer?.id || payment.customer;
       
       if (!groupedPurchases.has(customerId)) {
         groupedPurchases.set(customerId, {
