@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "start": "node app.js",
+    "start:new": "node app-new.js",
     "build": "echo 'No build needed for JS'",
     "sync": "node sync-stripe.js",
     "vercel-build": "echo 'No build needed for JS'"
