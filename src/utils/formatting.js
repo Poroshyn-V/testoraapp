@@ -46,11 +46,12 @@ export function formatPaymentForSheets(payment, customer, metadata = {}) {
   const createdLocal = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.000 UTC+1`;
   
   return {
+    'Purchase ID': `purchase_${customerId}_${payment.created}`,
     'Created UTC': createdUTC,
     'Created Local (UTC+1)': createdLocal,
-    'Session ID': payment.id,
+    'Payment Intent IDs': payment.id,
     'Payment Status': status,
-    'Amount': amount,
+    'Total Amount': amount,
     'Currency': currency,
     'Email': customerEmail,
     'GEO': geo,
@@ -101,7 +102,7 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
   const campaignName = m.campaign_name || 'N/A';
   
   // Create notification message
-  const message = `🟢 Order ${payment.id.substring(0, 7)}... was processed!
+  const message = `🟢 Order ${payment.id.substring(0, 7)} was processed!
 ---------------------------
 💳 card
 💰 ${amount} ${currency}
@@ -113,6 +114,7 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
 📍 ${geo}
 🧍${m.gender || 'N/A'} ${m.age || 'N/A'}
 🔗 ${m.creative_link || 'N/A'}
+meta
 ${utmSource}
 ${utmMedium}
 ${adName}
