@@ -304,9 +304,19 @@ app.post('/api/sync-payments', async (req, res) => {
     // Filter out already processed payments
     const newPayments = successfulPayments.filter(p => !existingPaymentIds.has(p.id));
     
+    // Get existing customer IDs to avoid creating duplicates
+    const existingCustomerIds = new Set();
+    for (const row of existingRows) {
+      const customerId = row.get('Customer ID');
+      if (customerId && customerId !== 'N/A') {
+        existingCustomerIds.add(customerId);
+      }
+    }
+    
     logger.info('Payment filtering', { 
       total: successfulPayments.length, 
-      existing: existingPaymentIds.size,
+      existing_payments: existingPaymentIds.size,
+      existing_customers: existingCustomerIds.size,
       new: newPayments.length 
     });
     
@@ -336,6 +346,13 @@ app.post('/api/sync-payments', async (req, res) => {
       
       if (!customerId) continue;
       
+      // If customer already exists, we need to update them, not create new group
+      if (existingCustomerIds.has(customerId)) {
+        logger.info(`Customer ${customerId} already exists, will update existing record`);
+        // Skip grouping for existing customers - they will be handled in update logic
+        continue;
+      }
+      
       if (!customerGroups.has(customerId)) {
         customerGroups.set(customerId, {
           customer,
@@ -346,12 +363,103 @@ app.post('/api/sync-payments', async (req, res) => {
       customerGroups.get(customerId).payments.push(payment);
     }
     
-    // Process each customer group
+    // First, handle existing customers with new payments
+    for (const payment of newPayments) {
+      const customer = await getCustomer(payment.customer);
+      const customerId = customer?.id;
+      
+      if (!customerId) continue;
+      
+      // If customer already exists, update their record
+      if (existingCustomerIds.has(customerId)) {
+        logger.info(`Updating existing customer ${customerId} with new payment ${payment.id}`);
+        
+        // Get all payments for this customer from Stripe
+        const allPayments = await getCustomerPayments(customerId);
+        const allSuccessfulPayments = allPayments.filter(p => {
+          if (p.status !== 'succeeded' || !p.customer) return false;
+          if (p.description && p.description.toLowerCase().includes('subscription update')) {
+            return false;
+          }
+          return true;
+        });
+        
+        // Calculate totals
+        let totalAmountAll = 0;
+        let paymentCountAll = 0;
+        const paymentIdsAll = [];
+        
+        for (const p of allSuccessfulPayments) {
+          totalAmountAll += p.amount;
+          paymentCountAll++;
+          paymentIdsAll.push(p.id);
+        }
+        
+        // Find existing customer rows
+        const existingCustomers = await googleSheets.findRows({ 'Customer ID': customerId });
+        
+        // Delete duplicate rows first (keep only the first one)
+        if (existingCustomers.length > 1) {
+          for (let i = 1; i < existingCustomers.length; i++) {
+            try {
+              await existingCustomers[i].delete();
+            } catch (error) {
+              logger.warn(`Could not delete duplicate row:`, error.message);
+            }
+          }
+        }
+        
+        // Get fresh row data after deleting duplicates
+        const freshCustomers = await googleSheets.findRows({ 'Customer ID': customerId });
+        if (freshCustomers.length === 0) {
+          logger.warn('Customer row disappeared after cleanup, skipping update', { customerId });
+          continue;
+        }
+        
+        const freshCustomer = freshCustomers[0];
+        
+        // Update existing row with fresh data
+        await googleSheets.updateRow(freshCustomer, {
+          'Purchase ID': `purchase_${customerId}`,
+          'Total Amount': (totalAmountAll / 100).toFixed(2),
+          'Payment Count': paymentCountAll.toString(),
+          'Payment Intent IDs': paymentIdsAll.join(', ')
+        });
+        
+        // Send notification for upsell only if there are new payments
+        const currentPaymentCount = parseInt(freshCustomer.get('Payment Count') || '0');
+        if (allSuccessfulPayments.length > currentPaymentCount) {
+          logger.info('Sending notification for upsell', { 
+            customerId, 
+            currentCount: currentPaymentCount,
+            newCount: allSuccessfulPayments.length 
+          });
+          // Get data from Google Sheets row for notification
+          const sheetData = {
+            'Ad Name': freshCustomer.get('Ad Name') || 'N/A',
+            'Adset Name': freshCustomer.get('Adset Name') || 'N/A',
+            'Campaign Name': freshCustomer.get('Campaign Name') || 'N/A',
+            'Creative Link': freshCustomer.get('Creative Link') || 'N/A',
+            'Total Amount': (totalAmountAll / 100).toFixed(2),
+            'Payment Count': paymentCountAll.toString(),
+            'Payment Intent IDs': paymentIdsAll.join(', ')
+          };
+          // Send notification for the latest payment with grouping info
+          const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
+          await sendNotifications(latestPayment, customer, sheetData);
+        }
+        
+        newPurchases++;
+        processedCount++;
+      }
+    }
+    
+    // Process each customer group (only new customers)
     for (const [customerId, group] of customerGroups) {
       const customer = group.customer;
       const payments = group.payments;
       
-      // Check if customer already exists in Google Sheets
+      // Check if customer already exists in Google Sheets (double check)
       const existingCustomers = await googleSheets.findRows({ 'Customer ID': customerId });
       
       if (existingCustomers.length > 0) {
