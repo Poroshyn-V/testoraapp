@@ -214,7 +214,14 @@ app.post('/api/sync-payments', async (req, res) => {
             currentCount: currentPaymentCount,
             newCount: allSuccessfulPayments.length 
           });
-          await sendNotifications(payment, customer);
+          // Get data from Google Sheets row for notification
+          const sheetData = {
+            'Ad Name': freshCustomer.get('Ad Name') || 'N/A',
+            'Adset Name': freshCustomer.get('Adset Name') || 'N/A',
+            'Campaign Name': freshCustomer.get('Campaign Name') || 'N/A',
+            'Creative Link': freshCustomer.get('Creative Link') || 'N/A'
+          };
+          await sendNotifications(payment, customer, sheetData);
         }
         
         newPurchases++;
@@ -265,8 +272,14 @@ app.post('/api/sync-payments', async (req, res) => {
         
         await googleSheets.addRow(rowData);
         
-        // Send notification for the first payment
-        await sendNotifications(firstPayment, customer);
+        // Send notification for the first payment with sheet data
+        const sheetData = {
+          'Ad Name': rowData['Ad Name'] || 'N/A',
+          'Adset Name': rowData['Adset Name'] || 'N/A',
+          'Campaign Name': rowData['Campaign Name'] || 'N/A',
+          'Creative Link': rowData['Creative Link'] || 'N/A'
+        };
+        await sendNotifications(firstPayment, customer, sheetData);
         
         newPurchases++;
         processedCount++;
