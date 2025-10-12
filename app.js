@@ -950,7 +950,7 @@ app.get('/api/check-duplicates', async (req, res) => {
     
   } catch (error) {
     console.error('❌ Error checking duplicates:', error.message);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: error.message
     });
@@ -1119,7 +1119,7 @@ app.get('/api/last-purchases', async (req, res) => {
     
   } catch (error) {
     console.error('❌ Error fetching last purchases:', error.message);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       error: error.message
     });
@@ -1165,7 +1165,7 @@ app.get('/auto-sync', async (req, res) => {
     
   } catch (error) {
     console.error('Auto-sync failed:', error.message);
-    res.status(500).json({ error: 'Auto-sync failed: ' + error.message });
+    return res.status(500).json({ error: 'Auto-sync failed: ' + error.message });
   }
 });
 
@@ -1209,7 +1209,7 @@ app.post('/webhook/stripe', express.raw({ type: 'application/json' }), async (re
     res.json({ received: true });
   } catch (error) {
     console.error('Error processing webhook:', error.message);
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: error.message });
   }
 });
 
@@ -1283,7 +1283,7 @@ app.post('/api/update-existing', async (req, res) => {
         const group = [payment];
         processedPayments.add(payment.id);
         
-        // Find related payments within 1 hour
+        // Find related payments within 3 hours
         for (const otherPayment of successfulPayments) {
           if (processedPayments.has(otherPayment.id)) continue;
           
@@ -1337,7 +1337,7 @@ app.post('/api/update-existing', async (req, res) => {
     
   } catch (error) {
     console.error('❌ Error updating existing purchases:', error.message);
-    res.status(500).json({
+    return res.status(500).json({
       success: false,
       message: error.message
     });
@@ -1362,7 +1362,7 @@ app.post('/api/sync-payments', async (req, res) => {
     const sevenDaysAgo = Math.floor(Date.now() / 1000) - (7 * 24 * 60 * 60);
     
     const payments = await stripe.paymentIntents.list({
-      limit: 100,
+      limit: 1000, // Увеличиваем лимит для получения всех платежей
       created: {
         gte: sevenDaysAgo
       }
@@ -1390,7 +1390,7 @@ app.post('/api/sync-payments', async (req, res) => {
     });
     console.log(`📊 Found ${successfulPayments.length} successful payments (excluding Subscription updates)`);
     
-    // ГРУППИРУЕМ ПОКУПКИ: по customer ID (включая апсейлы в течение 24 часов)
+    // ГРУППИРУЕМ ПОКУПКИ: по customer ID (включая апсейлы в течение 3 часов)
     const groupedPurchases = new Map();
     
     for (const payment of successfulPayments) {
@@ -1558,36 +1558,38 @@ app.post('/api/sync-payments', async (req, res) => {
         // УПРОЩЕННОЕ ЛОГИРОВАНИЕ ДЛЯ ОТЛАДКИ ДУБЛЕЙ
         console.log(`🔍 Processing: ${purchaseId} (${group.payments.length} payments)`);
         
-        // МНОЖЕСТВЕННАЯ ПРОВЕРКА ДУБЛИКАТОВ: по Purchase ID, email и Payment Intent IDs
+        // ОПТИМИЗИРОВАННАЯ ПРОВЕРКА ДУБЛИКАТОВ: создаем индексы для быстрого поиска
         const customerEmail = customer?.email?.toLowerCase().trim();
         const groupPaymentIds = group.payments.map(p => p.id);
         
-        const existsInSheets = rows.some((row) => {
+        // Создаем индексы для быстрого поиска
+        const existingPurchaseIds = new Set();
+        const existingEmails = new Set();
+        const existingPaymentIds = new Set();
+        
+        for (const row of rows) {
           const rowPurchaseId = row.get('Purchase ID') || '';
           const rowEmail = (row.get('Email') || '').toLowerCase().trim();
           const rowPaymentIds = (row.get('Payment Intent IDs') || '').split(', ').filter(id => id);
           
-          // Проверяем по Purchase ID
-          if (rowPurchaseId === purchaseId) {
-            console.log(`⏭️ SKIP: ${purchaseId} already exists by Purchase ID`);
-            return true;
-          }
-          
-          // Проверяем по email (если есть)
-          if (customerEmail && rowEmail && rowEmail === customerEmail) {
-            console.log(`⏭️ SKIP: ${purchaseId} already exists by email: ${customerEmail}`);
-            return true;
-          }
-          
-          // Проверяем по Payment Intent IDs
-          const hasCommonPaymentId = groupPaymentIds.some(id => rowPaymentIds.includes(id));
-          if (hasCommonPaymentId) {
-            console.log(`⏭️ SKIP: ${purchaseId} already exists by Payment Intent ID`);
-            return true;
-          }
-          
-          return false;
-        });
+          if (rowPurchaseId) existingPurchaseIds.add(rowPurchaseId);
+          if (rowEmail) existingEmails.add(rowEmail);
+          rowPaymentIds.forEach(id => existingPaymentIds.add(id));
+        }
+        
+        // Быстрая проверка дубликатов
+        let existsInSheets = false;
+        
+        if (existingPurchaseIds.has(purchaseId)) {
+          console.log(`⏭️ SKIP: ${purchaseId} already exists by Purchase ID`);
+          existsInSheets = true;
+        } else if (customerEmail && existingEmails.has(customerEmail)) {
+          console.log(`⏭️ SKIP: ${purchaseId} already exists by email: ${customerEmail}`);
+          existsInSheets = true;
+        } else if (groupPaymentIds.some(id => existingPaymentIds.has(id))) {
+          console.log(`⏭️ SKIP: ${purchaseId} already exists by Payment Intent ID`);
+          existsInSheets = true;
+        }
         
         if (existsInSheets) {
           continue; // Пропускаем существующие
@@ -1914,7 +1916,10 @@ app.listen(ENV.PORT, () => {
   setTimeout(async () => {
     try {
       console.log('🚀 Running initial sync...');
-      const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
+      const baseUrl = process.env.RAILWAY_PUBLIC_DOMAIN ? 
+        `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : 
+        `http://localhost:${ENV.PORT}`;
+      const response = await fetch(`${baseUrl}/api/sync-payments`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });
