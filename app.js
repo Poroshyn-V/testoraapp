@@ -1411,13 +1411,13 @@ app.post('/api/sync-payments', async (req, res) => {
         let existingGroup = null;
         for (const [key, group] of groupedPurchases.entries()) {
           if (group.customer?.id === customerId) {
-        // Проверяем, что платеж в течение 1 часа от первого платежа (для апсейлов)
+        // Проверяем, что платеж в течение 3 часов от первого платежа (для апсейлов)
         const firstPaymentTime = group.firstPayment.created * 1000;
         const currentPaymentTime = payment.created * 1000;
         const timeDiff = Math.abs(currentPaymentTime - firstPaymentTime);
         const hoursDiff = timeDiff / (1000 * 60 * 60);
         
-        if (hoursDiff <= 1) {
+        if (hoursDiff <= 3) {
               existingGroup = group;
               break;
             }
@@ -1552,20 +1552,44 @@ app.post('/api/sync-payments', async (req, res) => {
         const firstPayment = group.firstPayment;
         const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
 
-        // ПРОСТАЯ ЛОГИКА: используем timestamp для уникальности
-        const purchaseId = `purchase_${customer?.id || 'unknown'}_${(customer?.id || 'unknown').replace('cus_', '')}`;
+        // ПРАВИЛЬНАЯ ЛОГИКА: используем customer ID + timestamp первого платежа
+        const purchaseId = `purchase_${customer?.id || 'unknown'}_${firstPayment.created}`;
 
         // УПРОЩЕННОЕ ЛОГИРОВАНИЕ ДЛЯ ОТЛАДКИ ДУБЛЕЙ
         console.log(`🔍 Processing: ${purchaseId} (${group.payments.length} payments)`);
         
-        // ПРОВЕРКА ДУБЛИКАТОВ: только по Purchase ID
+        // МНОЖЕСТВЕННАЯ ПРОВЕРКА ДУБЛИКАТОВ: по Purchase ID, email и Payment Intent IDs
+        const customerEmail = customer?.email?.toLowerCase().trim();
+        const groupPaymentIds = group.payments.map(p => p.id);
+        
         const existsInSheets = rows.some((row) => {
           const rowPurchaseId = row.get('Purchase ID') || '';
-          return rowPurchaseId === purchaseId;
+          const rowEmail = (row.get('Email') || '').toLowerCase().trim();
+          const rowPaymentIds = (row.get('Payment Intent IDs') || '').split(', ').filter(id => id);
+          
+          // Проверяем по Purchase ID
+          if (rowPurchaseId === purchaseId) {
+            console.log(`⏭️ SKIP: ${purchaseId} already exists by Purchase ID`);
+            return true;
+          }
+          
+          // Проверяем по email (если есть)
+          if (customerEmail && rowEmail && rowEmail === customerEmail) {
+            console.log(`⏭️ SKIP: ${purchaseId} already exists by email: ${customerEmail}`);
+            return true;
+          }
+          
+          // Проверяем по Payment Intent IDs
+          const hasCommonPaymentId = groupPaymentIds.some(id => rowPaymentIds.includes(id));
+          if (hasCommonPaymentId) {
+            console.log(`⏭️ SKIP: ${purchaseId} already exists by Payment Intent ID`);
+            return true;
+          }
+          
+          return false;
         });
         
         if (existsInSheets) {
-          console.log(`⏭️ SKIP: ${purchaseId} already exists in sheets`);
           continue; // Пропускаем существующие
         }
         
