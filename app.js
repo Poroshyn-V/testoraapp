@@ -220,57 +220,52 @@ app.post('/api/test-telegram', async (req, res) => {
   }
 });
 
-// Test notifications endpoint
-app.post('/api/test-notifications', async (req, res) => {
+// Remove test data endpoint
+app.post('/api/remove-test-data', async (req, res) => {
   try {
-    // Create test payment and customer data
-    const testPayment = {
-      id: 'pi_test_123456789',
-      amount: 999, // $9.99
-      currency: 'usd',
-      status: 'succeeded',
-      created: Math.floor(Date.now() / 1000),
-      metadata: {
-        ad_name: '6025_static_var01_Spectrum_Impulse_12IQTypes_VP_En',
-        adset_name: 'WEB_EN_US_Broad_testora-myiq_LC_12.10.2025_Testora_ABO_60',
-        campaign_name: 'Testora_WEB_US_Core-0030-ABO_cpi_fcb_12.11.2025',
-        creative_link: 'quiz.testora.pro/iq1'
+    logger.info('Removing test data from Google Sheets...');
+    
+    const rows = await googleSheets.getAllRows();
+    let removedCount = 0;
+    
+    for (const row of rows) {
+      const customerId = row.get('Customer ID');
+      const email = row.get('Email');
+      
+      // Remove test data
+      if (customerId === 'cus_test_123456789' || 
+          email === 'test@example.com' ||
+          customerId?.includes('test') ||
+          email?.includes('test@')) {
+        await row.delete();
+        removedCount++;
+        logger.info(`Removed test row: ${customerId} - ${email}`);
       }
-    };
-    
-    const testCustomer = {
-      id: 'cus_test_123456789',
-      email: 'test@example.com',
-      metadata: {
-        geo_country: 'US',
-        geo_city: 'New York'
-      }
-    };
-    
-    const testMetadata = {
-      'Ad Name': '6025_static_var01_Spectrum_Impulse_12IQTypes_VP_En',
-      'Adset Name': 'WEB_EN_US_Broad_testora-myiq_LC_12.10.2025_Testora_ABO_60',
-      'Campaign Name': 'Testora_WEB_US_Core-0030-ABO_cpi_fcb_12.11.2025',
-      'Creative Link': 'quiz.testora.pro/iq1'
-    };
-    
-    logger.info('Sending test notifications...');
-    await sendNotifications(testPayment, testCustomer, testMetadata);
+    }
     
     res.json({
       success: true,
-      message: 'Test notifications sent to Telegram and Slack',
-      timestamp: new Date().toISOString()
+      message: `Test data cleanup completed! Removed ${removedCount} test rows`,
+      removed_count: removedCount
     });
     
   } catch (error) {
-    logger.error('Error sending test notifications', error);
+    logger.error('Error removing test data', error);
     res.status(500).json({
       success: false,
-      message: 'Error sending test notifications',
+      message: 'Error removing test data',
       error: error.message
     });
   }
+});
+
+// Test notifications endpoint (DISABLED - no test data)
+app.post('/api/test-notifications', async (req, res) => {
+  res.json({
+    success: false,
+    message: 'Test notifications disabled to prevent spam',
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Sync payments endpoint
