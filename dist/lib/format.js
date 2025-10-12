@@ -58,7 +58,7 @@ export function formatTelegram(session: Stripe.Checkout.Session, customerMetadat
   const campaignName = rawCampaignName ? formatCampaignName(rawCampaignName) : null;
   
   // Create STRUCTURED notification message
-  let message = `🟢 Purchase purchase_cus_${session.customer || 'unknown'} was processed!
+  let message = `🟢 Purchase purchase_${session.customer || 'unknown'} was processed!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 💳 Payment Method: Card
 💰 Amount: ${amount} ${currency}

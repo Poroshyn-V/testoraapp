@@ -123,7 +123,7 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
   const campaignName = rawCampaignName ? formatCampaignName(rawCampaignName) : null;
   
   // Create STRUCTURED notification message
-  let message = `🟢 Purchase purchase_cus_${customer?.id || 'unknown'} was processed!
+  let message = `🟢 Purchase purchase_${customer?.id || 'unknown'} was processed!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 💳 Payment Method: Card
 💰 Amount: ${amount} ${currency}

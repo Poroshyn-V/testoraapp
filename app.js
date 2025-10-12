@@ -145,14 +145,29 @@ app.post('/api/sync-payments', async (req, res) => {
     let processedCount = 0;
     let newPurchases = 0;
     
-    // SIMPLE LOGIC: Group payments by customer only (no time window)
-    const groupedPurchases = new Map();
+    // GROUP PAYMENTS BY CUSTOMER FIRST
+    const customerGroups = new Map();
     
     for (const payment of successfulPayments) {
       const customer = await getCustomer(payment.customer);
       const customerId = customer?.id;
       
       if (!customerId) continue;
+      
+      if (!customerGroups.has(customerId)) {
+        customerGroups.set(customerId, {
+          customer,
+          payments: []
+        });
+      }
+      
+      customerGroups.get(customerId).payments.push(payment);
+    }
+    
+    // Process each customer group
+    for (const [customerId, group] of customerGroups) {
+      const customer = group.customer;
+      const payments = group.payments;
       
       // Check if customer already exists in Google Sheets
       const existingCustomers = await googleSheets.findRows({ 'Customer ID': customerId });
@@ -228,43 +243,19 @@ app.post('/api/sync-payments', async (req, res) => {
         processedCount++;
         
       } else {
-        // New customer - add to group for batch processing
-        if (groupedPurchases.has(customerId)) {
-          // Add to existing group
-          const group = groupedPurchases.get(customerId);
-          group.payments.push(payment);
-          group.totalAmount += payment.amount;
-        } else {
-          // Create new group
-          groupedPurchases.set(customerId, {
-            customer,
-            payments: [payment],
-            totalAmount: payment.amount,
-            firstPayment: payment
-          });
-        }
-      }
-    }
-    
-    logger.info('Grouped payments by customer', { 
-      totalPayments: successfulPayments.length,
-      uniqueCustomers: groupedPurchases.size 
-    });
-    
-    // Process only new customers (existing ones already processed above)
-    for (const [customerId, group] of groupedPurchases) {
-      try {
-        const customer = group.customer;
-        const payments = group.payments;
-        const totalAmount = group.totalAmount;
-        const firstPayment = group.firstPayment;
-        
-        // Add new customer to Google Sheets
+        // New customer - add to Google Sheets
         logger.info('Adding new customer', { 
           customerId, 
           paymentsCount: payments.length 
         });
         
+        // Calculate totals for all payments
+        let totalAmount = 0;
+        for (const p of payments) {
+          totalAmount += p.amount;
+        }
+        
+        const firstPayment = payments[0];
         const rowData = formatPaymentForSheets(firstPayment, customer);
         rowData['Total Amount'] = (totalAmount / 100).toFixed(2);
         rowData['Payment Count'] = payments.length.toString();
@@ -283,11 +274,15 @@ app.post('/api/sync-payments', async (req, res) => {
         
         newPurchases++;
         processedCount++;
-        
-      } catch (error) {
-        logger.error('Error processing new customer', error, { customerId });
       }
     }
+    
+    logger.info('Processed customer groups', { 
+      totalPayments: successfulPayments.length,
+      uniqueCustomers: customerGroups.size,
+      processed: processedCount,
+      newPurchases: newPurchases
+    });
     
     res.json({
       success: true,
