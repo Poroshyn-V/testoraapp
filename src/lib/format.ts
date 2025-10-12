@@ -17,46 +17,52 @@ export function formatTelegram(session: Stripe.Checkout.Session, customerMetadat
   const m = { ...session.metadata, ...customerMetadata };
   const amount = ((session.amount_total ?? 0) / 100).toFixed(2);
   const currency = (session.currency || 'usd').toUpperCase();
-  const pm = session.payment_method_types?.[0] || 'card';
-  const email = session.customer_details?.email || session.customer_email || '';
-
-  // Используем полный ID платежа
-  const paymentId = session.id;
+  const email = session.customer_details?.email || session.customer_email || 'N/A';
   
-  // Определяем количество платежей (если есть в metadata)
-  const paymentCount = m.payment_count || '1 payment';
+  // Extract geo data
+  const geoCountry = m.geo_country || m.country || session.customer_details?.address?.country || 'Unknown';
+  const geoCity = m.geo_city || session.customer_details?.address?.city || 'Unknown';
+  const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
   
-  const country = m.geo_country || m.country || session.customer_details?.address?.country || 'N/A';
-  const gender = m.gender || 'N/A';
-  const age = m.age || 'N/A';
-  const creative_link = m.creative_link || 'N/A';
-  const utm_source = m.utm_source || 'N/A';
-  const platform_placement = m.platform_placement || 'N/A';
-  const ad_name = m.ad_name || 'N/A';
-  const adset_name = m.adset_name || 'N/A';
-  const campaign_name = m.campaign_name || m.utm_campaign || 'N/A';
+  // Format ad data (only include if not N/A)
+  const adName = m.ad_name && m.ad_name !== 'N/A' ? m.ad_name : null;
+  const adsetName = m.adset_name && m.adset_name !== 'N/A' ? m.adset_name : null;
+  const campaignName = (m.campaign_name && m.campaign_name !== 'N/A') || 
+                      (m.campaign && m.campaign !== 'N/A') || 
+                      (m.campaign_id && m.campaign_id !== 'N/A') ? 
+                      (m.campaign_name || m.campaign || m.campaign_id) : null;
+  const creativeLink = m.creative_link && m.creative_link !== 'N/A' ? m.creative_link : null;
+  
+  // Create STRUCTURED notification message
+  let message = `🟢 Purchase purchase_${session.customer || 'unknown'}_${session.created} was processed!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💳 Payment Method: Card
+💰 Amount: ${amount} ${currency}
+🏷️ Payments: 1
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📧 Email: ${email}
+📍 Location: ${geo}`;
 
-  const lines = [
-    `🟢 Purchase ${paymentId} was processed!`,
-    `---------------------------`,
-    `💳 ${pm}`,
-    `💰 ${amount} ${currency}`,
-    `🏷️ ${paymentCount}`,
-    `---------------------------`,
-    `📧 ${email}`,
-    `---------------------------`,
-    `🌪️ ${paymentId}`,
-    `📍 ${country}`,
-    `🧍 ${gender}`,
-    `🔗 ${creative_link}`,
-    utm_source,
-    platform_placement,
-    ad_name,
-    adset_name,
-    campaign_name
-  ];
+  // Add creative link if available
+  if (creativeLink) {
+    message += `\n🔗 Link: ${creativeLink}`;
+  }
 
-  let text = lines.join('\n');
-  if (text.length > 4096) text = text.slice(0, 4093) + '...';
-  return text;
+  // Add campaign data section if any data is available
+  const hasCampaignData = adName || adsetName || campaignName;
+  if (hasCampaignData) {
+    message += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 Campaign Data:`;
+    
+    if (adName) {
+      message += `\n• Ad: ${adName}`;
+    }
+    if (adsetName) {
+      message += `\n• Adset: ${adsetName}`;
+    }
+    if (campaignName) {
+      message += `\n• Campaign: ${campaignName}`;
+    }
+  }
+
+  return message;
 }
