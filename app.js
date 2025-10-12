@@ -1381,30 +1381,24 @@ app.post('/api/sync-payments', async (req, res) => {
       });
     }
     
-    // Filter successful payments - "Subscription creation" И "Subscription update" (переходы с триала)
+    // Filter successful payments - ТОЛЬКО "Subscription creation" (первые покупки)
     const validPurchases = payments.data.filter(p => {
       if (p.status !== 'succeeded' || !p.customer) return false;
       
-      // Включаем "Subscription creation" - первые покупки
+      // Включаем ТОЛЬКО "Subscription creation" - первые покупки
       if (p.description && p.description.toLowerCase().includes('subscription creation')) {
-        console.log(`✅ Subscription creation: ${p.id} - $${(p.amount / 100).toFixed(2)}`);
+        console.log(`✅ Первая покупка: ${p.id} - $${(p.amount / 100).toFixed(2)}`);
         return true;
       }
       
-      // Включаем "Subscription update" - переходы с триала на полную версию
-      if (p.description && p.description.toLowerCase().includes('subscription update')) {
-        console.log(`✅ Subscription update (триал→полная): ${p.id} - $${(p.amount / 100).toFixed(2)}`);
-        return true;
-      }
-      
-      // Пропускаем все остальное
+      // Пропускаем все остальное (Subscription update, другие типы)
       console.log(`⏭️ Пропускаем: ${p.description || 'No description'} - ${p.id}`);
       return false;
     });
     
-    console.log(`📊 Найдено ${validPurchases.length} валидных покупок (Subscription creation + update)`);
+    console.log(`📊 Найдено ${validPurchases.length} первых покупок (Subscription creation)`);
     
-    // ГРУППИРУЕМ ПОКУПКИ: Subscription creation и update (переходы с триала)
+    // ГРУППИРУЕМ ПОКУПКИ: группируем апсейлы в течение 3 часов
     const groupedPurchases = new Map();
     
     for (const payment of validPurchases) {
@@ -1421,14 +1415,36 @@ app.post('/api/sync-payments', async (req, res) => {
 
         const customerId = customer?.id || 'unknown_customer';
         
-        // Создаем новую группу для каждой первой покупки (без группировки апсейлов)
-        const groupKey = `${customerId}_${payment.created}`;
-        groupedPurchases.set(groupKey, {
-          customer,
-          payments: [payment],
-          totalAmount: payment.amount,
-          firstPayment: payment
-        });
+        // Ищем существующую группу для этого клиента в течение 3 часов
+        let foundGroup = null;
+        const threeHoursInSeconds = 3 * 60 * 60; // 3 часа в секундах
+        
+        for (const [key, group] of groupedPurchases.entries()) {
+          if (key.startsWith(customerId + '_')) {
+            const timeDiff = Math.abs(payment.created - group.firstPayment.created);
+            if (timeDiff <= threeHoursInSeconds) {
+              foundGroup = group;
+              break;
+            }
+          }
+        }
+        
+        if (foundGroup) {
+          // Добавляем к существующей группе
+          foundGroup.payments.push(payment);
+          foundGroup.totalAmount += payment.amount;
+          console.log(`🔄 Добавлен апсейл к группе: ${payment.id} - $${(payment.amount / 100).toFixed(2)}`);
+        } else {
+          // Создаем новую группу
+          const groupKey = `${customerId}_${payment.created}`;
+          groupedPurchases.set(groupKey, {
+            customer,
+            payments: [payment],
+            totalAmount: payment.amount,
+            firstPayment: payment
+          });
+          console.log(`🆕 Создана новая группа: ${payment.id} - $${(payment.amount / 100).toFixed(2)}`);
+        }
       }
     }
 
