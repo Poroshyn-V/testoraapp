@@ -46,6 +46,10 @@ const rateLimitStore = new Map();
 const RATE_LIMIT_WINDOW = 15 * 60 * 1000; // 15 минут
 const RATE_LIMIT_MAX_REQUESTS = 100; // максимум 100 запросов за 15 минут
 
+// Кэширование для Google Sheets
+const sheetsCache = new Map();
+const SHEETS_CACHE_TTL = 5 * 60 * 1000; // 5 минут кэш
+
 const stripe = new Stripe(ENV.STRIPE_SECRET_KEY, { apiVersion: '2024-06-20' });
 
 // Rate limiting middleware
@@ -147,6 +151,33 @@ function validateWebhookSignature(signature, payload, secret) {
   }
   // Stripe webhook signature validation будет добавлена позже
   return true;
+}
+
+// Кэширование для Google Sheets
+async function getCachedSheetsData(cacheKey, fetchFunction) {
+  const now = Date.now();
+  const cached = sheetsCache.get(cacheKey);
+  
+  if (cached && (now - cached.timestamp) < SHEETS_CACHE_TTL) {
+    logInfo('Cache hit for Google Sheets', { cacheKey });
+    return cached.data;
+  }
+  
+  logInfo('Cache miss for Google Sheets, fetching fresh data', { cacheKey });
+  const data = await fetchFunction();
+  
+  sheetsCache.set(cacheKey, {
+    data,
+    timestamp: now
+  });
+  
+  return data;
+}
+
+// Очистка кэша
+function clearSheetsCache() {
+  sheetsCache.clear();
+  logInfo('Google Sheets cache cleared');
 }
 
 // Функция для детекции аномалий в продажах
@@ -1046,6 +1077,38 @@ app.get('/api/memory-status', (req, res) => {
     purchases: Array.from(existingPurchases).slice(0, 20), // Показываем первые 20
     auto_sync_disabled: ENV.AUTO_SYNC_DISABLED,
     notifications_disabled: ENV.NOTIFICATIONS_DISABLED
+  });
+});
+
+// Метрики производительности
+app.get('/api/metrics', (req, res) => {
+  const memUsage = process.memoryUsage();
+  const uptime = process.uptime();
+  
+  res.json({
+    timestamp: new Date().toISOString(),
+    uptime: {
+      seconds: Math.floor(uptime),
+      human: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${Math.floor(uptime % 60)}s`
+    },
+    memory: {
+      rss: `${Math.round(memUsage.rss / 1024 / 1024)}MB`,
+      heapUsed: `${Math.round(memUsage.heapUsed / 1024 / 1024)}MB`,
+      heapTotal: `${Math.round(memUsage.heapTotal / 1024 / 1024)}MB`,
+      external: `${Math.round(memUsage.external / 1024 / 1024)}MB`
+    },
+    cache: {
+      sheetsCacheSize: sheetsCache.size,
+      rateLimitConnections: rateLimitStore.size,
+      existingPurchases: existingPurchases.size,
+      processedPurchases: processedPurchaseIds.size
+    },
+    performance: {
+      nodeVersion: process.version,
+      platform: process.platform,
+      arch: process.arch,
+      pid: process.pid
+    }
   });
 });
 
