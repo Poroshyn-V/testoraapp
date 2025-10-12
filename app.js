@@ -122,6 +122,54 @@ app.get('/api/test', (req, res) => {
   });
 });
 
+// Test Telegram API directly
+app.post('/api/test-telegram', async (req, res) => {
+  try {
+    const testMessage = `🟢 Test notification from Stripe Ops Bot!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💳 Payment Method: Card
+💰 Amount: 9.99 USD
+🏷️ Payments: 1
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📧 Email: test@example.com
+📍 Location: US, New York
+🔗 Link: quiz.testora.pro/iq1
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 Campaign Data:
+• Ad: 6025_static_var01_Spectrum_Impulse_12_IQTypes_VP_En
+• Adset: WEB_EN_US_Broad_testora-myiq_LC_12.10.2025_Testora_ABO_60
+• Campaign: Testora_WEB_US_Core-0030-ABO_cpi_fcb_12.11.2025`;
+
+    const response = await fetch(`https://api.telegram.org/bot${ENV.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        chat_id: ENV.TELEGRAM_CHAT_ID,
+        text: testMessage,
+        parse_mode: 'HTML'
+      })
+    });
+
+    const responseText = await response.text();
+    
+    res.json({
+      success: response.ok,
+      status: response.status,
+      response: responseText,
+      message: response.ok ? 'Telegram test message sent successfully' : 'Telegram test failed'
+    });
+    
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Error testing Telegram',
+      error: error.message
+    });
+  }
+});
+
 // Test notifications endpoint
 app.post('/api/test-notifications', async (req, res) => {
   try {
