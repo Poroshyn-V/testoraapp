@@ -1559,8 +1559,8 @@ app.post('/api/sync-payments', async (req, res) => {
         const firstPayment = group.firstPayment;
         const m = { ...firstPayment.metadata, ...(customer?.metadata || {}) };
 
-        // ПРАВИЛЬНАЯ ЛОГИКА: используем customer ID + timestamp первого платежа
-        const purchaseId = `purchase_${customer?.id || 'unknown'}_${firstPayment.created}`;
+        // ПРАВИЛЬНАЯ ЛОГИКА: используем только customer ID для группировки
+        const purchaseId = `purchase_${customer?.id || 'unknown'}`;
 
         // УПРОЩЕННОЕ ЛОГИРОВАНИЕ ДЛЯ ОТЛАДКИ ДУБЛЕЙ
         console.log(`🔍 Processing: ${purchaseId} (${group.payments.length} payments)`);
@@ -1571,15 +1571,18 @@ app.post('/api/sync-payments', async (req, res) => {
         
         // Создаем индексы для быстрого поиска
         const existingPurchaseIds = new Set();
+        const existingCustomerIds = new Set();
         const existingEmails = new Set();
         const existingPaymentIds = new Set();
         
         for (const row of rows) {
           const rowPurchaseId = row.get('Purchase ID') || '';
+          const rowCustomerId = row.get('Customer ID') || '';
           const rowEmail = (row.get('Email') || '').toLowerCase().trim();
           const rowPaymentIds = (row.get('Payment Intent IDs') || '').split(', ').filter(id => id);
           
           if (rowPurchaseId) existingPurchaseIds.add(rowPurchaseId);
+          if (rowCustomerId) existingCustomerIds.add(rowCustomerId);
           if (rowEmail) existingEmails.add(rowEmail);
           rowPaymentIds.forEach(id => existingPaymentIds.add(id));
         }
@@ -1591,15 +1594,15 @@ app.post('/api/sync-payments', async (req, res) => {
         if (existingPurchaseIds.has(purchaseId)) {
           console.log(`⏭️ SKIP: ${purchaseId} already exists by Purchase ID`);
           continue;
-        } else if (customerEmail && existingEmails.has(customerEmail)) {
+        } else if (customer?.id && existingCustomerIds.has(customer.id)) {
           // НАЙДЕН СУЩЕСТВУЮЩИЙ КЛИЕНТ - обновляем его запись
-          console.log(`🔄 UPDATE: Found existing customer by email: ${customerEmail}`);
+          console.log(`🔄 UPDATE: Found existing customer by Customer ID: ${customer.id}`);
           isNewCustomer = false;
           
-          // Находим существующую строку
+          // Находим существующую строку по Customer ID
           for (const row of rows) {
-            const rowEmail = (row.get('Email') || '').toLowerCase().trim();
-            if (rowEmail === customerEmail) {
+            const rowCustomerId = row.get('Customer ID') || '';
+            if (rowCustomerId === customer.id) {
               existingRow = row;
               break;
             }
