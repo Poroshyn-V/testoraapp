@@ -149,8 +149,12 @@ app.post('/api/clean-duplicates', async (req, res) => {
         
         // Keep the first row, delete the rest
         for (let i = 1; i < customerRows.length; i++) {
-          await customerRows[i].delete();
-          duplicatesRemoved++;
+          try {
+            await customerRows[i].delete();
+            duplicatesRemoved++;
+          } catch (error) {
+            logger.warn(`Could not delete row ${i} for customer ${customerId}:`, error.message);
+          }
         }
       }
     }
