@@ -10,6 +10,11 @@ export async function sendTelegram(message) {
   }
 
   try {
+    logInfo('Sending Telegram notification', { 
+      chatId: ENV.TELEGRAM_CHAT_ID,
+      messageLength: message.length 
+    });
+    
     const response = await fetch(`https://api.telegram.org/bot${ENV.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: {
@@ -18,12 +23,18 @@ export async function sendTelegram(message) {
       body: JSON.stringify({
         chat_id: ENV.TELEGRAM_CHAT_ID,
         text: message,
-        parse_mode: 'Markdown'
+        parse_mode: 'HTML'
       })
     });
 
+    const responseText = await response.text();
+    logInfo('Telegram API response', { 
+      status: response.status, 
+      response: responseText 
+    });
+
     if (!response.ok) {
-      throw new Error(`Telegram API error: ${response.status}`);
+      throw new Error(`Telegram API error: ${response.status} - ${responseText}`);
     }
 
     logInfo('Successfully sent Telegram notification');
