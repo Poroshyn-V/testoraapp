@@ -1,0 +1,179 @@
+// Data formatting utilities
+import { logInfo } from './logging.js';
+
+// Format payment data for Google Sheets
+export function formatPaymentForSheets(payment, customer, metadata = {}) {
+  const m = { ...payment.metadata, ...(customer?.metadata || {}), ...metadata };
+  
+  // Extract GEO data
+  const geoCountry = m.geo_country || customer?.address?.country || 'Unknown';
+  const geoCity = m.geo_city || customer?.address?.city || 'Unknown';
+  const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
+  
+  // Format UTM data
+  const utmSource = m.utm_source || 'N/A';
+  const utmMedium = m.utm_medium || 'N/A';
+  const utmCampaign = m.utm_campaign || 'N/A';
+  const utmContent = m.utm_content || 'N/A';
+  const utmTerm = m.utm_term || 'N/A';
+  
+  // Format ad data
+  const adName = m.ad_name || 'N/A';
+  const adsetName = m.adset_name || 'N/A';
+  const campaignName = m.campaign_name || 'N/A';
+  
+  // Format customer data
+  const customerName = customer?.name || 'N/A';
+  const customerEmail = customer?.email || 'N/A';
+  const customerId = customer?.id || 'N/A';
+  
+  // Format payment data
+  const amount = (payment.amount / 100).toFixed(2);
+  const currency = payment.currency?.toUpperCase() || 'USD';
+  const status = payment.status || 'N/A';
+  
+  // Format dates
+  const createdDate = new Date(payment.created * 1000);
+  const createdUTC = createdDate.toISOString();
+  const createdLocal = new Date(createdDate.getTime() + 60 * 60 * 1000).toISOString(); // UTC+1
+  
+  return {
+    'Created UTC': createdUTC,
+    'Created Local (UTC+1)': createdLocal,
+    'Session ID': payment.id,
+    'Payment Status': status,
+    'Amount': amount,
+    'Currency': currency,
+    'Email': customerEmail,
+    'GEO': geo,
+    'Gender': m.gender || 'N/A',
+    'Age': m.age || 'N/A',
+    'Product Tag': m.product_tag || 'N/A',
+    'Creative Link': m.creative_link || 'N/A',
+    'UTM Source': utmSource,
+    'UTM Medium': utmMedium,
+    'UTM Campaign': utmCampaign,
+    'UTM Content': utmContent,
+    'UTM Term': utmTerm,
+    'Platform Placement': m.platform_placement || 'N/A',
+    'Ad Name': adName,
+    'Adset Name': adsetName,
+    'Campaign Name': campaignName,
+    'Web Campaign': m.web_campaign || 'N/A',
+    'Customer ID': customerId,
+    'Client Reference ID': m.client_reference_id || 'N/A',
+    'Mode': payment.mode || 'N/A',
+    'Status': status,
+    'Raw Metadata JSON': JSON.stringify(m)
+  };
+}
+
+// Format notification message for Telegram
+export function formatTelegramNotification(payment, customer, metadata = {}) {
+  const m = { ...payment.metadata, ...(customer?.metadata || {}), ...metadata };
+  
+  // Extract data
+  const amount = (payment.amount / 100).toFixed(2);
+  const currency = payment.currency?.toUpperCase() || 'USD';
+  const email = customer?.email || 'N/A';
+  const geoCountry = m.geo_country || customer?.address?.country || 'Unknown';
+  const geoCity = m.geo_city || customer?.address?.city || 'Unknown';
+  const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
+  
+  // Format UTM data
+  const utmSource = m.utm_source || 'N/A';
+  const utmMedium = m.utm_medium || 'N/A';
+  const utmCampaign = m.utm_campaign || 'N/A';
+  const utmContent = m.utm_content || 'N/A';
+  const utmTerm = m.utm_term || 'N/A';
+  
+  // Format ad data
+  const adName = m.ad_name || 'N/A';
+  const adsetName = m.adset_name || 'N/A';
+  const campaignName = m.campaign_name || 'N/A';
+  
+  // Create notification message
+  const message = `🟢 Order ${payment.id.substring(0, 7)}... was processed!
+---------------------------
+💳 card
+💰 ${amount} ${currency}
+🏷️ ${m.product_tag || 'N/A'}
+---------------------------
+📧 ${email}
+---------------------------
+🌪️ ${m.utm_id || 'N/A'}
+📍 ${geo}
+🧍${m.gender || 'N/A'} ${m.age || 'N/A'}
+🔗 ${m.creative_link || 'N/A'}
+${utmSource}
+${utmMedium}
+${adName}
+${adsetName}
+${campaignName}`;
+
+  return message;
+}
+
+// Format weekly report
+export function formatWeeklyReport(data) {
+  const { 
+    weekStart, 
+    weekEnd, 
+    totalRevenue, 
+    totalSales, 
+    revenueGrowth, 
+    salesGrowth, 
+    topCountries, 
+    topCreatives, 
+    dailyBreakdown 
+  } = data;
+  
+  const weekStartStr = weekStart.toISOString().split('T')[0];
+  const weekEndStr = weekEnd.toISOString().split('T')[0];
+  
+  return `📊 **Weekly Report - Past Week (${weekStartStr} - ${weekEndStr})**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 **Total Revenue:** $${totalRevenue.toFixed(2)}
+📈 **Revenue Growth:** ${revenueGrowth > 0 ? '+' : ''}${revenueGrowth}% vs week before
+🛒 **Total Sales:** ${totalSales}
+📊 **Sales Growth:** ${salesGrowth > 0 ? '+' : ''}${salesGrowth}% vs week before
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🌍 **Top Countries (Past Week):**
+${topCountries.map(([country, count], i) => `${i + 1}. ${country}: ${count} sales`).join('\n')}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎨 **Top Creatives (Past Week):**
+${topCreatives.map(([creative, count], i) => `${i + 1}. ${creative}: ${count} sales`).join('\n')}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📅 **Daily Breakdown (Past Week):**
+${dailyBreakdown.join('\n')}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏰ **Report generated:** ${new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Berlin' })} UTC+1`;
+}
+
+// Format GEO alert
+export function formatGeoAlert(data) {
+  const { topCountries, totalSales, date } = data;
+  
+  return `🌍 **GEO Alert - ${date}**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 **Total Sales Today:** ${totalSales}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏆 **Top Countries:**
+${topCountries.map(([country, count], i) => `${i + 1}. ${country}: ${count} sales`).join('\n')}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏰ **Alert generated:** ${new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Berlin' })} UTC+1`;
+}
+
+// Format creative alert
+export function formatCreativeAlert(data) {
+  const { topCreatives, totalSales, date } = data;
+  
+  return `🎨 **Creative Alert - ${date}**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 **Total Sales Today:** ${totalSales}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🏆 **Top Creatives:**
+${topCreatives.map(([creative, count], i) => `${i + 1}. ${creative}: ${count} sales`).join('\n')}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏰ **Alert generated:** ${new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Berlin' })} UTC+1`;
+}

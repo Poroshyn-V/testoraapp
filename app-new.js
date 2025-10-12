@@ -5,6 +5,12 @@ import { logger } from './src/utils/logging.js';
 import { rateLimit, getRateLimitStats } from './src/middleware/rateLimit.js';
 import { errorHandler, notFoundHandler } from './src/middleware/errorHandler.js';
 import { getCacheStats } from './src/utils/cache.js';
+import { stripe, getRecentPayments, getCustomerPayments, getCustomer } from './src/services/stripe.js';
+import { sendNotifications } from './src/services/notifications.js';
+import googleSheets from './src/services/googleSheets.js';
+import { analytics } from './src/services/analytics.js';
+import { formatPaymentForSheets, formatTelegramNotification } from './src/utils/formatting.js';
+import { validateEmail, validateCustomerId, validatePaymentId, validateAmount } from './src/utils/validation.js';
 
 const app = express();
 
@@ -107,7 +113,7 @@ app.get('/api/metrics', (req, res) => {
   });
 });
 
-// Placeholder endpoints (will be implemented with services)
+// Test endpoint
 app.get('/api/test', (req, res) => {
   res.json({
     success: true,
@@ -116,12 +122,226 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-app.post('/api/sync-payments', (req, res) => {
-  res.json({
-    success: true,
-    message: 'Sync endpoint - will be implemented with services',
-    timestamp: new Date().toISOString()
-  });
+// Sync payments endpoint
+app.post('/api/sync-payments', async (req, res) => {
+  try {
+    logger.info('Starting payment sync...');
+    
+    // Get recent payments from Stripe
+    const payments = await getRecentPayments(100);
+    
+    // Filter successful payments
+    const successfulPayments = payments.filter(p => {
+      if (p.status !== 'succeeded' || !p.customer) return false;
+      if (p.description && p.description.toLowerCase().includes('subscription update')) {
+        return false;
+      }
+      return true;
+    });
+    
+    logger.info('Found successful payments', { count: successfulPayments.length });
+    
+    let processedCount = 0;
+    let newPurchases = 0;
+    
+    // Process each payment
+    for (const payment of successfulPayments) {
+      try {
+        const customer = await getCustomer(payment.customer);
+        
+        // Check if customer already exists
+        const existingCustomer = await googleSheets.getCustomer(payment.customer);
+        
+        if (existingCustomer) {
+          // Update existing customer
+          logger.info('Updating existing customer', { customerId: payment.customer });
+          
+          // Get all payments for this customer to recalculate totals
+          const allPayments = await getCustomerPayments(payment.customer);
+          const allSuccessfulPayments = allPayments.filter(p => {
+            if (p.status !== 'succeeded' || !p.customer) return false;
+            if (p.description && p.description.toLowerCase().includes('subscription update')) {
+              return false;
+            }
+            return true;
+          });
+          
+          // Calculate totals
+          let totalAmount = 0;
+          let paymentCount = 0;
+          const paymentIds = [];
+          
+          for (const p of allSuccessfulPayments) {
+            totalAmount += p.amount;
+            paymentCount++;
+            paymentIds.push(p.id);
+          }
+          
+          // Update row
+          await googleSheets.updateRow(existingCustomer, {
+            'Total Amount': (totalAmount / 100).toFixed(2),
+            'Payment Count': paymentCount.toString(),
+            'Payment Intent IDs': paymentIds.join(', ')
+          });
+          
+          newPurchases++;
+        } else {
+          // Add new customer
+          logger.info('Adding new customer', { customerId: payment.customer });
+          
+          const rowData = formatPaymentForSheets(payment, customer);
+          rowData['Total Amount'] = (payment.amount / 100).toFixed(2);
+          rowData['Payment Count'] = '1';
+          rowData['Payment Intent IDs'] = payment.id;
+          
+          await googleSheets.addRow(rowData);
+          
+          // Send notification
+          const notificationMessage = formatTelegramNotification(payment, customer);
+          await sendNotifications(notificationMessage);
+          
+          newPurchases++;
+        }
+        
+        processedCount++;
+        
+      } catch (error) {
+        logger.error('Error processing payment', error, { paymentId: payment.id });
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Sync completed! Processed ${processedCount} purchase(s)`,
+      total_payments: successfulPayments.length,
+      processed: processedCount,
+      new_purchases: newPurchases
+    });
+    
+  } catch (error) {
+    logger.error('Error in sync-payments endpoint', error);
+    res.status(500).json({
+      success: false,
+      message: 'Sync failed',
+      error: error.message
+    });
+  }
+});
+
+// Weekly report endpoint
+app.get('/api/weekly-report', async (req, res) => {
+  try {
+    const report = await analytics.generateWeeklyReport();
+    
+    if (report) {
+      await sendNotifications(report);
+      res.json({
+        success: true,
+        message: 'Weekly report sent successfully'
+      });
+    } else {
+      res.json({
+        success: true,
+        message: 'No data for weekly report'
+      });
+    }
+  } catch (error) {
+    logger.error('Error generating weekly report', error);
+    res.status(500).json({
+      success: false,
+      message: 'Weekly report failed',
+      error: error.message
+    });
+  }
+});
+
+// GEO alert endpoint
+app.get('/api/geo-alert', async (req, res) => {
+  try {
+    const alert = await analytics.generateGeoAlert();
+    
+    if (alert) {
+      await sendNotifications(alert);
+      res.json({
+        success: true,
+        message: 'GEO alert sent successfully'
+      });
+    } else {
+      res.json({
+        success: true,
+        message: 'No data for GEO alert'
+      });
+    }
+  } catch (error) {
+    logger.error('Error generating GEO alert', error);
+    res.status(500).json({
+      success: false,
+      message: 'GEO alert failed',
+      error: error.message
+    });
+  }
+});
+
+// Creative alert endpoint
+app.get('/api/creative-alert', async (req, res) => {
+  try {
+    const alert = await analytics.generateCreativeAlert();
+    
+    if (alert) {
+      await sendNotifications(alert);
+      res.json({
+        success: true,
+        message: 'Creative alert sent successfully'
+      });
+    } else {
+      res.json({
+        success: true,
+        message: 'No data for creative alert'
+      });
+    }
+  } catch (error) {
+    logger.error('Error generating creative alert', error);
+    res.status(500).json({
+      success: false,
+      message: 'Creative alert failed',
+      error: error.message
+    });
+  }
+});
+
+// Last purchases endpoint
+app.get('/api/last-purchases', async (req, res) => {
+  try {
+    const payments = await getRecentPayments(10);
+    
+    const formattedPayments = payments.map(payment => ({
+      payment_id: payment.id,
+      amount: (payment.amount / 100).toFixed(2),
+      currency: payment.currency,
+      status: payment.status,
+      created: new Date(payment.created * 1000).toISOString(),
+      customer_id: payment.customer,
+      customer_email: payment.receipt_email || 'N/A',
+      customer_name: 'N/A',
+      metadata: payment.metadata || {},
+      customer_metadata: {}
+    }));
+    
+    res.json({
+      success: true,
+      message: `Found ${formattedPayments.length} recent purchases`,
+      count: formattedPayments.length,
+      purchases: formattedPayments
+    });
+    
+  } catch (error) {
+    logger.error('Error fetching last purchases', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch last purchases',
+      error: error.message
+    });
+  }
 });
 
 // Error handlers
