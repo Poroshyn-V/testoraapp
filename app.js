@@ -4,15 +4,12 @@ import pino from 'pino';
 import Stripe from 'stripe';
 import { GoogleSpreadsheet } from 'google-spreadsheet';
 import { JWT } from 'google-auth-library';
-import CachingMiddleware from './middleware/caching.js';
-import SecurityMiddleware from './middleware/security.js';
-import ErrorHandler from './middleware/errorHandler.js';
+// Middleware imports removed - using simplified version
 
 const app = express();
 const logger = pino({ level: 'info' });
 
-// Инициализация обработчиков ошибок
-ErrorHandler.initialize();
+// Middleware initialization removed - using simplified version
 
 // Environment variables
 const ENV = {
@@ -837,16 +834,7 @@ async function loadExistingPurchases() {
   }
 }
 
-// Middleware для безопасности
-app.use(SecurityMiddleware.securityHeaders);
-app.use(SecurityMiddleware.sanitizeRequest);
-app.use(SecurityMiddleware.rateLimit(100, 15 * 60 * 1000)); // 100 запросов за 15 минут
-app.use(SecurityMiddleware.validateRequestSize(1024 * 1024)); // 1MB лимит
-app.use(SecurityMiddleware.securityLog);
-
-// Middleware для производительности
-app.use(CachingMiddleware.performanceMonitoring);
-app.use(CachingMiddleware.optimizeRequests);
+// Middleware removed - using simplified version
 
 // Основные middleware
 app.use(express.json());
@@ -1910,14 +1898,7 @@ ${adset_name ? `• Adset: ${adset_name}` : ''}
 ${campaign_name ? `• Campaign: ${campaign_name}` : ''}`;
 }
 
-// Обработчики ошибок
-app.use(ErrorHandler.handleStripeError);
-app.use(ErrorHandler.handleGoogleSheetsError);
-app.use(ErrorHandler.handleValidationError);
-app.use(ErrorHandler.handleAuthError);
-app.use(ErrorHandler.handleNetworkError);
-app.use(ErrorHandler.handleDatabaseError);
-app.use(ErrorHandler.handleGeneralError);
+// Error handlers removed - using simplified version
 
 // Start server
 app.listen(ENV.PORT, () => {
