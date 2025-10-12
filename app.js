@@ -214,8 +214,7 @@ app.post('/api/sync-payments', async (req, res) => {
           await googleSheets.addRow(rowData);
           
           // Send notification
-          const notificationMessage = formatTelegramNotification(payment, customer);
-          await sendNotifications(notificationMessage);
+          await sendNotifications(payment, customer);
           
           newPurchases++;
         }
@@ -356,6 +355,51 @@ app.get('/api/last-purchases', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch last purchases',
+      error: error.message
+    });
+  }
+});
+
+// Debug endpoint to check specific customer
+app.get('/api/debug-customer/:customerId', async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    
+    // Get customer from Stripe
+    const customer = await getCustomer(customerId);
+    const payments = await getCustomerPayments(customerId);
+    
+    // Get customer from Google Sheets
+    const sheetRows = await googleSheets.findRows({ 'Customer ID': customerId });
+    
+    res.json({
+      success: true,
+      customer: {
+        id: customer?.id,
+        email: customer?.email,
+        name: customer?.name
+      },
+      stripePayments: payments.map(p => ({
+        id: p.id,
+        amount: (p.amount / 100).toFixed(2),
+        currency: p.currency,
+        status: p.status,
+        description: p.description,
+        created: new Date(p.created * 1000).toISOString()
+      })),
+      googleSheetsRows: sheetRows.map(row => ({
+        purchaseId: row.get('Purchase ID'),
+        totalAmount: row.get('Total Amount'),
+        paymentCount: row.get('Payment Count'),
+        paymentIds: row.get('Payment Intent IDs')
+      }))
+    });
+    
+  } catch (error) {
+    logger.error('Error in debug-customer endpoint', error);
+    res.status(500).json({
+      success: false,
+      message: 'Debug failed',
       error: error.message
     });
   }

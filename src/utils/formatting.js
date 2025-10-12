@@ -187,3 +187,50 @@ ${topCreatives.map(([creative, count], i) => `${i + 1}. ${creative}: ${count} sa
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ⏰ **Alert generated:** ${new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Berlin' })} UTC+1`;
 }
+
+// Format notification message for Slack (same format as Telegram)
+export function formatSlackNotification(payment, customer, metadata = {}) {
+  const m = { ...payment.metadata, ...(customer?.metadata || {}), ...metadata };
+  
+  // Extract data
+  const amount = (payment.amount / 100).toFixed(2);
+  const currency = payment.currency?.toUpperCase() || 'USD';
+  const email = customer?.email || 'N/A';
+  const geoCountry = m.geo_country || customer?.address?.country || 'Unknown';
+  const geoCity = m.geo_city || customer?.address?.city || 'Unknown';
+  const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
+  
+  // Format UTM data
+  const utmSource = m.utm_source || 'N/A';
+  const utmMedium = m.utm_medium || 'N/A';
+  const utmCampaign = m.utm_campaign || 'N/A';
+  const utmContent = m.utm_content || 'N/A';
+  const utmTerm = m.utm_term || 'N/A';
+  
+  // Format ad data
+  const adName = m.ad_name || 'N/A';
+  const adsetName = m.adset_name || 'N/A';
+  const campaignName = m.campaign_name || 'N/A';
+  
+  // Create notification message (same format as Telegram)
+  const message = `🟢 Order ${payment.id.substring(0, 7)} was processed!
+---------------------------
+💳 card
+💰 ${amount} ${currency}
+🏷️ ${m.product_tag || 'N/A'}
+---------------------------
+📧 ${email}
+---------------------------
+🌪️ ${m.utm_id || 'N/A'}
+📍 ${geo}
+🧍${m.gender || 'N/A'} ${m.age || 'N/A'}
+🔗 ${m.creative_link || 'N/A'}
+meta
+${utmSource}
+${utmMedium}
+${adName}
+${adsetName}
+${campaignName}`;
+
+  return message;
+}

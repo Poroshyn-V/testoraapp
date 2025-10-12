@@ -1,5 +1,6 @@
 import { ENV } from '../config/env.js';
 import { logInfo, logError } from '../utils/logging.js';
+import { formatSlackNotification, formatTelegramNotification } from '../utils/formatting.js';
 
 // Telegram notification service
 export async function sendTelegram(message) {
@@ -33,13 +34,16 @@ export async function sendTelegram(message) {
 }
 
 // Slack notification service
-export async function sendSlack(message) {
+export async function sendSlack(payment, customer, metadata = {}) {
   if (!ENV.SLACK_BOT_TOKEN || !ENV.SLACK_CHANNEL_ID) {
     logInfo('Slack not configured, skipping notification');
     return;
   }
 
   try {
+    // Format message for Slack (same format as Telegram)
+    const message = formatSlackNotification(payment, customer, metadata);
+    
     const response = await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
       headers: {
@@ -69,16 +73,17 @@ export async function sendSlack(message) {
 }
 
 // Send notifications to all configured channels
-export async function sendNotifications(message) {
+export async function sendNotifications(payment, customer, metadata = {}) {
   const promises = [];
   
   if (!ENV.NOTIFICATIONS_DISABLED) {
     if (ENV.TELEGRAM_BOT_TOKEN && ENV.TELEGRAM_CHAT_ID) {
-      promises.push(sendTelegram(message));
+      const telegramMessage = formatTelegramNotification(payment, customer, metadata);
+      promises.push(sendTelegram(telegramMessage));
     }
     
     if (ENV.SLACK_BOT_TOKEN && ENV.SLACK_CHANNEL_ID) {
-      promises.push(sendSlack(message));
+      promises.push(sendSlack(payment, customer, metadata));
     }
   }
   
