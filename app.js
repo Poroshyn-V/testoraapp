@@ -347,7 +347,7 @@ app.get('/api/last-purchases', async (req, res) => {
 // Debug endpoint for GEO alert data
 app.get('/api/debug-geo', async (req, res) => {
   try {
-    const rows = await googleSheets.getAllRows();
+    const rows = await googleSheets.getRows();
     
     // Get today's date
     const today = new Date();
@@ -392,7 +392,7 @@ app.get('/api/debug-geo', async (req, res) => {
         sampleDates: todayPurchases.slice(0, 5).map(p => ({
           date: p.get('Created Local (UTC+1)'),
           geo: p.get('GEO'),
-          amount: p.get('Amount')
+          amount: p.get('Total Amount')
         }))
       }
     });
