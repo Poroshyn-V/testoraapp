@@ -7,7 +7,7 @@ async function fixGoogleSheetsData() {
     console.log('🔧 Starting Google Sheets data fix...');
     
     // Get all rows from Google Sheets
-    const rows = await googleSheets.getRows();
+    const rows = await googleSheets.getAllRows();
     console.log(`📊 Found ${rows.length} rows to check`);
     
     let fixedCount = 0;

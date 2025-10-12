@@ -96,7 +96,7 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
   const creativeLink = (metadata['Creative Link'] && metadata['Creative Link'] !== 'N/A') || (m.creative_link && m.creative_link !== 'N/A') ? (metadata['Creative Link'] || m.creative_link) : null;
   
   // Create STRUCTURED notification message
-  let message = `🟢 Purchase purchase_cus_${customer?.id || 'unknown'}_${payment.created} was processed!
+  let message = `🟢 Purchase purchase_cus_${customer?.id || 'unknown'} was processed!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 💳 Payment Method: Card
 💰 Amount: ${amount} ${currency}
