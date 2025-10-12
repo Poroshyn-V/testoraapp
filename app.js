@@ -141,43 +141,42 @@ app.post('/api/sync-payments', async (req, res) => {
     
     logger.info('Found successful payments', { count: successfulPayments.length });
     
-    // GROUP PAYMENTS BY CUSTOMER (optimized)
+    // OLD WORKING LOGIC: Group payments by customer with time window
     const groupedPurchases = new Map();
-    const customerCache = new Map();
+    const threeHoursInSeconds = 3 * 60 * 60; // 3 hours
     
-    // First, get all unique customer IDs
-    const uniqueCustomerIds = [...new Set(successfulPayments.map(p => p.customer).filter(Boolean))];
-    
-    // Fetch all customers in parallel
-    const customerPromises = uniqueCustomerIds.map(async (customerId) => {
-      try {
-        const customer = await getCustomer(customerId);
-        customerCache.set(customerId, customer);
-      } catch (error) {
-        logger.error('Error fetching customer', error, { customerId });
-        customerCache.set(customerId, null);
-      }
-    });
-    
-    await Promise.all(customerPromises);
-    
-    // Now group payments by customer
     for (const payment of successfulPayments) {
-      const customer = customerCache.get(payment.customer);
-      const customerId = customer?.id || payment.customer;
+      const customer = await getCustomer(payment.customer);
+      const customerId = customer?.id;
       
-      if (!groupedPurchases.has(customerId)) {
-        groupedPurchases.set(customerId, {
+      if (!customerId) continue;
+      
+      // Look for existing group within 3 hours
+      let foundGroup = null;
+      for (const [key, group] of groupedPurchases.entries()) {
+        if (group.customer?.id === customerId) {
+          const timeDiff = Math.abs(payment.created - group.firstPayment.created);
+          if (timeDiff <= threeHoursInSeconds) {
+            foundGroup = group;
+            break;
+          }
+        }
+      }
+      
+      if (foundGroup) {
+        // Add to existing group (upsell)
+        foundGroup.payments.push(payment);
+        foundGroup.totalAmount += payment.amount;
+      } else {
+        // Create new group
+        const purchaseId = `purchase_${customerId}_${payment.created}`;
+        groupedPurchases.set(purchaseId, {
           customer,
-          payments: [],
-          totalAmount: 0,
+          payments: [payment],
+          totalAmount: payment.amount,
           firstPayment: payment
         });
       }
-      
-      const group = groupedPurchases.get(customerId);
-      group.payments.push(payment);
-      group.totalAmount += payment.amount;
     }
     
     logger.info('Grouped payments by customer', { 
