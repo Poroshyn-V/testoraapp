@@ -122,6 +122,59 @@ app.get('/api/test', (req, res) => {
   });
 });
 
+// Test notifications endpoint
+app.post('/api/test-notifications', async (req, res) => {
+  try {
+    // Create test payment and customer data
+    const testPayment = {
+      id: 'pi_test_123456789',
+      amount: 999, // $9.99
+      currency: 'usd',
+      status: 'succeeded',
+      created: Math.floor(Date.now() / 1000),
+      metadata: {
+        ad_name: '6025_static_var01_Spectrum_Impulse_12IQTypes_VP_En',
+        adset_name: 'WEB_EN_US_Broad_testora-myiq_LC_12.10.2025_Testora_ABO_60',
+        campaign_name: 'Testora_WEB_US_Core-0030-ABO_cpi_fcb_12.11.2025',
+        creative_link: 'quiz.testora.pro/iq1'
+      }
+    };
+    
+    const testCustomer = {
+      id: 'cus_test_123456789',
+      email: 'test@example.com',
+      metadata: {
+        geo_country: 'US',
+        geo_city: 'New York'
+      }
+    };
+    
+    const testMetadata = {
+      'Ad Name': '6025_static_var01_Spectrum_Impulse_12IQTypes_VP_En',
+      'Adset Name': 'WEB_EN_US_Broad_testora-myiq_LC_12.10.2025_Testora_ABO_60',
+      'Campaign Name': 'Testora_WEB_US_Core-0030-ABO_cpi_fcb_12.11.2025',
+      'Creative Link': 'quiz.testora.pro/iq1'
+    };
+    
+    logger.info('Sending test notifications...');
+    await sendNotifications(testPayment, testCustomer, testMetadata);
+    
+    res.json({
+      success: true,
+      message: 'Test notifications sent to Telegram and Slack',
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    logger.error('Error sending test notifications', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error sending test notifications',
+      error: error.message
+    });
+  }
+});
+
 // Sync payments endpoint
 app.post('/api/sync-payments', async (req, res) => {
   try {
