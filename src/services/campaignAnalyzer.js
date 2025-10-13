@@ -427,14 +427,28 @@ class CampaignAnalyzer {
   async analyzeSingleCampaign(campaignName, timeframe = 'week') {
     try {
       const rows = await googleSheets.getAllRows();
-      const purchases = this.filterByTimeframe(rows, timeframe)
-        .filter(row => row.get('Campaign Name') === campaignName);
+      const timeframePurchases = this.filterByTimeframe(rows, timeframe);
+      
+      // Debug: log all unique campaign names in timeframe
+      const uniqueCampaigns = [...new Set(timeframePurchases.map(row => row.get('Campaign Name') || 'Unknown'))];
+      logger.info('Debug: Unique campaigns in timeframe', { 
+        timeframe, 
+        uniqueCampaigns, 
+        requestedCampaign: campaignName 
+      });
+      
+      const purchases = timeframePurchases.filter(row => {
+        const rowCampaignName = row.get('Campaign Name') || 'Unknown';
+        return rowCampaignName === campaignName;
+      });
       
       if (purchases.length === 0) {
         return {
           error: 'No purchases found for this campaign',
           campaignName,
-          timeframe
+          timeframe,
+          availableCampaigns: uniqueCampaigns,
+          totalPurchasesInTimeframe: timeframePurchases.length
         };
       }
       
