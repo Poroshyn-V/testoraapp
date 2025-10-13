@@ -618,6 +618,33 @@ app.get('/api/geo-alert', async (req, res) => {
   }
 });
 
+// Daily stats endpoint
+app.get('/api/daily-stats', async (req, res) => {
+  try {
+    const stats = await analytics.generateDailyStats();
+    
+    if (stats) {
+      await sendTextNotifications(stats);
+      res.json({
+        success: true,
+        message: 'Daily stats sent successfully'
+      });
+    } else {
+      res.json({
+        success: true,
+        message: 'No data for daily stats'
+      });
+    }
+  } catch (error) {
+    logger.error('Error generating daily stats', error);
+    res.status(500).json({
+      success: false,
+      message: 'Daily stats failed',
+      error: error.message
+    });
+  }
+});
+
 // Creative alert endpoint
 app.get('/api/creative-alert', async (req, res) => {
   try {

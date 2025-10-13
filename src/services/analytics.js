@@ -386,6 +386,102 @@ export class AnalyticsService {
     return flags[country] || '🌍';
   }
   
+  // Generate daily stats alert (restored from old working version)
+  async generateDailyStats() {
+    try {
+      logInfo('📊 Анализирую статистику за вчера...');
+      
+      const rows = await googleSheets.getAllRows();
+      
+      // Получаем вчерашнюю дату в UTC+1
+      const today = new Date();
+      const utcPlus1 = new Date(today.getTime() + 60 * 60 * 1000);
+      const yesterday = new Date(utcPlus1);
+      yesterday.setDate(utcPlus1.getDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split('T')[0]; // YYYY-MM-DD
+      
+      logInfo(`📅 Анализирую статистику за ${yesterdayStr} (UTC+1)`);
+      
+      // Фильтруем покупки за вчера
+      const yesterdayPurchases = rows.filter(row => {
+        const createdLocal = row.get('Created Local (UTC+1)') || '';
+        return createdLocal.includes(yesterdayStr);
+      });
+      
+      logInfo(`📊 Найдено ${yesterdayPurchases.length} покупок за вчера`);
+      
+      if (yesterdayPurchases.length === 0) {
+        logInfo('📭 Нет покупок за вчера - пропускаю ежедневную статистику');
+        return null;
+      }
+      
+      // T1 страны (первый уровень)
+      const t1Countries = ['US', 'CA', 'AU', 'GB', 'DE', 'FR', 'IT', 'ES', 'NL', 'SE', 'NO', 'DK', 'FI', 'CH', 'AT', 'BE', 'IE', 'PT', 'GR', 'LU', 'MT', 'CY'];
+      
+      // Анализируем статистику
+      const stats = {
+        US: { main: 0, additional: 0, total: 0 },
+        T1: { main: 0, additional: 0, total: 0 },
+        WW: { main: 0, additional: 0, total: 0 }
+      };
+      
+      for (const purchase of yesterdayPurchases) {
+        const geo = purchase.get('GEO') || '';
+        const amount = parseFloat(purchase.get('Total Amount') || '0');
+        const country = geo.split(',')[0].trim();
+        
+        // Определяем категорию страны
+        let category = 'WW';
+        if (country === 'US') {
+          category = 'US';
+        } else if (t1Countries.includes(country)) {
+          category = 'T1';
+        }
+        
+        // Определяем тип покупки
+        const isMain = amount <= 9.99;
+        const isAdditional = amount > 9.99;
+        
+        if (isMain) {
+          stats[category].main++;
+        }
+        if (isAdditional) {
+          stats[category].additional++;
+        }
+        stats[category].total++;
+      }
+      
+      // Формируем сообщение
+      const alertText = `📊 **Daily Stats for ${yesterdayStr}**
+
+🇺🇸 **US Market:**
+• Main purchases (≤$9.99): ${stats.US.main}
+• Additional sales (>$9.99): ${stats.US.additional}
+• Total: ${stats.US.total}
+
+🌍 **T1 Countries:**
+• Main purchases (≤$9.99): ${stats.T1.main}
+• Additional sales (>$9.99): ${stats.T1.additional}
+• Total: ${stats.T1.total}
+
+🌎 **WW (Rest of World):**
+• Main purchases (≤$9.99): ${stats.WW.main}
+• Additional sales (>$9.99): ${stats.WW.additional}
+• Total: ${stats.WW.total}
+
+📈 **Overall Total:** ${yesterdayPurchases.length} purchases
+⏰ Report time: 07:00 UTC+1`;
+      
+      logInfo('📤 Отправляю ежедневную статистику:', { alertText });
+      
+      return alertText;
+      
+    } catch (error) {
+      logError('Error generating daily stats', error);
+      throw error;
+    }
+  }
+  
   // Generate creative alert
   async generateCreativeAlert() {
     try {
