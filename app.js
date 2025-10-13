@@ -2007,7 +2007,10 @@ app.post('/api/sync-payments', async (req, res) => {
       return true;
     });
     
-    // 🔍 Фильтруем платежи используя кэш
+    // 🔄 ОБНОВЛЯЕМ кэш дубликатов прямо перед фильтрацией для максимальной точности
+    await duplicateChecker.refreshCache();
+    
+    // 🔍 Фильтруем платежи используя свежий кэш
     const newPayments = successfulPayments.filter(p => {
       const check = duplicateChecker.paymentIntentExists(p.id);
       if (check.exists) {
@@ -2015,6 +2018,7 @@ app.post('/api/sync-payments', async (req, res) => {
           paymentId: p.id,
           customerId: check.customerId
         });
+        results.duplicatesAvoided++;
         return false;
       }
       return true;
@@ -2040,6 +2044,18 @@ app.post('/api/sync-payments', async (req, res) => {
     const groupedPurchases = new Map();
     
     for (const payment of newPayments) {
+      // 🔍 ДОПОЛНИТЕЛЬНАЯ проверка дубликатов прямо в цикле
+      const duplicateCheck = duplicateChecker.paymentIntentExists(payment.id);
+      if (duplicateCheck.exists) {
+        logger.warn(`DUPLICATE DETECTED in processing loop: ${payment.id}`, {
+          paymentId: payment.id,
+          customerId: duplicateCheck.customerId,
+          reason: 'duplicate_in_processing_loop'
+        });
+        results.duplicatesAvoided++;
+        continue; // Пропускаем этот платеж
+      }
+      
       const customer = await fetchWithRetry(() => getCustomer(payment.customer));
       const customerId = customer?.id;
       if (!customerId) continue;
@@ -2169,6 +2185,9 @@ app.post('/api/sync-payments', async (req, res) => {
             totalAmount: updateData['Total Amount'],
             paymentCount: updateData['Payment Count']
           });
+          
+          // 🔄 ОБНОВЛЯЕМ кэш дубликатов для предотвращения race conditions
+          await duplicateChecker.refreshCache();
         
           // Send notification
           const sheetData = {
@@ -2274,6 +2293,9 @@ app.post('/api/sync-payments', async (req, res) => {
             totalAmount: rowData['Total Amount'],
             paymentCount: rowData['Payment Count']
           });
+          
+          // 🔄 ОБНОВЛЯЕМ кэш дубликатов для предотвращения race conditions
+          await duplicateChecker.refreshCache();
         
           // Send notification
           const sheetData = {
