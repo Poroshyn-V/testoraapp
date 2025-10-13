@@ -98,16 +98,8 @@ let emergencyStop = false;
 
 // Helper function for sending purchase notifications with metrics
 async function sendPurchaseNotification(payment, customer, sheetData, type) {
-  // 🔍 Проверяем, не является ли это дубликатом перед отправкой уведомления
-  if (purchaseCache.has(payment.id)) {
-    logger.info(`Skipping notification for duplicate payment ${payment.id} (purchaseCache)`, {
-      paymentId: payment.id,
-      customerId: customer.id,
-      reason: 'duplicate_detected_purchaseCache'
-    });
-    return; // Не отправляем уведомление для дубликата
-  }
-  
+  // 🔍 Проверяем дубликаты только в duplicateChecker, но НЕ в purchaseCache
+  // потому что purchaseCache обновляется после добавления в таблицу
   const paymentCheck = duplicateChecker.paymentIntentExists(payment.id);
   if (paymentCheck.exists) {
     logger.info(`Skipping notification for duplicate payment ${payment.id} (duplicateChecker)`, {
