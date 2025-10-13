@@ -12,6 +12,7 @@ import { analytics } from './src/services/analytics.js';
 import { smartAlerts } from './src/services/smartAlerts.js';
 import { alertConfig } from './src/config/alertConfig.js';
 import { alertCooldown } from './src/utils/alertCooldown.js';
+import { performanceMonitor } from './src/services/performanceMonitor.js';
 import { formatPaymentForSheets, formatTelegramNotification } from './src/utils/formatting.js';
 import { validateEmail, validateCustomerId, validatePaymentId, validateAmount } from './src/utils/validation.js';
 import { purchaseCache } from './src/services/purchaseCache.js';
@@ -240,6 +241,12 @@ async function loadExistingPurchases() {
     metrics.gauge('existing_purchases_count', purchaseCache.size());
     metrics.histogram('load_existing_duration', duration);
     
+    // Record performance metrics
+    performanceMonitor.recordOperation('loadExistingPurchases', duration, {
+      count: purchaseCache.size(),
+      success: true
+    });
+    
     logger.info('✅ Existing purchases loaded successfully', {
       count: purchaseCache.size(),
       duration: `${duration}ms`,
@@ -251,6 +258,12 @@ async function loadExistingPurchases() {
     metrics.endTimer(timerId);
     metrics.increment('load_existing_failed');
     metrics.histogram('load_existing_duration', duration);
+    
+    // Record performance metrics for failed operation
+    performanceMonitor.recordOperation('loadExistingPurchases', duration, {
+      success: false,
+      error: error.message
+    });
     
     logger.error('❌ Ошибка загрузки существующих покупок:', {
       error: error.message,
@@ -306,16 +319,30 @@ async function runSync() {
       timestamp: new Date().toISOString()
     });
     
+    // Record performance metrics
+    const syncDuration = Date.now() - startTime;
+    performanceMonitor.recordOperation('sync', syncDuration, {
+      processed: result.processed || 0,
+      failed: result.failed || 0,
+      success: true
+    });
+    
     return result;
   } catch (error) {
-    const duration = Date.now() - startTime;
+    const errorDuration = Date.now() - startTime;
     metrics.endTimer(timerId);
     metrics.increment('sync_failed');
-    metrics.histogram('sync_duration', duration);
+    metrics.histogram('sync_duration', errorDuration);
+    
+    // Record performance metrics for failed sync
+    performanceMonitor.recordOperation('sync', errorDuration, {
+      success: false,
+      error: error.message
+    });
     
     logger.error('❌ Protected sync failed:', {
       error: error.message,
-      duration: `${duration}ms`,
+      duration: `${errorDuration}ms`,
       timestamp: new Date().toISOString()
     });
     return { success: false, message: 'Sync failed', error: error.message };
@@ -338,7 +365,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/smart-alerts', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/api/alerts/dashboard', '/api/alerts/cooldown-stats', '/auto-sync', '/ping', '/health']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/smart-alerts', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/api/alerts/dashboard', '/api/alerts/cooldown-stats', '/api/performance-stats', '/auto-sync', '/ping', '/health']
 }));
 
 // Health check
@@ -1613,6 +1640,25 @@ app.get('/api/alerts/cooldown-stats', (req, res) => {
     });
   } catch (error) {
     logger.error('Error getting cooldown stats', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Performance monitor stats endpoint
+app.get('/api/performance-stats', (req, res) => {
+  try {
+    const stats = performanceMonitor.getStats();
+    
+    res.json({
+      success: true,
+      message: 'Performance monitoring statistics',
+      ...stats
+    });
+  } catch (error) {
+    logger.error('Error getting performance stats', error);
     res.status(500).json({
       success: false,
       error: error.message
