@@ -1049,18 +1049,14 @@ app.listen(ENV.PORT, () => {
       }
     }, 5 * 60 * 1000); // 5 minutes
     
-    // GEO Alert every Monday at 8 AM UTC+1 (7 AM UTC)
+    // GEO Alert every hour
     const scheduleGeoAlert = () => {
-      const now = new Date();
-      const nextMonday = new Date(now);
-      nextMonday.setDate(now.getDate() + (1 + 7 - now.getDay()) % 7); // Next Monday
-      nextMonday.setHours(7, 0, 0, 0); // 8 AM UTC+1 = 7 AM UTC
+      console.log('🌍 Starting hourly GEO alerts...');
       
-      const timeUntilMonday = nextMonday.getTime() - now.getTime();
-      
+      // First alert after 1 minute
       setTimeout(async () => {
         try {
-          console.log('🌍 Running weekly GEO alert...');
+          console.log('🌍 Running first GEO alert...');
           const response = await fetch(`http://localhost:${ENV.PORT}/api/geo-alert`, {
             method: 'GET'
           });
@@ -1069,25 +1065,21 @@ app.listen(ENV.PORT, () => {
         } catch (error) {
           console.error('❌ GEO alert failed:', error.message);
         }
-      }, timeUntilMonday);
+      }, 60000); // 1 minute
       
-      console.log(`🌍 GEO Alert scheduled for: ${nextMonday.toLocaleString()}`);
-      
-      // Schedule weekly interval after first run
-      setTimeout(() => {
-        setInterval(async () => {
-          try {
-            console.log('🌍 Running weekly GEO alert...');
-            const response = await fetch(`http://localhost:${ENV.PORT}/api/geo-alert`, {
-              method: 'GET'
-            });
-            const result = await response.json();
-            console.log(`✅ GEO alert completed: ${result.message}`);
-          } catch (error) {
-            console.error('❌ GEO alert failed:', error.message);
-          }
-        }, 7 * 24 * 60 * 60 * 1000); // 7 days
-      }, timeUntilMonday);
+      // Then every hour
+      setInterval(async () => {
+        try {
+          console.log('🌍 Running hourly GEO alert...');
+          const response = await fetch(`http://localhost:${ENV.PORT}/api/geo-alert`, {
+            method: 'GET'
+          });
+          const result = await response.json();
+          console.log(`✅ GEO alert completed: ${result.message}`);
+        } catch (error) {
+          console.error('❌ GEO alert failed:', error.message);
+        }
+      }, 60 * 60 * 1000); // 1 hour
     };
     
     // Weekly Report every Monday at 9 AM UTC+1 (8 AM UTC)
@@ -1141,7 +1133,7 @@ app.listen(ENV.PORT, () => {
     console.log('   ✅ Checks Stripe every 5 minutes');
     console.log('   ✅ Adds new purchases to Google Sheets');
     console.log('   ✅ Sends notifications to Telegram and Slack');
-    console.log('   ✅ GEO alerts every Monday at 8 AM UTC+1');
+    console.log('   ✅ GEO alerts every hour');
     console.log('   ✅ Weekly reports every Monday at 9 AM UTC+1');
     console.log('   ✅ Works WITHOUT manual intervention');
   } else {
