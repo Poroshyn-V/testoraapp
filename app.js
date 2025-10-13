@@ -12,6 +12,7 @@ import { analytics } from './src/services/analytics.js';
 import { formatPaymentForSheets, formatTelegramNotification } from './src/utils/formatting.js';
 import { validateEmail, validateCustomerId, validatePaymentId, validateAmount } from './src/utils/validation.js';
 import { purchaseCache } from './src/services/purchaseCache.js';
+import { metrics } from './src/services/metrics.js';
 
 const app = express();
 
@@ -94,6 +95,7 @@ function cleanOldAlerts() {
 
 // Retry logic for external APIs
 async function fetchWithRetry(fn, retries = 3, delay = 1000) {
+  const timerId = metrics.startTimer('api_call', { operation: fn.name || 'external' });
   const startTime = Date.now();
   const operationName = fn.name || 'external API call';
   
@@ -102,7 +104,12 @@ async function fetchWithRetry(fn, retries = 3, delay = 1000) {
       const result = await fn();
       const duration = Date.now() - startTime;
       
+      metrics.endTimer(timerId);
+      metrics.increment('api_call', 1, { operation: operationName, success: true });
+      metrics.histogram('api_response_time', duration, { operation: operationName });
+      
       if (i > 0) {
+        metrics.increment('api_retry', 1, { operation: operationName, retries: i });
         logger.info(`✅ ${operationName} succeeded after ${i} retries`, {
           retries: i,
           duration: `${duration}ms`,
@@ -114,6 +121,10 @@ async function fetchWithRetry(fn, retries = 3, delay = 1000) {
     } catch (error) {
       if (i === retries - 1) {
         const duration = Date.now() - startTime;
+        metrics.endTimer(timerId);
+        metrics.increment('api_error', 1, { operation: operationName, error: error.message });
+        metrics.histogram('api_response_time', duration, { operation: operationName, error: true });
+        
         logger.error(`❌ ${operationName} failed after ${retries} attempts`, {
           error: error.message,
           retries: retries,
@@ -124,6 +135,8 @@ async function fetchWithRetry(fn, retries = 3, delay = 1000) {
       }
       
       const retryDelay = delay * (i + 1);
+      metrics.increment('api_retry_attempt', 1, { operation: operationName, attempt: i + 1 });
+      
       logger.warn(`Retry ${i + 1}/${retries} after error:`, {
         operation: operationName,
         error: error.message,
@@ -138,8 +151,10 @@ async function fetchWithRetry(fn, retries = 3, delay = 1000) {
 
 // Load existing purchases from Google Sheets into memory
 async function loadExistingPurchases() {
+  const timerId = metrics.startTimer('load_existing_purchases');
   const startTime = Date.now();
   try {
+    metrics.increment('load_existing_started');
     logger.info('🔄 Loading existing purchases...', {
       timestamp: new Date().toISOString(),
       startTime: startTime
@@ -148,6 +163,11 @@ async function loadExistingPurchases() {
     await purchaseCache.reload();
     
     const duration = Date.now() - startTime;
+    metrics.endTimer(timerId);
+    metrics.increment('load_existing_success');
+    metrics.gauge('existing_purchases_count', purchaseCache.size());
+    metrics.histogram('load_existing_duration', duration);
+    
     logger.info('✅ Existing purchases loaded successfully', {
       count: purchaseCache.size(),
       duration: `${duration}ms`,
@@ -156,6 +176,10 @@ async function loadExistingPurchases() {
     });
   } catch (error) {
     const duration = Date.now() - startTime;
+    metrics.endTimer(timerId);
+    metrics.increment('load_existing_failed');
+    metrics.histogram('load_existing_duration', duration);
+    
     logger.error('❌ Ошибка загрузки существующих покупок:', {
       error: error.message,
       duration: `${duration}ms`,
@@ -166,9 +190,11 @@ async function loadExistingPurchases() {
 
 // Protected sync function to prevent overlapping synchronizations
 async function runSync() {
+  const timerId = metrics.startTimer('sync_operation');
   const startTime = Date.now();
   
   if (isSyncing) {
+    metrics.increment('sync_skipped', 1, { reason: 'already_in_progress' });
     logger.warn('⚠️ Sync already in progress, skipping this cycle...', {
       timestamp: new Date().toISOString(),
       duration: `${Date.now() - startTime}ms`
@@ -178,6 +204,7 @@ async function runSync() {
   
   isSyncing = true;
   try {
+    metrics.increment('sync_started');
     logger.info('🔄 Starting protected sync...', {
       timestamp: new Date().toISOString(),
       startTime: startTime
@@ -196,6 +223,10 @@ async function runSync() {
     const result = await response.json();
     const duration = Date.now() - startTime;
     
+    metrics.endTimer(timerId);
+    metrics.increment('sync_success');
+    metrics.histogram('sync_duration', duration);
+    
     logger.info('✅ Protected sync completed:', {
       ...result,
       duration: `${duration}ms`,
@@ -206,6 +237,10 @@ async function runSync() {
     return result;
   } catch (error) {
     const duration = Date.now() - startTime;
+    metrics.endTimer(timerId);
+    metrics.increment('sync_failed');
+    metrics.histogram('sync_duration', duration);
+    
     logger.error('❌ Protected sync failed:', {
       error: error.message,
       duration: `${duration}ms`,
@@ -231,7 +266,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/auto-sync', '/ping', '/health']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/auto-sync', '/ping', '/health']
 }));
 
 // Health check
@@ -264,7 +299,8 @@ app.get('/health', async (_req, res) => {
       sync: {
         isSyncing: isSyncing,
         status: isSyncing ? 'in_progress' : 'idle'
-      }
+      },
+      metrics: metrics.getSummary()
     };
     
     res.status(200).json(healthStatus);
@@ -839,6 +875,65 @@ app.post('/api/test-notifications', async (req, res) => {
   });
 });
 
+// Metrics endpoint
+app.get('/api/metrics', (req, res) => {
+  try {
+    const allMetrics = metrics.getAll();
+    res.json({
+      success: true,
+      message: 'Application metrics',
+      metrics: allMetrics,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Error getting metrics', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error getting metrics',
+      error: error.message
+    });
+  }
+});
+
+// Metrics summary endpoint
+app.get('/api/metrics/summary', (req, res) => {
+  try {
+    const summary = metrics.getSummary();
+    res.json({
+      success: true,
+      message: 'Application metrics summary',
+      summary: summary,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Error getting metrics summary', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error getting metrics summary',
+      error: error.message
+    });
+  }
+});
+
+// Reset metrics endpoint
+app.post('/api/metrics/reset', (req, res) => {
+  try {
+    metrics.reset();
+    res.json({
+      success: true,
+      message: 'Metrics reset successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Error resetting metrics', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error resetting metrics',
+      error: error.message
+    });
+  }
+});
+
 // Test batch operations endpoint
 app.post('/api/test-batch-operations', async (req, res) => {
   try {
@@ -1092,7 +1187,14 @@ app.post('/api/sync-payments', async (req, res) => {
           };
           
           const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
-          await sendNotifications(latestPayment, customer, sheetData);
+          
+          try {
+            await sendNotifications(latestPayment, customer, sheetData);
+            metrics.increment('notification_sent', 1, { type: 'upsell' });
+          } catch (error) {
+            metrics.increment('notification_failed', 1, { type: 'upsell', error: error.message });
+            logger.error('Failed to send upsell notification', error);
+          }
         }
         
         // Variables moved to results object
@@ -1130,7 +1232,13 @@ app.post('/api/sync-payments', async (req, res) => {
           'Payment Intent IDs': paymentIds.join(', ')
         };
         
-          await sendNotifications(firstPayment, customer, sheetData);
+          try {
+            await sendNotifications(firstPayment, customer, sheetData);
+            metrics.increment('notification_sent', 1, { type: 'new_purchase' });
+          } catch (error) {
+            metrics.increment('notification_failed', 1, { type: 'new_purchase', error: error.message });
+            logger.error('Failed to send new purchase notification', error);
+          }
           
           results.newPurchases++;
           results.processed++;

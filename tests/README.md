@@ -9,6 +9,7 @@ This directory contains unit tests for the Stripe Ops application.
 - `purchaseCache.test.js` - Tests for purchase cache service
 - `retry.test.js` - Tests for retry logic
 - `batchOperations.test.js` - Tests for batch update operations
+- `metrics.test.js` - Tests for metrics collection and reporting
 - `setup.js` - Test setup and mocks
 
 ## Running Tests
@@ -36,6 +37,7 @@ The tests cover critical functions including:
 - Purchase cache operations
 - Retry logic for external API calls
 - Batch operations for Google Sheets (updates and adds)
+- Metrics collection and performance monitoring
 - Performance optimization and rate limiting
 - Error handling and edge cases
 
