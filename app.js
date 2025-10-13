@@ -1246,26 +1246,44 @@ app.listen(ENV.PORT, () => {
     // Weekly Report every Monday at 9 AM UTC+1 (8 AM UTC)
     const scheduleWeeklyReport = () => {
       const now = new Date();
-      const nextMonday = new Date(now);
-      nextMonday.setDate(now.getDate() + (1 + 7 - now.getDay()) % 7); // Next Monday
+      const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+      const currentDay = utcPlus1.getDay(); // 0 = Sunday, 1 = Monday, etc.
+      const currentHour = utcPlus1.getUTCHours();
+      
+      // Calculate next Monday
+      const daysUntilMonday = (1 + 7 - currentDay) % 7;
+      const nextMonday = new Date(utcPlus1);
+      nextMonday.setDate(utcPlus1.getDate() + daysUntilMonday);
       nextMonday.setHours(8, 0, 0, 0); // 9 AM UTC+1 = 8 AM UTC
       
-      const timeUntilMonday = nextMonday.getTime() - now.getTime();
+      // If today is Monday and it's past 9 AM UTC+1, schedule for next Monday
+      if (currentDay === 1 && currentHour >= 9) {
+        nextMonday.setDate(nextMonday.getDate() + 7);
+      }
+      
+      const timeUntilMonday = nextMonday.getTime() - utcPlus1.getTime();
+      
+      console.log(`📊 Weekly Report scheduled for: ${nextMonday.toLocaleString('en-US', { timeZone: 'Europe/Berlin' })} (UTC+1)`);
       
       setTimeout(async () => {
-        try {
-          console.log('📊 Running weekly report...');
-          const response = await fetch(`http://localhost:${ENV.PORT}/api/weekly-report`, {
-            method: 'GET'
-          });
-          const result = await response.json();
-          console.log(`✅ Weekly report completed: ${result.message}`);
-        } catch (error) {
-          console.error('❌ Weekly report failed:', error.message);
+        const now = new Date();
+        const utcPlus1Now = new Date(now.getTime() + 60 * 60 * 1000);
+        const weekKey = utcPlus1Now.toISOString().split('T')[0]; // YYYY-MM-DD
+        
+        if (!sentAlerts.weeklyReport.has(weekKey)) {
+          try {
+            console.log('📊 Running weekly report...');
+            const response = await fetch(`http://localhost:${ENV.PORT}/api/weekly-report`, {
+              method: 'GET'
+            });
+            const result = await response.json();
+            console.log(`✅ Weekly report completed: ${result.message}`);
+            sentAlerts.weeklyReport.add(weekKey);
+          } catch (error) {
+            console.error('❌ Weekly report failed:', error.message);
+          }
         }
       }, timeUntilMonday);
-      
-      console.log(`📊 Weekly Report scheduled for: ${nextMonday.toLocaleString()}`);
       
       // Schedule weekly interval after first run
       setTimeout(() => {
