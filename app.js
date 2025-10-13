@@ -18,6 +18,14 @@ const app = express();
 
 // Purchase cache is now managed by purchaseCache service
 
+// Interval variables for graceful shutdown
+let syncInterval = null;
+let geoAlertInterval = null;
+let dailyStatsInterval = null;
+let creativeAlertInterval = null;
+let weeklyReportInterval = null;
+let alertCleanupInterval = null;
+
 // Helper function for sending purchase notifications with metrics
 async function sendPurchaseNotification(payment, customer, sheetData, type) {
   try {
@@ -1934,18 +1942,6 @@ app.listen(ENV.PORT, () => {
 });
 
 // Graceful shutdown handling
-let syncInterval = null;
-let geoAlertInterval = null;
-let dailyStatsInterval = null;
-let creativeAlertInterval = null;
-let weeklyReportInterval = null;
-let alertCleanupInterval = null;
-
-// Store interval references for cleanup
-const storeIntervalRefs = () => {
-  // These will be set when intervals are created
-  // We'll need to modify the scheduling functions to return interval IDs
-};
 
 // Graceful shutdown function
 async function gracefulShutdown(signal) {
