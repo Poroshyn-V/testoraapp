@@ -837,8 +837,8 @@ app.post('/api/fix-duplicates', async (req, res) => {
   try {
     logger.info('🔧 Starting aggressive duplicate fix...');
     
-    // Clear Google Sheets cache first
-    await googleSheets.clearCache();
+    // Clear Google Sheets cache first (if method exists)
+    // await googleSheets.clearCache(); // Method doesn't exist
     
     const rows = await googleSheets.getAllRows();
     const customerGroups = new Map();
@@ -918,8 +918,8 @@ app.post('/api/fix-duplicates', async (req, res) => {
       }
     }
     
-    // Clear cache again after all operations
-    await googleSheets.clearCache();
+    // Clear cache again after all operations (if method exists)
+    // await googleSheets.clearCache(); // Method doesn't exist
     
     logger.info(`Fixed ${fixedCount} customers, deleted ${deletedCount} duplicate rows`);
     
