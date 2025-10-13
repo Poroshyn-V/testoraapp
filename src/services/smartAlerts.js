@@ -1,37 +1,7 @@
 import { logInfo, logError } from '../utils/logging.js';
 import googleSheets from './googleSheets.js';
-import { sendTextNotifications } from './notifications.js';
 import { metrics } from './metrics.js';
-
-// Alert priority levels
-export const AlertPriority = {
-  LOW: 'low',
-  MEDIUM: 'medium',
-  HIGH: 'high',
-  CRITICAL: 'critical'
-};
-
-// Alert priority service
-export class AlertPriorityService {
-  static async sendAlert(message, priority, metadata = {}) {
-    try {
-      // Log the alert
-      logInfo(`🚨 ${priority.toUpperCase()} ALERT`, { message, priority, metadata });
-      
-      // Send to notifications
-      await sendTextNotifications(message);
-      
-      // Record metrics
-      metrics.increment('smart_alert_sent', 1, { priority, type: metadata.type });
-      
-      return true;
-    } catch (error) {
-      logError('Failed to send smart alert', error, { priority, metadata });
-      metrics.increment('smart_alert_failed', 1, { priority, type: metadata.type, error: error.message });
-      return false;
-    }
-  }
-}
+import AlertPriority from './alertPriority.js';
 
 // Smart alerts service
 export class SmartAlerts {
@@ -65,7 +35,7 @@ Drop: ${drop}%
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ⚠️ Immediate attention required!`;
         
-        await AlertPriorityService.sendAlert(alert, AlertPriority.HIGH, {
+        await AlertPriority.sendAlert(alert, AlertPriority.HIGH, {
           type: 'revenue_drop',
           today,
           average: avgLast7Days,
@@ -141,7 +111,7 @@ New countries detected: ${newCountries.join(', ')}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🎯 Consider targeting these markets!`;
         
-        await AlertPriorityService.sendAlert(alert, AlertPriority.MEDIUM, {
+        await AlertPriority.sendAlert(alert, AlertPriority.MEDIUM, {
           type: 'new_geo',
           newCountries,
           count: newCountries.length
@@ -227,7 +197,7 @@ Drop: ${drop}%
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🔍 Check your campaigns!`;
         
-        await AlertPriorityService.sendAlert(alert, AlertPriority.MEDIUM, {
+        await AlertPriority.sendAlert(alert, AlertPriority.MEDIUM, {
           type: 'conversion_drop',
           today: todayPurchases,
           average: avgLast7Days,
