@@ -551,6 +551,10 @@ app.get('/', (_req, res) => res.json({
     '/api/notification-queue/clear',
     '/api/notification-queue/pause',
     '/api/notification-queue/resume',
+    '/api/distributed-locks/stats',
+    '/api/distributed-locks/cleanup',
+    '/api/distributed-locks/active',
+    '/api/distributed-locks/release/:lockKey',
     '/auto-sync',
     '/ping',
     '/health'
@@ -1160,6 +1164,47 @@ app.post('/api/distributed-locks/cleanup', (req, res) => {
     });
   } catch (error) {
     logger.error('Error cleaning distributed locks', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Get detailed information about active locks
+app.get('/api/distributed-locks/active', (req, res) => {
+  try {
+    const activeLocks = distributedLock.getActiveLocks();
+    res.json({
+      success: true,
+      message: `Found ${activeLocks.length} active locks`,
+      activeLocks,
+      count: activeLocks.length
+    });
+  } catch (error) {
+    logger.error('Error getting active locks', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Force release a specific lock
+app.post('/api/distributed-locks/release/:lockKey', (req, res) => {
+  try {
+    const { lockKey } = req.params;
+    const released = distributedLock.forceRelease(lockKey);
+    
+    if (released) {
+      res.json({
+        success: true,
+        message: `Successfully released lock: ${lockKey}`,
+        lockKey
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: `Lock not found: ${lockKey}`,
+        lockKey
+      });
+    }
+  } catch (error) {
+    logger.error('Error releasing lock', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });

@@ -150,6 +150,47 @@ class DistributedLock {
     
     return cleaned;
   }
+  
+  // Получение списка активных блокировок
+  getActiveLocks() {
+    const now = Date.now();
+    const activeLocks = [];
+    
+    for (const [key, lock] of this.locks.entries()) {
+      const lockAge = now - lock.timestamp;
+      if (lockAge <= this.LOCK_TIMEOUT) {
+        activeLocks.push({
+          key,
+          age: `${lockAge}ms`,
+          ageMs: lockAge,
+          pid: lock.pid,
+          operation: lock.operation,
+          timestamp: lock.timestamp,
+          acquiredAt: new Date(lock.timestamp).toISOString()
+        });
+      }
+    }
+    
+    return activeLocks.sort((a, b) => a.ageMs - b.ageMs);
+  }
+  
+  // Принудительное освобождение блокировки
+  forceRelease(key) {
+    const lock = this.locks.get(key);
+    
+    if (!lock) {
+      logger.warn(`No lock found for ${key} during force release`);
+      return false;
+    }
+    
+    this.locks.delete(key);
+    logger.warn(`Force released lock for ${key}`, {
+      pid: lock.pid,
+      age: `${Date.now() - lock.timestamp}ms`
+    });
+    
+    return true;
+  }
 }
 
 export const distributedLock = new DistributedLock();
