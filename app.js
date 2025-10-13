@@ -55,6 +55,7 @@ let dailyStatsInterval = null;
 let creativeAlertInterval = null;
 let weeklyReportInterval = null;
 let campaignAnalysisInterval = null;
+let campaignReportInterval = null;
 let alertCleanupInterval = null;
 
 // Emergency stop flag
@@ -453,6 +454,7 @@ app.get('/health', async (_req, res) => {
         creativeAlert: creativeAlertInterval ? 'active' : 'inactive',
         weeklyReport: weeklyReportInterval ? 'active' : 'inactive',
         campaignAnalysis: campaignAnalysisInterval ? 'active' : 'inactive',
+        campaignReport: campaignReportInterval ? 'active' : 'inactive',
         alertCleanup: alertCleanupInterval ? 'active' : 'inactive'
       },
       cache: {
@@ -584,6 +586,10 @@ app.post('/api/emergency-stop', (req, res) => {
   if (campaignAnalysisInterval) {
     clearInterval(campaignAnalysisInterval);
     campaignAnalysisInterval = null;
+  }
+  if (campaignReportInterval) {
+    clearInterval(campaignReportInterval);
+    campaignReportInterval = null;
   }
   if (alertCleanupInterval) {
     clearInterval(alertCleanupInterval);
@@ -2879,12 +2885,48 @@ app.listen(ENV.PORT, () => {
       }, 2 * 60 * 1000); // Check every 2 minutes
     };
     
+    // Campaign Analysis Report every day at 16:00 UTC+1
+    const scheduleCampaignReport = () => {
+      console.log('📊 Starting campaign analysis reports...');
+      
+      // Check every 5 minutes for 16:00 UTC+1
+      campaignReportInterval = setInterval(async () => {
+        const now = new Date();
+        const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+        const hour = utcPlus1.getUTCHours();
+        const minute = utcPlus1.getUTCMinutes();
+        
+        // Check for 16:00 UTC+1 (with ±5 minutes tolerance)
+        if (hour === 16 && minute >= 0 && minute <= 5) {
+          const today = utcPlus1.toISOString().split('T')[0];
+          const alertKey = `campaign_report_${today}`;
+          
+          if (!sentAlerts.campaignAnalysis || !sentAlerts.campaignAnalysis.has(alertKey)) {
+            try {
+              console.log('📊 Running daily campaign analysis...');
+              const result = await campaignAnalyzer.sendDailyReport();
+              
+              if (result) {
+                sentAlerts.campaignAnalysis.add(alertKey);
+                console.log('✅ Campaign analysis completed');
+              } else {
+                console.log('ℹ️ No actionable recommendations found');
+              }
+            } catch (error) {
+              console.error('❌ Campaign analysis failed:', error.message);
+            }
+          }
+        }
+      }, 5 * 60 * 1000); // 5 minutes
+    };
+    
     // Start all alert scheduling
     scheduleGeoAlert();
     scheduleWeeklyReport();
     scheduleDailyStats();
     scheduleCreativeAlert();
     scheduleCampaignAnalysis();
+    scheduleCampaignReport();
     
     // Start automatic alert cleanup (every 24 hours)
     alertCleanupInterval = setInterval(cleanOldAlerts, 24 * 60 * 60 * 1000);
@@ -2900,6 +2942,7 @@ app.listen(ENV.PORT, () => {
     console.log('   ✅ Daily stats every morning at 7:00 UTC+1');
     console.log('   ✅ Creative alerts at 10:00 and 22:00 UTC+1');
     console.log('   ✅ Campaign analysis at 11:00 UTC+1');
+    console.log('   ✅ Campaign reports at 16:00 UTC+1');
     console.log('   ✅ Weekly reports every Monday at 9 AM UTC+1');
     console.log('   ✅ Automatic memory cleanup every 24 hours');
     console.log('   ✅ Works WITHOUT manual intervention');
@@ -2947,6 +2990,11 @@ async function gracefulShutdown(signal) {
     if (campaignAnalysisInterval) {
       clearInterval(campaignAnalysisInterval);
       logger.info('Stopped campaign analysis interval');
+    }
+    
+    if (campaignReportInterval) {
+      clearInterval(campaignReportInterval);
+      logger.info('Stopped campaign report interval');
     }
     
     if (alertCleanupInterval) {
