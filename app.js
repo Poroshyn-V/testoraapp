@@ -29,36 +29,94 @@ const sentAlerts = {
 
 // Retry logic for external APIs
 async function fetchWithRetry(fn, retries = 3, delay = 1000) {
+  const startTime = Date.now();
+  const operationName = fn.name || 'external API call';
+  
   for (let i = 0; i < retries; i++) {
     try {
-      return await fn();
+      const result = await fn();
+      const duration = Date.now() - startTime;
+      
+      if (i > 0) {
+        logger.info(`✅ ${operationName} succeeded after ${i} retries`, {
+          retries: i,
+          duration: `${duration}ms`,
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      return result;
     } catch (error) {
-      if (i === retries - 1) throw error;
-      logger.warn(`Retry ${i + 1}/${retries} after error:`, error.message);
-      await new Promise(resolve => setTimeout(resolve, delay * (i + 1)));
+      if (i === retries - 1) {
+        const duration = Date.now() - startTime;
+        logger.error(`❌ ${operationName} failed after ${retries} attempts`, {
+          error: error.message,
+          retries: retries,
+          duration: `${duration}ms`,
+          timestamp: new Date().toISOString()
+        });
+        throw error;
+      }
+      
+      const retryDelay = delay * (i + 1);
+      logger.warn(`Retry ${i + 1}/${retries} after error:`, {
+        operation: operationName,
+        error: error.message,
+        retryDelay: `${retryDelay}ms`,
+        timestamp: new Date().toISOString()
+      });
+      
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
     }
   }
 }
 
 // Load existing purchases from Google Sheets into memory
 async function loadExistingPurchases() {
+  const startTime = Date.now();
   try {
+    logger.info('🔄 Loading existing purchases...', {
+      timestamp: new Date().toISOString(),
+      startTime: startTime
+    });
+    
     await purchaseCache.reload();
+    
+    const duration = Date.now() - startTime;
+    logger.info('✅ Existing purchases loaded successfully', {
+      count: purchaseCache.size(),
+      duration: `${duration}ms`,
+      durationSeconds: Math.round(duration / 1000),
+      timestamp: new Date().toISOString()
+    });
   } catch (error) {
-    logger.error('❌ Ошибка загрузки существующих покупок:', error);
+    const duration = Date.now() - startTime;
+    logger.error('❌ Ошибка загрузки существующих покупок:', {
+      error: error.message,
+      duration: `${duration}ms`,
+      timestamp: new Date().toISOString()
+    });
   }
 }
 
 // Protected sync function to prevent overlapping synchronizations
 async function runSync() {
+  const startTime = Date.now();
+  
   if (isSyncing) {
-    logger.warn('⚠️ Sync already in progress, skipping this cycle...');
+    logger.warn('⚠️ Sync already in progress, skipping this cycle...', {
+      timestamp: new Date().toISOString(),
+      duration: `${Date.now() - startTime}ms`
+    });
     return { success: false, message: 'Sync already in progress' };
   }
   
   isSyncing = true;
   try {
-    logger.info('🔄 Starting protected sync...');
+    logger.info('🔄 Starting protected sync...', {
+      timestamp: new Date().toISOString(),
+      startTime: startTime
+    });
     
     // Call the actual sync endpoint logic
     const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
@@ -71,15 +129,31 @@ async function runSync() {
     }
     
     const result = await response.json();
-    logger.info('✅ Protected sync completed:', result);
+    const duration = Date.now() - startTime;
+    
+    logger.info('✅ Protected sync completed:', {
+      ...result,
+      duration: `${duration}ms`,
+      durationSeconds: Math.round(duration / 1000),
+      timestamp: new Date().toISOString()
+    });
     
     return result;
   } catch (error) {
-    logger.error('❌ Protected sync failed:', error);
+    const duration = Date.now() - startTime;
+    logger.error('❌ Protected sync failed:', {
+      error: error.message,
+      duration: `${duration}ms`,
+      timestamp: new Date().toISOString()
+    });
     return { success: false, message: 'Sync failed', error: error.message };
   } finally {
     isSyncing = false;
-    logger.info('🔓 Sync lock released');
+    const totalDuration = Date.now() - startTime;
+    logger.info('🔓 Sync lock released', {
+      totalDuration: `${totalDuration}ms`,
+      timestamp: new Date().toISOString()
+    });
   }
 }
 
@@ -335,8 +409,12 @@ app.get('/api/test', (req, res) => {
 
 // Full resync endpoint - fix all existing data
 app.post('/api/full-resync', async (req, res) => {
+  const startTime = Date.now();
   try {
-    logger.info('Starting full resync...');
+    logger.info('Starting full resync...', {
+      timestamp: new Date().toISOString(),
+      startTime: startTime
+    });
     
     // Get all existing rows
     const rows = await googleSheets.getAllRows();
@@ -417,11 +495,25 @@ app.post('/api/full-resync', async (req, res) => {
       }
     }
     
+    const duration = Date.now() - startTime;
+    logger.info('Full resync completed', {
+      processed_customers: processedCount,
+      fixed_duplicates: fixedCount,
+      duration: `${duration}ms`,
+      durationSeconds: Math.round(duration / 1000),
+      timestamp: new Date().toISOString(),
+      performance: {
+        customersPerSecond: processedCount > 0 ? Math.round(processedCount / (duration / 1000)) : 0,
+        avgTimePerCustomer: processedCount > 0 ? Math.round(duration / processedCount) : 0
+      }
+    });
+    
     res.json({
       success: true,
       message: `Full resync completed! Processed ${processedCount} customers, fixed ${fixedCount} duplicates`,
       processed_customers: processedCount,
-      fixed_duplicates: fixedCount
+      fixed_duplicates: fixedCount,
+      duration: `${duration}ms`
     });
     
   } catch (error) {
@@ -586,8 +678,12 @@ app.post('/api/test-notifications', async (req, res) => {
 
 // Sync payments endpoint - SIMPLIFIED AND RELIABLE
 app.post('/api/sync-payments', async (req, res) => {
+  const startTime = Date.now();
   try {
-    logger.info('Starting payment sync...');
+    logger.info('Starting payment sync...', { 
+      timestamp: new Date().toISOString(),
+      startTime: startTime
+    });
     
     // Get recent payments from Stripe
     const payments = await getRecentPayments(100);
@@ -806,10 +902,18 @@ app.post('/api/sync-payments', async (req, res) => {
       }
     }
     
+    const duration = Date.now() - startTime;
     logger.info('Sync completed', { 
       totalPayments: newPayments.length,
       processed: processedCount,
-      newPurchases: newPurchases
+      newPurchases: newPurchases,
+      duration: `${duration}ms`,
+      durationSeconds: Math.round(duration / 1000),
+      timestamp: new Date().toISOString(),
+      performance: {
+        paymentsPerSecond: newPayments.length > 0 ? Math.round(newPayments.length / (duration / 1000)) : 0,
+        avgTimePerPayment: newPayments.length > 0 ? Math.round(duration / newPayments.length) : 0
+      }
     });
     
     res.json({
