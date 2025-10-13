@@ -52,6 +52,7 @@ setInterval(() => {
 import { validateEmail, validateCustomerId, validatePaymentId, validateAmount } from './src/utils/validation.js';
 import { purchaseCache } from './src/services/purchaseCache.js';
 import { metrics } from './src/services/metrics.js';
+import { clearSheetsCache } from './src/utils/cache.js';
 
 const app = express();
 
@@ -837,8 +838,8 @@ app.post('/api/fix-duplicates', async (req, res) => {
   try {
     logger.info('🔧 Starting aggressive duplicate fix...');
     
-    // Clear Google Sheets cache first (if method exists)
-    // await googleSheets.clearCache(); // Method doesn't exist
+    // Clear Google Sheets cache first
+    clearSheetsCache();
     
     const rows = await googleSheets.getAllRows();
     const customerGroups = new Map();
@@ -918,8 +919,8 @@ app.post('/api/fix-duplicates', async (req, res) => {
       }
     }
     
-    // Clear cache again after all operations (if method exists)
-    // await googleSheets.clearCache(); // Method doesn't exist
+    // Clear cache again after all operations
+    clearSheetsCache();
     
     logger.info(`Fixed ${fixedCount} customers, deleted ${deletedCount} duplicate rows`);
     
