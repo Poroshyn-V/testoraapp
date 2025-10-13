@@ -364,6 +364,30 @@ class GoogleSheetsService {
         };
       }
       
+      // 🔍 ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Проверяем дубликаты по Payment Intent ID
+      const paymentIntentIds = data['Payment Intent IDs'];
+      if (paymentIntentIds) {
+        const paymentIds = paymentIntentIds.split(', ').map(id => id.trim());
+        
+        for (const paymentId of paymentIds) {
+          const existingByPaymentId = await this.findRows({ 'Payment Intent IDs': paymentId });
+          if (existingByPaymentId.length > 0) {
+            logInfo(`Payment Intent ID ${paymentId} already exists in row ${existingByPaymentId[0].rowNumber}`, {
+              paymentId,
+              existingRow: existingByPaymentId[0].rowNumber
+            });
+            
+            return {
+              success: false,
+              exists: true,
+              action: 'skipped',
+              row: existingByPaymentId[0],
+              reason: 'payment_intent_duplicate'
+            };
+          }
+        }
+      }
+      
       // Добавляем строку (всё ещё держим блокировку)
       logInfo(`Adding new row: ${uniqueField}=${uniqueValue}`);
       const newRow = await this.addRow(data);
