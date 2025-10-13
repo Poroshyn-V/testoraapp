@@ -14,6 +14,7 @@ import { alertConfig } from './src/config/alertConfig.js';
 import { alertCooldown } from './src/utils/alertCooldown.js';
 import { performanceMonitor } from './src/services/performanceMonitor.js';
 import { notificationQueue } from './src/services/notificationQueue.js';
+import { campaignAnalyzer } from './src/services/campaignAnalyzer.js';
 import { formatPaymentForSheets, formatTelegramNotification } from './src/utils/formatting.js';
 import { validateEmail, validateCustomerId, validatePaymentId, validateAmount } from './src/utils/validation.js';
 import { purchaseCache } from './src/services/purchaseCache.js';
@@ -53,6 +54,7 @@ let geoAlertInterval = null;
 let dailyStatsInterval = null;
 let creativeAlertInterval = null;
 let weeklyReportInterval = null;
+let campaignAnalysisInterval = null;
 let alertCleanupInterval = null;
 
 // Emergency stop flag
@@ -126,7 +128,9 @@ let isSyncing = false;
 const sentAlerts = {
   dailyStats: new Set(),
   creativeAlert: new Set(),
-  weeklyReport: new Set()
+  weeklyReport: new Set(),
+  geoAlert: new Set(),
+  campaignAnalysis: new Set()
 };
 
 // Clean old alert records to prevent memory leaks
@@ -176,10 +180,19 @@ function cleanOldAlerts() {
     )
   );
   
+  // Clean campaign analysis - keep only today and yesterday
+  const oldCampaignAnalysis = sentAlerts.campaignAnalysis.size;
+  sentAlerts.campaignAnalysis = new Set(
+    Array.from(sentAlerts.campaignAnalysis).filter(date => 
+      date >= yesterdayStr
+    )
+  );
+  
   const cleaned = {
     dailyStats: oldDailyStats - sentAlerts.dailyStats.size,
     creativeAlert: oldCreativeAlerts - sentAlerts.creativeAlert.size,
-    weeklyReport: oldWeeklyReports - sentAlerts.weeklyReport.size
+    weeklyReport: oldWeeklyReports - sentAlerts.weeklyReport.size,
+    campaignAnalysis: oldCampaignAnalysis - sentAlerts.campaignAnalysis.size
   };
   
   logger.info('✅ Alert records cleaned', {
@@ -401,7 +414,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/smart-alerts', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/fix-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/api/alerts/dashboard', '/api/alerts/cooldown-stats', '/api/performance-stats', '/api/status', '/api/emergency-stop', '/api/emergency-resume', '/api/notification-queue/stats', '/api/notification-queue/clear', '/api/notification-queue/pause', '/api/notification-queue/resume', '/auto-sync', '/ping', '/health']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/smart-alerts', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/fix-duplicates', '/api/campaign-analysis', '/api/campaign-analysis/report', '/api/campaign-analysis/send', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/api/alerts/dashboard', '/api/alerts/cooldown-stats', '/api/performance-stats', '/api/status', '/api/emergency-stop', '/api/emergency-resume', '/api/notification-queue/stats', '/api/notification-queue/clear', '/api/notification-queue/pause', '/api/notification-queue/resume', '/auto-sync', '/ping', '/health']
 }));
 
 // Health check
@@ -439,6 +452,7 @@ app.get('/health', async (_req, res) => {
         dailyStats: dailyStatsInterval ? 'active' : 'inactive',
         creativeAlert: creativeAlertInterval ? 'active' : 'inactive',
         weeklyReport: weeklyReportInterval ? 'active' : 'inactive',
+        campaignAnalysis: campaignAnalysisInterval ? 'active' : 'inactive',
         alertCleanup: alertCleanupInterval ? 'active' : 'inactive'
       },
       cache: {
@@ -566,6 +580,10 @@ app.post('/api/emergency-stop', (req, res) => {
   if (weeklyReportInterval) {
     clearInterval(weeklyReportInterval);
     weeklyReportInterval = null;
+  }
+  if (campaignAnalysisInterval) {
+    clearInterval(campaignAnalysisInterval);
+    campaignAnalysisInterval = null;
   }
   if (alertCleanupInterval) {
     clearInterval(alertCleanupInterval);
@@ -824,6 +842,115 @@ app.post('/api/fix-duplicates', async (req, res) => {
     
   } catch (error) {
     logger.error('Error fixing duplicates', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Campaign analysis endpoints
+app.get('/api/campaign-analysis', async (req, res) => {
+  try {
+    const timeframe = req.query.timeframe || 'today';
+    const analysis = await campaignAnalyzer.analyzeCampaigns(timeframe);
+    
+    if (!analysis) {
+      return res.json({
+        success: true,
+        message: 'No data available for campaign analysis',
+        timeframe
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: 'Campaign analysis completed',
+      ...analysis
+    });
+    
+  } catch (error) {
+    logger.error('Error in campaign analysis endpoint', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.get('/api/campaign-analysis/report', async (req, res) => {
+  try {
+    const timeframe = req.query.timeframe || 'today';
+    const analysis = await campaignAnalyzer.analyzeCampaigns(timeframe);
+    
+    if (!analysis) {
+      return res.json({
+        success: true,
+        message: 'No data available for campaign analysis',
+        timeframe
+      });
+    }
+    
+    const report = campaignAnalyzer.formatReport(analysis);
+    
+    res.json({
+      success: true,
+      message: 'Campaign analysis report generated',
+      timeframe,
+      report,
+      analysis
+    });
+    
+  } catch (error) {
+    logger.error('Error generating campaign analysis report', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.get('/api/campaign-analysis/send', async (req, res) => {
+  try {
+    const result = await campaignAnalyzer.sendDailyReport();
+    
+    if (!result) {
+      return res.json({
+        success: true,
+        message: 'No actionable recommendations found or cooldown active'
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: 'Campaign analysis report sent successfully',
+      analysis: result
+    });
+    
+  } catch (error) {
+    logger.error('Error sending campaign analysis report', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.get('/api/campaign-analysis/:campaignName', async (req, res) => {
+  try {
+    const { campaignName } = req.params;
+    const timeframe = req.query.timeframe || 'week';
+    
+    const analysis = await campaignAnalyzer.analyzeSingleCampaign(campaignName, timeframe);
+    
+    res.json({
+      success: true,
+      message: 'Single campaign analysis completed',
+      ...analysis
+    });
+    
+  } catch (error) {
+    logger.error('Error analyzing single campaign', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -2675,11 +2802,46 @@ app.listen(ENV.PORT, () => {
       }, 2 * 60 * 1000); // 2 minutes
     };
     
+    // Campaign Analysis at 11:00 UTC+1 (after creative alert)
+    const scheduleCampaignAnalysis = () => {
+      console.log('📊 Starting campaign analysis...');
+      
+      // Check every 2 minutes for 11:00 UTC+1
+      campaignAnalysisInterval = setInterval(async () => {
+        const now = new Date();
+        const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+        const hour = utcPlus1.getUTCHours();
+        const minute = utcPlus1.getUTCMinutes();
+        
+        // Check for 11:00 UTC+1 (with ±2 minutes tolerance)
+        if (hour === 11 && minute >= 0 && minute <= 2) {
+          const today = utcPlus1.toISOString().split('T')[0];
+          
+          if (!sentAlerts.campaignAnalysis || !sentAlerts.campaignAnalysis.has(today)) {
+            try {
+              console.log('📊 Running campaign analysis...');
+              const result = await campaignAnalyzer.sendDailyReport();
+              
+              if (result) {
+                sentAlerts.campaignAnalysis.add(today);
+                console.log('✅ Campaign analysis completed and sent');
+              } else {
+                console.log('ℹ️ No actionable recommendations found');
+              }
+            } catch (error) {
+              console.error('❌ Campaign analysis failed:', error.message);
+            }
+          }
+        }
+      }, 2 * 60 * 1000); // Check every 2 minutes
+    };
+    
     // Start all alert scheduling
     scheduleGeoAlert();
     scheduleWeeklyReport();
     scheduleDailyStats();
     scheduleCreativeAlert();
+    scheduleCampaignAnalysis();
     
     // Start automatic alert cleanup (every 24 hours)
     alertCleanupInterval = setInterval(cleanOldAlerts, 24 * 60 * 60 * 1000);
@@ -2694,6 +2856,7 @@ app.listen(ENV.PORT, () => {
     console.log('   ✅ GEO alerts every hour (scheduled only)');
     console.log('   ✅ Daily stats every morning at 7:00 UTC+1');
     console.log('   ✅ Creative alerts at 10:00 and 22:00 UTC+1');
+    console.log('   ✅ Campaign analysis at 11:00 UTC+1');
     console.log('   ✅ Weekly reports every Monday at 9 AM UTC+1');
     console.log('   ✅ Automatic memory cleanup every 24 hours');
     console.log('   ✅ Works WITHOUT manual intervention');
@@ -2736,6 +2899,11 @@ async function gracefulShutdown(signal) {
     if (weeklyReportInterval) {
       clearInterval(weeklyReportInterval);
       logger.info('Stopped weekly report interval');
+    }
+    
+    if (campaignAnalysisInterval) {
+      clearInterval(campaignAnalysisInterval);
+      logger.info('Stopped campaign analysis interval');
     }
     
     if (alertCleanupInterval) {
