@@ -138,7 +138,6 @@ class DuplicateChecker {
         }
         customerGroups.get(customerId).push({
           rowNumber: row.rowNumber,
-          row: row,
           email: row.get('Email'),
           totalAmount: row.get('Total Amount'),
           paymentCount: row.get('Payment Count'),
