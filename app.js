@@ -476,6 +476,10 @@ app.get('/', (_req, res) => res.json({
     '/api/duplicate-checker/refresh',
     '/api/duplicate-checker/customer/:customerId',
     '/api/duplicate-checker/payment-intent/:paymentIntentId',
+    '/api/duplicates/cache-stats',
+    '/api/duplicates/refresh-cache',
+    '/api/duplicates/find',
+    '/api/sync-locks',
     '/api/metrics',
     '/api/metrics/summary',
     '/api/metrics/reset',
@@ -1137,6 +1141,81 @@ app.get('/api/duplicate-checker/payment-intent/:paymentIntentId', (req, res) => 
       error: error.message
     });
   }
+});
+
+// Duplicate checker stats
+app.get('/api/duplicates/cache-stats', (req, res) => {
+  try {
+    const stats = duplicateChecker.getStats();
+    res.json({
+      success: true,
+      message: 'Duplicate checker cache statistics',
+      ...stats
+    });
+  } catch (error) {
+    logger.error('Error getting cache stats', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Refresh duplicate cache manually
+app.post('/api/duplicates/refresh-cache', async (req, res) => {
+  try {
+    const count = await duplicateChecker.refreshCache();
+    res.json({
+      success: true,
+      message: 'Duplicate checker cache refreshed',
+      customers: count
+    });
+  } catch (error) {
+    logger.error('Error refreshing cache', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Find all duplicates
+app.get('/api/duplicates/find', async (req, res) => {
+  try {
+    const result = await duplicateChecker.findAllDuplicates();
+    res.json({
+      success: true,
+      message: `Found ${result.duplicatesFound} customers with duplicates`,
+      ...result
+    });
+  } catch (error) {
+    logger.error('Error finding duplicates', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Sync locks monitoring
+app.get('/api/sync-locks', (req, res) => {
+  const now = Date.now();
+  const locks = [];
+  
+  for (const [customerId, timestamp] of syncLock.entries()) {
+    locks.push({
+      customerId,
+      lockedFor: `${Math.round((now - timestamp) / 1000)}s`,
+      lockedAt: new Date(timestamp).toISOString()
+    });
+  }
+  
+  res.json({
+    success: true,
+    message: 'Current sync locks',
+    activeLocks: locks.length,
+    locks: locks.sort((a, b) => b.timestamp - a.timestamp)
+  });
 });
 
 // Debug endpoint to check UTM Campaign data
