@@ -124,26 +124,29 @@ export class AnalyticsService {
           return `• ${dayName} (${day}): ${stats.sales} sales, $${stats.revenue.toFixed(2)}`;
         });
       
-      const reportData = {
-        weekStart: lastWeekStart,
-        weekEnd: lastWeekEnd,
-        totalRevenue: lastWeekRevenue,
-        totalSales: lastWeekPurchases.length,
-        revenueGrowth: parseFloat(revenueGrowth),
-        salesGrowth: parseFloat(salesGrowth),
-        topCountries,
-        topCreatives,
-        dailyBreakdown
-      };
+      // Формируем отчет (restored from old working version)
+      const weekStartStr = lastWeekStart.toISOString().split('T')[0];
+      const weekEndStr = lastWeekEnd.toISOString().split('T')[0];
       
-      const reportText = formatWeeklyReport(reportData);
+      const reportText = `📊 **Weekly Report - Past Week (${weekStartStr} - ${weekEndStr})**
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 **Total Revenue:** $${lastWeekRevenue.toFixed(2)}
+📈 **Revenue Growth:** ${revenueGrowth > 0 ? '+' : ''}${revenueGrowth}% vs week before
+🛒 **Total Sales:** ${lastWeekPurchases.length}
+📊 **Sales Growth:** ${salesGrowth > 0 ? '+' : ''}${salesGrowth}% vs week before
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🌍 **Top Countries (Past Week):**
+${topCountries.map(([country, count], i) => `${i + 1}. ${country}: ${count} sales`).join('\n')}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎨 **Top Creatives (Past Week):**
+${topCreatives.map(([creative, count], i) => `${i + 1}. ${creative}: ${count} sales`).join('\n')}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📅 **Daily Breakdown (Past Week):**
+${dailyBreakdown.join('\n')}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏰ **Report generated:** ${utcPlus1.toLocaleString('ru-RU', { timeZone: 'Europe/Berlin' })} UTC+1`;
       
-      logInfo('Weekly report generated successfully', {
-        totalRevenue: lastWeekRevenue,
-        totalSales: lastWeekPurchases.length,
-        topCountries: topCountries.length,
-        topCreatives: topCreatives.length
-      });
+      logInfo('📤 Отправляю еженедельный отчет:', { reportText });
       
       return reportText;
       
@@ -560,61 +563,78 @@ ${isSignificantDrop ? '🔍 Check your campaigns!' : '🎉 Great performance!'}`
     }
   }
   
-  // Generate creative alert
+  // Generate creative alert (restored from old working version)
   async generateCreativeAlert() {
     try {
-      logInfo('Generating creative alert...');
+      logInfo('🎨 Анализирую креативы за сегодня...');
       
       const rows = await googleSheets.getAllRows();
       
-      // Get today's date
+      // Получаем сегодняшнюю дату в UTC+1
       const today = new Date();
       const utcPlus1 = new Date(today.getTime() + 60 * 60 * 1000);
-      const todayStart = new Date(utcPlus1);
-      todayStart.setHours(0, 0, 0, 0);
+      const todayStr = utcPlus1.toISOString().split('T')[0]; // YYYY-MM-DD
       
-      const todayEnd = new Date(utcPlus1);
-      todayEnd.setHours(23, 59, 59, 999);
+      logInfo(`📅 Анализирую креативы за ${todayStr} (UTC+1)`);
       
-      // Filter today's purchases
+      // Фильтруем покупки за сегодня
       const todayPurchases = rows.filter(row => {
         const createdLocal = row.get('Created Local (UTC+1)') || '';
-        const purchaseDate = new Date(createdLocal);
-        return purchaseDate >= todayStart && purchaseDate <= todayEnd;
+        return createdLocal.includes(todayStr);
       });
       
+      logInfo(`📊 Найдено ${todayPurchases.length} покупок за сегодня`);
+      
       if (todayPurchases.length === 0) {
-        logInfo('No purchases found for today');
+        logInfo('📭 Нет покупок за сегодня - пропускаю креатив алерт');
         return null;
       }
       
-      // Analyze creative data
+      // Анализируем креативы (ad_name)
       const creativeStats = new Map();
       
       for (const purchase of todayPurchases) {
         const adName = purchase.get('Ad Name') || '';
-        if (adName) {
-          creativeStats.set(adName, (creativeStats.get(adName) || 0) + 1);
+        if (adName && adName.trim() !== '') {
+          if (creativeStats.has(adName)) {
+            creativeStats.set(adName, creativeStats.get(adName) + 1);
+          } else {
+            creativeStats.set(adName, 1);
+          }
         }
       }
       
-      // Top creatives
-      const topCreatives = Array.from(creativeStats.entries())
+      if (creativeStats.size === 0) {
+        logInfo('📭 Нет креативов за сегодня - пропускаю креатив алерт');
+        return null;
+      }
+      
+      // Сортируем по количеству покупок
+      const sortedCreatives = Array.from(creativeStats.entries())
         .sort((a, b) => b[1] - a[1])
-        .slice(0, 3);
+        .slice(0, 5);
       
-      const alertData = {
-        topCreatives,
-        totalSales: todayPurchases.length,
-        date: todayStart.toISOString().split('T')[0]
-      };
+      // Формируем ТОП-5 креативов
+      const top5 = [];
+      for (let i = 0; i < sortedCreatives.length; i++) {
+        const [creative, count] = sortedCreatives[i];
+        const rank = i + 1;
+        top5.push(`${rank}. ${creative} - ${count} purchases`);
+      }
       
-      const alertText = formatCreativeAlert(alertData);
-      
-      logInfo('Creative alert generated successfully', {
-        totalSales: todayPurchases.length,
-        topCreatives: topCreatives.length
+      // Получаем текущее время UTC+1
+      const now = new Date();
+      const utcPlus1Now = new Date(now.getTime() + 60 * 60 * 1000);
+      const timeStr = utcPlus1Now.toLocaleTimeString('ru-RU', { 
+        timeZone: 'Europe/Berlin',
+        hour: '2-digit',
+        minute: '2-digit'
       });
+      
+      // Формируем сообщение
+      const alertText = `🎨 **TOP-5 Creative Performance for today (${todayStr})**\n\n${top5.join('\n')}\n\n📈 Total purchases: ${todayPurchases.length}\n⏰ Report time: ${timeStr} UTC+1`;
+      
+      logInfo('📤 Отправляю креатив алерт:', { alertText });
       
       return alertText;
       
