@@ -25,12 +25,25 @@ const sentAlerts = {
   weeklyReport: new Set()
 };
 
+// Retry logic for external APIs
+async function fetchWithRetry(fn, retries = 3, delay = 1000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (i === retries - 1) throw error;
+      logger.warn(`Retry ${i + 1}/${retries} after error:`, error.message);
+      await new Promise(resolve => setTimeout(resolve, delay * (i + 1)));
+    }
+  }
+}
+
 // Load existing purchases from Google Sheets into memory
 async function loadExistingPurchases() {
   try {
     logger.info('🔄 Загружаю существующие покупки из Google Sheets...');
     
-    const rows = await googleSheets.getAllRows();
+    const rows = await fetchWithRetry(() => googleSheets.getAllRows());
     
     logger.info(`📋 Найдено ${rows.length} строк в Google Sheets`);
     
@@ -305,7 +318,7 @@ app.post('/api/full-resync', async (req, res) => {
     for (const [customerId, customerRows] of customerMap) {
       try {
         // Get all payments for this customer from Stripe
-        const allPayments = await getCustomerPayments(customerId);
+        const allPayments = await fetchWithRetry(() => getCustomerPayments(customerId));
         const allSuccessfulPayments = allPayments.filter(p => {
           if (p.status !== 'succeeded' || !p.customer) return false;
           if (p.description && p.description.toLowerCase().includes('subscription update')) {
@@ -331,7 +344,7 @@ app.post('/api/full-resync', async (req, res) => {
         if (customerRows.length > 1) {
           for (let i = 1; i < customerRows.length; i++) {
             try {
-              await customerRows[i].delete();
+              await fetchWithRetry(() => customerRows[i].delete());
               fixedCount++;
             } catch (error) {
               logger.warn(`Could not delete duplicate row:`, error.message);
@@ -340,18 +353,18 @@ app.post('/api/full-resync', async (req, res) => {
         }
         
         // Get fresh row data after deleting duplicates
-        const freshCustomers = await googleSheets.findRows({ 'Customer ID': customerId });
+        const freshCustomers = await fetchWithRetry(() => googleSheets.findRows({ 'Customer ID': customerId }));
         if (freshCustomers.length === 0) continue;
         
         const freshCustomer = freshCustomers[0];
         
         // Update with correct totals
-        await googleSheets.updateRow(freshCustomer, {
+        await fetchWithRetry(() => googleSheets.updateRow(freshCustomer, {
           'Purchase ID': `purchase_${customerId}`,
           'Total Amount': (totalAmountAll / 100).toFixed(2),
           'Payment Count': paymentCountAll.toString(),
           'Payment Intent IDs': paymentIdsAll.join(', ')
-        });
+        }));
         
         processedCount++;
         
@@ -408,7 +421,7 @@ app.post('/api/clean-duplicates', async (req, res) => {
         // Keep the first row, delete the rest
         for (let i = 1; i < customerRows.length; i++) {
           try {
-            await customerRows[i].delete();
+            await fetchWithRetry(() => customerRows[i].delete());
             duplicatesRemoved++;
           } catch (error) {
             logger.warn(`Could not delete row ${i} for customer ${customerId}:`, error.message);
@@ -499,7 +512,7 @@ app.post('/api/remove-test-data', async (req, res) => {
           email === 'test@example.com' ||
           customerId?.includes('test') ||
           email?.includes('test@')) {
-        await row.delete();
+        await fetchWithRetry(() => row.delete());
         removedCount++;
         logger.info(`Removed test row: ${customerId} - ${email}`);
       }
@@ -582,7 +595,7 @@ app.post('/api/sync-payments', async (req, res) => {
     const groupedPurchases = new Map();
     
     for (const payment of newPayments) {
-      const customer = await getCustomer(payment.customer);
+      const customer = await fetchWithRetry(() => getCustomer(payment.customer));
       const customerId = customer?.id;
       if (!customerId) continue;
       
@@ -633,14 +646,14 @@ app.post('/api/sync-payments', async (req, res) => {
       if (!customerId) continue;
       
       // Check if customer already exists in Google Sheets
-      const existingCustomers = await googleSheets.findRows({ 'Customer ID': customerId });
+      const existingCustomers = await fetchWithRetry(() => googleSheets.findRows({ 'Customer ID': customerId }));
       
       if (existingCustomers.length > 0) {
         // Customer exists - update existing record with new payments
         logger.info(`Updating existing customer ${customerId} with ${payments.length} new payments`);
         
         // Get all payments for this customer from Stripe
-        const allPayments = await getCustomerPayments(customerId);
+        const allPayments = await fetchWithRetry(() => getCustomerPayments(customerId));
         const allSuccessfulPayments = allPayments.filter(p => {
           if (p.status !== 'succeeded' || !p.customer) return false;
           if (p.description && p.description.toLowerCase().includes('subscription update')) {
@@ -663,14 +676,14 @@ app.post('/api/sync-payments', async (req, res) => {
         // Delete ALL duplicate rows first
         for (let i = 1; i < existingCustomers.length; i++) {
           try {
-            await existingCustomers[i].delete();
+            await fetchWithRetry(() => existingCustomers[i].delete());
           } catch (error) {
             logger.warn(`Could not delete duplicate row:`, error.message);
           }
         }
         
         // Get fresh row data after deleting duplicates
-        const freshCustomers = await googleSheets.findRows({ 'Customer ID': customerId });
+        const freshCustomers = await fetchWithRetry(() => googleSheets.findRows({ 'Customer ID': customerId }));
         if (freshCustomers.length === 0) {
           logger.warn('Customer row disappeared after cleanup, skipping update', { customerId });
           continue;
@@ -679,12 +692,12 @@ app.post('/api/sync-payments', async (req, res) => {
         const freshCustomer = freshCustomers[0];
         
         // Update existing row with fresh data
-        await googleSheets.updateRow(freshCustomer, {
+        await fetchWithRetry(() => googleSheets.updateRow(freshCustomer, {
           'Purchase ID': `purchase_${customerId}`,
           'Total Amount': (totalAmountAll / 100).toFixed(2),
           'Payment Count': paymentCountAll.toString(),
           'Payment Intent IDs': paymentIdsAll.join(', ')
-        });
+        }));
         
         // Send notification for upsell
         const currentPaymentCount = parseInt(freshCustomer.get('Payment Count') || '0');
@@ -732,7 +745,7 @@ app.post('/api/sync-payments', async (req, res) => {
         rowData['Payment Count'] = payments.length.toString();
         rowData['Payment Intent IDs'] = paymentIds.join(', ');
         
-        await googleSheets.addRow(rowData);
+        await fetchWithRetry(() => googleSheets.addRow(rowData));
         
         // Send notification for new customer with grouped data
         const sheetData = {
@@ -967,14 +980,14 @@ app.post('/api/fix-sheets-data', async (req, res) => {
       logger.info(`Checking customer: ${email} (${customerId})`);
       
       // Get customer data from Stripe
-      const customer = await getCustomer(customerId);
+      const customer = await fetchWithRetry(() => getCustomer(customerId));
       if (!customer) {
         logger.warn(`Customer not found in Stripe: ${customerId}`);
         continue;
       }
       
       // Get customer's payments to find metadata
-      const payments = await getCustomerPayments(customerId);
+      const payments = await fetchWithRetry(() => getCustomerPayments(customerId));
       const successfulPayments = payments.filter(p => p.status === 'succeeded');
       
       if (successfulPayments.length === 0) {
@@ -1012,12 +1025,12 @@ app.post('/api/fix-sheets-data', async (req, res) => {
           creativeLink: `${currentCreativeLink} → ${newCreativeLink}`
         });
         
-        await googleSheets.updateRow(row, {
+        await fetchWithRetry(() => googleSheets.updateRow(row, {
           'Ad Name': newAdName,
           'Adset Name': newAdsetName,
           'Campaign Name': newCampaignName,
           'Creative Link': newCreativeLink
-        });
+        }));
         
         fixedCount++;
       }
@@ -1054,7 +1067,7 @@ app.get('/api/debug-customer/:customerId', async (req, res) => {
     const payments = await getCustomerPayments(customerId);
     
     // Get customer from Google Sheets
-    const sheetRows = await googleSheets.findRows({ 'Customer ID': customerId });
+    const sheetRows = await fetchWithRetry(() => googleSheets.findRows({ 'Customer ID': customerId }));
     
     res.json({
       success: true,
