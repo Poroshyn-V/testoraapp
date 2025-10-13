@@ -2034,8 +2034,7 @@ app.post('/api/test-batch-operations', async (req, res) => {
   }
 });
 
-// Sync payments endpoint - SIMPLIFIED AND RELIABLE
-// Обновленный sync-payments endpoint
+// Sync payments endpoint - MAXIMUM DUPLICATE PROTECTION
 app.post('/api/sync-payments', async (req, res) => {
   const startTime = Date.now();
   const results = {
@@ -2045,213 +2044,306 @@ app.post('/api/sync-payments', async (req, res) => {
     newPurchases: 0,
     updatedPurchases: 0,
     skipped: 0,
-    duplicatesAvoided: 0
+    duplicatesAvoided: 0,
+    lockWaitTime: 0
   };
   
   try {
-    logger.info('Starting payment sync...', { 
-      timestamp: new Date().toISOString(),
-      startTime: startTime
+    logger.info('🔄 Starting payment sync with MAXIMUM duplicate protection...', { 
+      timestamp: new Date().toISOString()
     });
     
-    // 🔄 КРИТИЧЕСКИ ВАЖНО: Обновляем кэш дубликатов перед sync
-    if (duplicateChecker.isCacheStale()) {
-      await duplicateChecker.refreshCache();
-    }
+    // 🔒 ГЛОБАЛЬНАЯ БЛОКИРОВКА SYNC (только один sync за раз)
+    const syncLockId = await distributedLock.acquire('global_sync', 100, 200);
     
-    // Get recent payments from Stripe
-    const payments = await fetchWithRetry(() => getRecentPayments(100));
+    try {
+      // 🔄 КРИТИЧЕСКИ ВАЖНО: Обновляем ВСЕ кэши ПЕРЕД началом
+      logger.info('📦 Refreshing ALL caches before sync...');
+      await Promise.all([
+        duplicateChecker.refreshCache(),
+        purchaseCache.reload()
+      ]);
     
-    // Filter successful payments
-    const successfulPayments = payments.filter(p => {
-      if (p.status !== 'succeeded' || !p.customer) return false;
-      if (p.description && p.description.toLowerCase().includes('subscription update')) {
-        return false;
-      }
-      return true;
-    });
-    
-    // 🔄 ОБНОВЛЯЕМ кэш дубликатов прямо перед фильтрацией для максимальной точности
-    await duplicateChecker.refreshCache();
-    
-    // 🔍 Фильтруем платежи используя ОСНОВНУЮ систему purchaseCache
-    const newPayments = successfulPayments.filter(p => {
-      // Проверяем в основной системе purchaseCache
-      if (purchaseCache.has(p.id)) {
-        logger.info(`Payment Intent ${p.id} already processed (purchaseCache)`, {
-          paymentId: p.id,
-          reason: 'already_in_purchase_cache'
-        });
-        results.duplicatesAvoided++;
-        return false;
-      }
+      // Get recent payments from Stripe
+      const payments = await fetchWithRetry(() => getRecentPayments(100));
       
-      // Дополнительная проверка в duplicateChecker
-      const check = duplicateChecker.paymentIntentExists(p.id);
-      if (check.exists) {
-        logger.info(`Payment Intent ${p.id} already processed (duplicateChecker)`, {
-          paymentId: p.id,
-          customerId: check.customerId,
-          reason: 'already_in_duplicate_checker'
-        });
-        results.duplicatesAvoided++;
-        return false;
-      }
-      
-      return true;
-    });
-    
-    logger.info('Payment filtering', { 
-      total: successfulPayments.length, 
-      alreadyProcessed: successfulPayments.length - newPayments.length,
-      new: newPayments.length 
-    });
-    
-    if (newPayments.length === 0) {
-      return res.json({
-        success: true,
-        message: 'No new payments to process',
-        total_payments: successfulPayments.length,
-        processed: 0,
-        new_purchases: 0
+      // Filter successful payments
+      const successfulPayments = payments.filter(p => {
+        if (p.status !== 'succeeded' || !p.customer) return false;
+        if (p.description && p.description.toLowerCase().includes('subscription update')) {
+          return false;
+        }
+        return true;
       });
-    }
-    
-    // GROUP PAYMENTS BY CUSTOMER WITH TIME WINDOW (restored from old working version)
-    const groupedPurchases = new Map();
-    
-    for (const payment of newPayments) {
-      // 🔍 ДОПОЛНИТЕЛЬНАЯ проверка дубликатов прямо в цикле
-      if (purchaseCache.has(payment.id)) {
-        logger.warn(`DUPLICATE DETECTED in processing loop (purchaseCache): ${payment.id}`, {
-          paymentId: payment.id,
-          reason: 'duplicate_in_processing_loop_purchaseCache'
-        });
-        results.duplicatesAvoided++;
-        continue; // Пропускаем этот платеж
-      }
       
-      const duplicateCheck = duplicateChecker.paymentIntentExists(payment.id);
-      if (duplicateCheck.exists) {
-        logger.warn(`DUPLICATE DETECTED in processing loop (duplicateChecker): ${payment.id}`, {
-          paymentId: payment.id,
-          customerId: duplicateCheck.customerId,
-          reason: 'duplicate_in_processing_loop_duplicateChecker'
-        });
-        results.duplicatesAvoided++;
-        continue; // Пропускаем этот платеж
-      }
+      // 🔍 ТРОЙНАЯ фильтрация дубликатов
+      const newPayments = [];
       
-      const customer = await fetchWithRetry(() => getCustomer(payment.customer));
-      const customerId = customer?.id;
-      if (!customerId) continue;
-      
-      // 🔒 Получаем блокировку для этого клиента
-      let customerLockId = null;
-      try {
-        customerLockId = await distributedLock.acquire(`customer_${customerId}`, 5, 100);
-        logger.debug(`🔒 Customer lock acquired for ${customerId}`, { customerLockId });
-      } catch (error) {
-        logger.warn(`⚠️ Failed to acquire customer lock for ${customerId}, skipping payment ${payment.id}`, {
-          error: error.message,
-          customerId,
-          paymentId: payment.id
-        });
-        results.duplicatesAvoided++;
-        continue;
-      }
-      
-      try {
-        // Ищем существующую группу для этого клиента в течение 3 часов
-      let foundGroup = null;
-      const threeHoursInSeconds = 3 * 60 * 60; // 3 часа в секундах
-      
-      for (const [key, group] of groupedPurchases.entries()) {
-        if (key.startsWith(customerId + '_')) {
-          const timeDiff = Math.abs(payment.created - group.firstPayment.created);
-          if (timeDiff <= threeHoursInSeconds) {
-            foundGroup = group;
-            break;
-          }
+      for (const payment of successfulPayments) {
+        // Проверка 1: purchaseCache
+        if (purchaseCache.has(payment.id)) {
+          results.duplicatesAvoided++;
+          continue;
         }
-      }
-      
-      if (foundGroup) {
-        // Добавляем к существующей группе
-        foundGroup.payments.push(payment);
-        foundGroup.totalAmount += payment.amount;
-        logger.info(`Added upsell to group: ${payment.id} - $${(payment.amount / 100).toFixed(2)}`);
-      } else {
-        // Создаем новую группу
-        const groupKey = `${customerId}_${payment.created}`;
-        groupedPurchases.set(groupKey, {
-          customer,
-          payments: [payment],
-          totalAmount: payment.amount,
-          firstPayment: payment
-        });
-        logger.info(`Created new group: ${payment.id} - $${(payment.amount / 100).toFixed(2)}`);
-      }
-      } finally {
-        // 🔓 Освобождаем блокировку клиента
-        if (customerLockId) {
-          distributedLock.release(`customer_${customerId}`, customerLockId);
-          logger.debug(`🔓 Customer lock released for ${customerId}`, { customerLockId });
+        
+        // Проверка 2: duplicateChecker
+        const check = duplicateChecker.paymentIntentExists(payment.id);
+        if (check.exists) {
+          results.duplicatesAvoided++;
+          continue;
         }
-      }
-    }
-    
-    logger.info(`Grouped ${newPayments.length} payments into ${groupedPurchases.size} customer groups`);
-    
-    // Process each customer group
-    for (const [dateKey, group] of groupedPurchases) {
-      const customer = group.customer;
-      const payments = group.payments;
-      const firstPayment = group.firstPayment;
-      const customerId = customer?.id;
-      
-      if (!customerId) {
-        results.skipped++;
-        continue;
-      }
-      
-      // 🔒 Acquire customer lock
-      if (!acquireCustomerLock(customerId)) {
-        results.skipped++;
-        logger.warn('Customer already being processed, skipping', { customerId });
-        continue;
-      }
-      
-      try {
-      
-        // 🔍 ПЕРВАЯ ПРОВЕРКА: Используем кэш
-        const existsInCache = duplicateChecker.customerExists(customerId);
         
-        // 🔍 ВТОРАЯ ПРОВЕРКА: Проверяем Google Sheets (на случай если кэш устарел)
-        const existingCustomers = await fetchWithRetry(() => 
-          googleSheets.findRows({ 'Customer ID': customerId })
-        );
+        // Проверка 3: Прямая проверка в Google Sheets
+        const directCheck = await googleSheets.getAllRows();
+        const foundInSheets = directCheck.some(row => {
+          const paymentIds = row.get('Payment Intent IDs') || '';
+          return paymentIds.includes(payment.id);
+        });
         
-        if (existingCustomers.length > 1) {
-          // Если нашли дубликаты - это проблема, логируем
-          logger.error('⚠️ DUPLICATE DETECTED during sync!', {
-            customerId,
-            duplicateCount: existingCustomers.length,
-            action: 'Will update first row and delete others'
-          });
-          
+        if (foundInSheets) {
+          logger.warn(`🔍 Payment ${payment.id} found in Google Sheets but not in cache - updating caches`);
           results.duplicatesAvoided++;
           
-          // Удаляем дубликаты немедленно
-          for (let i = 1; i < existingCustomers.length; i++) {
-            try {
-              await fetchWithRetry(() => existingCustomers[i].delete());
-              logger.info(`Deleted duplicate row for customer ${customerId}`);
-            } catch (error) {
-              logger.warn(`Could not delete duplicate:`, error.message);
+          // Добавляем в кэши
+          purchaseCache.add(payment.id);
+          await duplicateChecker.refreshCache();
+          
+          continue;
+        }
+        
+        // Всё проверено - это действительно новый платёж
+        newPayments.push(payment);
+      }
+    
+      logger.info('Payment filtering complete', { 
+        total: successfulPayments.length,
+        duplicatesAvoided: results.duplicatesAvoided,
+        new: newPayments.length 
+      });
+      
+      if (newPayments.length === 0) {
+        return res.json({
+          success: true,
+          message: 'No new payments to process',
+          total_payments: successfulPayments.length,
+          processed: 0,
+          duplicatesAvoided: results.duplicatesAvoided
+        });
+      }
+    
+      // GROUP PAYMENTS BY CUSTOMER
+      const groupedPurchases = new Map();
+      
+      for (const payment of newPayments) {
+        const customer = await fetchWithRetry(() => getCustomer(payment.customer));
+        const customerId = customer?.id;
+        if (!customerId) continue;
+        
+        let foundGroup = null;
+        const threeHoursInSeconds = 3 * 60 * 60;
+        
+        for (const [key, group] of groupedPurchases.entries()) {
+          if (key.startsWith(customerId + '_')) {
+            const timeDiff = Math.abs(payment.created - group.firstPayment.created);
+            if (timeDiff <= threeHoursInSeconds) {
+              foundGroup = group;
+              break;
             }
           }
         }
+        
+        if (foundGroup) {
+          foundGroup.payments.push(payment);
+          foundGroup.totalAmount += payment.amount;
+        } else {
+          const groupKey = `${customerId}_${payment.created}`;
+          groupedPurchases.set(groupKey, {
+            customer,
+            payments: [payment],
+            totalAmount: payment.amount,
+            firstPayment: payment
+          });
+        }
+      }
+    
+      logger.info(`Grouped ${newPayments.length} payments into ${groupedPurchases.size} customer groups`);
+      
+      // Process each customer group
+      for (const [dateKey, group] of groupedPurchases) {
+        const customer = group.customer;
+        const payments = group.payments;
+        const firstPayment = group.firstPayment;
+        const customerId = customer?.id;
+        
+        if (!customerId) {
+          results.skipped++;
+          continue;
+        }
+        
+        // 🔒 CUSTOMER-LEVEL LOCK (один customer обрабатывается только один раз)
+        const customerLockKey = `customer_${customerId}`;
+        let customerLockId = null;
+        
+        try {
+          const lockStartTime = Date.now();
+          customerLockId = await distributedLock.acquire(customerLockKey);
+          results.lockWaitTime += Date.now() - lockStartTime;
+          
+          // 🔄 Обновляем кэши для этого конкретного customer
+          await duplicateChecker.refreshCache();
+          
+          // 🔍 ФИНАЛЬНАЯ проверка существования (внутри блокировки)
+          const existingCustomers = await fetchWithRetry(() => 
+            googleSheets.findRows({ 'Customer ID': customerId })
+          );
+          
+          // Если дубликаты всё же появились - удаляем немедленно
+          if (existingCustomers.length > 1) {
+            logger.error(`⚠️ CRITICAL: Found ${existingCustomers.length} duplicates during locked processing!`, {
+              customerId,
+              action: 'emergency_cleanup'
+            });
+            
+            results.duplicatesAvoided++;
+            
+            // Экстренная очистка
+            for (let i = 1; i < existingCustomers.length; i++) {
+              try {
+                await fetchWithRetry(() => existingCustomers[i].delete());
+                await new Promise(resolve => setTimeout(resolve, 100));
+              } catch (error) {
+                logger.error(`Could not delete duplicate:`, error.message);
+              }
+            }
+          }
+      
+          if (existingCustomers.length > 0) {
+            // UPDATE existing customer
+            logger.info(`Updating existing customer ${customerId} (with lock)`);
+            
+            const allPayments = await fetchWithRetry(() => getCustomerPayments(customerId));
+            const allSuccessfulPayments = allPayments.filter(p => {
+              if (p.status !== 'succeeded' || !p.customer) return false;
+              if (p.description && p.description.toLowerCase().includes('subscription update')) {
+                return false;
+              }
+              return true;
+            });
+            
+            let totalAmountAll = 0;
+            let paymentCountAll = 0;
+            const paymentIdsAll = [];
+            
+            for (const p of allSuccessfulPayments) {
+              totalAmountAll += p.amount;
+              paymentCountAll++;
+              paymentIdsAll.push(p.id);
+            }
+            
+            await fetchWithRetry(() => 
+              googleSheets.updateRow(existingCustomers[0], {
+                'Purchase ID': `purchase_${customerId}`,
+                'Total Amount': (totalAmountAll / 100).toFixed(2),
+                'Payment Count': paymentCountAll.toString(),
+                'Payment Intent IDs': paymentIdsAll.join(', ')
+              })
+            );
+            
+            // ✅ Обновляем ОБЕ системы кэширования СРАЗУ после изменения
+            for (const paymentId of paymentIdsAll) {
+              purchaseCache.add(paymentId);
+            }
+            duplicateChecker.updateCache(customerId, {
+              purchaseId: `purchase_${customerId}`,
+              paymentIntentIds: paymentIdsAll,
+              totalAmount: (totalAmountAll / 100).toFixed(2),
+              paymentCount: paymentCountAll.toString()
+            });
+            
+            // Send notification
+            const sheetData = {
+              'Ad Name': existingCustomers[0].get('Ad Name') || 'N/A',
+              'Adset Name': existingCustomers[0].get('Adset Name') || 'N/A',
+              'Campaign Name': existingCustomers[0].get('Campaign Name') || 'N/A',
+              'Creative Link': existingCustomers[0].get('Creative Link') || 'N/A',
+              'Total Amount': (totalAmountAll / 100).toFixed(2),
+              'Payment Count': paymentCountAll.toString(),
+              'Payment Intent IDs': paymentIdsAll.join(', ')
+            };
+            
+            const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
+            await sendPurchaseNotification(latestPayment, customer, sheetData, 'upsell');
+            
+            results.updatedPurchases++;
+            results.processed++;
+            
+          } else {
+            // ADD NEW customer (используем атомарную операцию)
+            logger.info(`Adding new customer ${customerId} (with lock and atomic operation)`);
+            
+            const rowData = formatPaymentForSheets(firstPayment, customer);
+            
+            let totalAmount = 0;
+            const paymentIds = [];
+            for (const p of payments) {
+              totalAmount += p.amount;
+              paymentIds.push(p.id);
+            }
+            
+            rowData['Purchase ID'] = `purchase_${customerId}_${firstPayment.created}`;
+            rowData['Total Amount'] = (totalAmount / 100).toFixed(2);
+            rowData['Payment Count'] = payments.length.toString();
+            rowData['Payment Intent IDs'] = paymentIds.join(', ');
+            
+            // 🔒 АТОМАРНОЕ добавление с внутренней блокировкой
+            const addResult = await googleSheets.addRowIfNotExists(rowData, 'Customer ID');
+            
+            if (addResult.exists) {
+              // Кто-то добавил строку между нашими проверками!
+              logger.warn(`⚠️ Row appeared during atomic add for ${customerId} - converting to update`);
+              results.duplicatesAvoided++;
+              
+              // Обновляем существующую строку
+              await fetchWithRetry(() => 
+                googleSheets.updateRow(addResult.row, {
+                  'Total Amount': rowData['Total Amount'],
+                  'Payment Count': rowData['Payment Count'],
+                  'Payment Intent IDs': rowData['Payment Intent IDs']
+                })
+              );
+              
+              results.updatedPurchases++;
+            } else {
+              // Успешно добавили
+              results.newPurchases++;
+            }
+            
+            // ✅ Обновляем ОБЕ системы кэширования СРАЗУ
+            for (const paymentId of paymentIds) {
+              purchaseCache.add(paymentId);
+            }
+            duplicateChecker.addToCache(customerId, {
+              purchaseId: rowData['Purchase ID'],
+              paymentIntentIds: paymentIds,
+              totalAmount: rowData['Total Amount'],
+              paymentCount: rowData['Payment Count']
+            });
+            
+            // Send notification
+            const sheetData = {
+              'Ad Name': rowData['Ad Name'] || 'N/A',
+              'Adset Name': rowData['Adset Name'] || 'N/A',
+              'Campaign Name': rowData['Campaign Name'] || 'N/A',
+              'Creative Link': rowData['Creative Link'] || 'N/A',
+              'Total Amount': rowData['Total Amount'],
+              'Payment Count': rowData['Payment Count'],
+              'Payment Intent IDs': rowData['Payment Intent IDs']
+            };
+            
+            await sendPurchaseNotification(firstPayment, customer, sheetData, 'new_purchase');
+            
+            results.processed++;
+          }
         
         if (existingCustomers.length > 0) {
           // Customer exists - UPDATE
@@ -2460,46 +2552,48 @@ app.post('/api/sync-payments', async (req, res) => {
           error: error.message,
           stack: error.stack
         });
-      } finally {
-        // 🔓 ВСЕГДА освобождаем lock
-        releaseCustomerLock(customerId);
+        } finally {
+          // 🔓 Освобождаем customer lock
+          if (customerLockId) {
+            distributedLock.release(customerLockKey, customerLockId);
+          }
+        }
       }
+      
+      // 🔄 ФИНАЛЬНОЕ обновление кэшей после всех операций
+      await Promise.all([
+        duplicateChecker.refreshCache(),
+        purchaseCache.reload()
+      ]);
+      
+    } finally {
+      // 🔓 Освобождаем глобальный sync lock
+      distributedLock.release('global_sync', syncLockId);
     }
     
     const duration = Date.now() - startTime;
     
-    // Если были предотвращены дубликаты, отправляем уведомление
+    // Отправляем уведомление если были дубликаты
     if (results.duplicatesAvoided > 0) {
-      const duplicateAlert = `⚠️ DUPLICATES AVOIDED
+      const alert = `⚠️ DUPLICATES AVOIDED
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🛡️ Prevented: ${results.duplicatesAvoided} duplicates
 ✅ During sync at: ${new Date().toLocaleTimeString()}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-System prevented duplicate entries`;
+⏱️ Lock wait time: ${results.lockWaitTime}ms
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
       
-      await sendTextNotifications(duplicateAlert);
+      await sendTextNotifications(alert);
     }
     
-    logger.info('Sync completed', { 
+    logger.info('✅ Sync completed with maximum protection', { 
       ...results,
-      totalPayments: newPayments.length,
-      totalGroups: groupedPurchases.size,
-      duration: `${duration}ms`,
-      durationSeconds: Math.round(duration / 1000),
-      timestamp: new Date().toISOString(),
-      performance: {
-        paymentsPerSecond: newPayments.length > 0 ? Math.round(newPayments.length / (duration / 1000)) : 0,
-        avgTimePerPayment: newPayments.length > 0 ? Math.round(duration / newPayments.length) : 0,
-        successRate: results.processed > 0 ? Math.round((results.processed / (results.processed + results.failed)) * 100) : 0
-      }
+      duration: `${duration}ms`
     });
     
     res.json({
       success: true,
-      message: `Sync completed! Processed ${results.processed} (${results.newPurchases} new, ${results.updatedPurchases} updated), avoided ${results.duplicatesAvoided} duplicates`,
+      message: `Sync completed! Processed ${results.processed}, avoided ${results.duplicatesAvoided} duplicates`,
       ...results,
-      total_payments: newPayments.length,
-      total_groups: groupedPurchases.size,
       duration: `${duration}ms`
     });
     
