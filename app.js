@@ -96,6 +96,17 @@ let emergencyStop = false;
 
 // Helper function for sending purchase notifications with metrics
 async function sendPurchaseNotification(payment, customer, sheetData, type) {
+  // 🔍 Проверяем, не является ли это дубликатом перед отправкой уведомления
+  const paymentCheck = duplicateChecker.paymentIntentExists(payment.id);
+  if (paymentCheck.exists) {
+    logger.info(`Skipping notification for duplicate payment ${payment.id}`, {
+      paymentId: payment.id,
+      customerId: customer.id,
+      reason: 'duplicate_detected'
+    });
+    return; // Не отправляем уведомление для дубликата
+  }
+  
   const amount = parseFloat(sheetData['Total Amount'] || 0);
   
   // VIP purchase alert
@@ -2171,7 +2182,17 @@ app.post('/api/sync-payments', async (req, res) => {
           };
           
           const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
-          await sendPurchaseNotification(latestPayment, customer, sheetData, 'upsell');
+          
+          // 🔍 Дополнительная проверка: отправляем уведомление только если это действительно новый платеж
+          const isNewPayment = !duplicateChecker.paymentIntentExists(latestPayment.id).exists;
+          if (isNewPayment) {
+            await sendPurchaseNotification(latestPayment, customer, sheetData, 'upsell');
+          } else {
+            logger.info(`Skipping upsell notification for already processed payment ${latestPayment.id}`, {
+              paymentId: latestPayment.id,
+              customerId: customer.id
+            });
+          }
         
         // Increment counters for updated customer
         results.updatedPurchases++;
@@ -2265,7 +2286,16 @@ app.post('/api/sync-payments', async (req, res) => {
             'Payment Intent IDs': paymentIds.join(', ')
           };
           
-          await sendPurchaseNotification(firstPayment, customer, sheetData, 'new_purchase');
+          // 🔍 Дополнительная проверка: отправляем уведомление только если это действительно новый платеж
+          const isNewPayment = !duplicateChecker.paymentIntentExists(firstPayment.id).exists;
+          if (isNewPayment) {
+            await sendPurchaseNotification(firstPayment, customer, sheetData, 'new_purchase');
+          } else {
+            logger.info(`Skipping new purchase notification for already processed payment ${firstPayment.id}`, {
+              paymentId: firstPayment.id,
+              customerId: customer.id
+            });
+          }
           
           results.newPurchases++;
           results.processed++;
