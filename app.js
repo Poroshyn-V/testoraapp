@@ -11,12 +11,11 @@ import googleSheets from './src/services/googleSheets.js';
 import { analytics } from './src/services/analytics.js';
 import { formatPaymentForSheets, formatTelegramNotification } from './src/utils/formatting.js';
 import { validateEmail, validateCustomerId, validatePaymentId, validateAmount } from './src/utils/validation.js';
+import { purchaseCache } from './src/services/purchaseCache.js';
 
 const app = express();
 
-// Simple storage for existing purchases
-const existingPurchases = new Set();
-const processedPurchaseIds = new Set();
+// Purchase cache is now managed by purchaseCache service
 
 // Alert tracking to prevent duplicate sends
 const sentAlerts = {
@@ -41,30 +40,7 @@ async function fetchWithRetry(fn, retries = 3, delay = 1000) {
 // Load existing purchases from Google Sheets into memory
 async function loadExistingPurchases() {
   try {
-    logger.info('🔄 Загружаю существующие покупки из Google Sheets...');
-    
-    const rows = await fetchWithRetry(() => googleSheets.getAllRows());
-    
-    logger.info(`📋 Найдено ${rows.length} строк в Google Sheets`);
-    
-    // Очищаем старое хранилище
-    existingPurchases.clear();
-    
-    // Загружаем все существующие Purchase ID
-    for (const row of rows) {
-      const purchaseId = row.get('Purchase ID') || row.get('purchase_id') || '';
-      if (purchaseId) {
-        existingPurchases.add(purchaseId);
-      } else {
-        logger.warn('⚠️ Пустой Purchase ID в строке:', { rowData: row._rawData });
-      }
-    }
-    
-    logger.info(`✅ Загружено ${existingPurchases.size} существующих покупок в память`);
-    logger.info('📝 Примеры покупок:', { 
-      sample: Array.from(existingPurchases).slice(0, 5) 
-    });
-    
+    await purchaseCache.reload();
   } catch (error) {
     logger.error('❌ Ошибка загрузки существующих покупок:', error);
   }
@@ -79,7 +55,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/load-existing', '/api/check-duplicates', '/auto-sync', '/ping', '/health']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/cache-stats', '/api/load-existing', '/api/check-duplicates', '/auto-sync', '/ping', '/health']
 }));
 
 // Health check
@@ -106,8 +82,8 @@ app.get('/health', async (_req, res) => {
       },
       rateLimit: getRateLimitStats(),
       memory: {
-        existingPurchases: existingPurchases.size,
-        processedPurchases: processedPurchaseIds.size
+        existingPurchases: purchaseCache.size(),
+        processedPurchases: purchaseCache.processedPurchaseIds.size
       }
     };
     
@@ -127,9 +103,9 @@ app.get('/api/load-existing', async (req, res) => {
     await loadExistingPurchases();
     res.json({
       success: true,
-      message: `Loaded ${existingPurchases.size} existing purchases`,
-      count: existingPurchases.size,
-      purchases: Array.from(existingPurchases).slice(0, 10) // Показываем первые 10
+      message: `Loaded ${purchaseCache.size()} existing purchases`,
+      count: purchaseCache.size(),
+      purchases: purchaseCache.getSample(10) // Показываем первые 10
     });
   } catch (error) {
     logger.error('Error loading existing purchases', error);
@@ -200,12 +176,30 @@ app.get('/api/check-duplicates', async (req, res) => {
 app.get('/api/memory-status', (req, res) => {
   res.json({
     success: true,
-    message: `Memory contains ${existingPurchases.size} purchases`,
-    count: existingPurchases.size,
-    purchases: Array.from(existingPurchases).slice(0, 20),
+    message: `Memory contains ${purchaseCache.size()} purchases`,
+    count: purchaseCache.size(),
+    purchases: purchaseCache.getSample(20),
     auto_sync_disabled: ENV.AUTO_SYNC_DISABLED,
     notifications_disabled: ENV.NOTIFICATIONS_DISABLED
   });
+});
+
+// Purchase cache statistics endpoint
+app.get('/api/cache-stats', (req, res) => {
+  try {
+    const stats = purchaseCache.getStats();
+    res.json({
+      success: true,
+      message: 'Purchase cache statistics',
+      ...stats
+    });
+  } catch (error) {
+    logger.error('Error getting cache stats', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
 });
 
 // Metrics endpoint
@@ -228,7 +222,7 @@ app.get('/api/metrics', (req, res) => {
     cache: {
       ...getCacheStats(),
       rateLimitConnections: getRateLimitStats().activeConnections,
-      existingPurchases: existingPurchases.size,
+      existingPurchases: purchaseCache.size(),
       processedPurchases: processedPurchaseIds.size
     },
     performance: {
@@ -1183,7 +1177,7 @@ app.listen(ENV.PORT, () => {
     try {
       console.log('📋 Loading existing purchases...');
       await loadExistingPurchases();
-      console.log(`✅ Loaded ${existingPurchases.size} existing purchases into memory`);
+      console.log(`✅ Loaded ${purchaseCache.size()} existing purchases into memory`);
     } catch (error) {
       console.error('❌ Failed to load existing purchases:', error.message);
     }
