@@ -2618,18 +2618,6 @@ app.post('/api/sync-payments', async (req, res) => {
     
     const duration = Date.now() - startTime;
     
-    // Отправляем уведомление если были дубликаты
-    if (results.duplicatesAvoided > 0) {
-      const alert = `⚠️ DUPLICATES AVOIDED
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🛡️ Prevented: ${results.duplicatesAvoided} duplicates
-✅ During sync at: ${new Date().toLocaleTimeString()}
-⏱️ Lock wait time: ${results.lockWaitTime}ms
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-      
-      await sendTextNotifications(alert);
-    }
-    
     logger.info('✅ Sync completed with maximum protection', { 
       ...results,
       duration: `${duration}ms`
