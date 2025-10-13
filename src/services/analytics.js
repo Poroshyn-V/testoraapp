@@ -12,148 +12,120 @@ export class AnalyticsService {
       
       const rows = await googleSheets.getAllRows();
       
-      // Get last week dates
-      const now = new Date();
-      const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
-      const currentWeekStart = new Date(utcPlus1);
-      currentWeekStart.setDate(utcPlus1.getDate() - utcPlus1.getDay() + 1); // Monday
-      currentWeekStart.setHours(0, 0, 0, 0);
+      // Текущая неделя
+      const thisWeek = this.getWeekData(rows, 0);
       
-      // Analyze last week (not current week)
-      const lastWeekStart = new Date(currentWeekStart);
-      lastWeekStart.setDate(currentWeekStart.getDate() - 7);
+      // Прошлая неделя для сравнения
+      const lastWeek = this.getWeekData(rows, 1);
       
-      const lastWeekEnd = new Date(lastWeekStart);
-      lastWeekEnd.setDate(lastWeekStart.getDate() + 6);
-      lastWeekEnd.setHours(23, 59, 59, 999);
+      const revenueDiff = thisWeek.revenue - lastWeek.revenue;
+      const revenueDiffPercent = lastWeek.revenue > 0 
+        ? Math.round((revenueDiff / lastWeek.revenue) * 100) 
+        : 0;
       
-      // Get week before last for comparison
-      const weekBeforeLastStart = new Date(lastWeekStart);
-      weekBeforeLastStart.setDate(lastWeekStart.getDate() - 7);
+      const purchasesDiff = thisWeek.purchases - lastWeek.purchases;
+      const purchasesDiffPercent = lastWeek.purchases > 0
+        ? Math.round((purchasesDiff / lastWeek.purchases) * 100)
+        : 0;
       
-      const weekBeforeLastEnd = new Date(lastWeekEnd);
-      weekBeforeLastEnd.setDate(lastWeekEnd.getDate() - 7);
+      const report = `📊 WEEKLY REPORT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📅 Week: ${thisWeek.startDate} - ${thisWeek.endDate}
+
+💰 Revenue: $${thisWeek.revenue.toFixed(2)}
+   ${revenueDiff >= 0 ? '📈' : '📉'} ${Math.abs(revenueDiffPercent)}% vs last week
+
+🛒 Purchases: ${thisWeek.purchases}
+   ${purchasesDiff >= 0 ? '📈' : '📉'} ${Math.abs(purchasesDiffPercent)}% vs last week
+
+📊 Average Order Value: $${thisWeek.aov.toFixed(2)}
+   ${thisWeek.aov > lastWeek.aov ? '📈' : '📉'} $${Math.abs(thisWeek.aov - lastWeek.aov).toFixed(2)} vs last week
+
+🌍 Top Countries:
+${thisWeek.topCountries.map((c, i) => `   ${i + 1}. ${c.country}: ${c.count} purchases`).join('\n')}
+
+🎯 Top Campaigns:
+${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFixed(2)}`).join('\n')}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+
+      logInfo('📤 Отправляю еженедельный отчет:', { report });
       
-      logInfo('Analyzing last week', {
-        lastWeekStart: lastWeekStart.toISOString().split('T')[0],
-        lastWeekEnd: lastWeekEnd.toISOString().split('T')[0]
-      });
-      
-      // Filter purchases for last week
-      const lastWeekPurchases = rows.filter(row => {
-        const createdLocal = row.get('Created Local (UTC+1)') || '';
-        const purchaseDate = new Date(createdLocal);
-        return purchaseDate >= lastWeekStart && purchaseDate <= lastWeekEnd;
-      });
-      
-      // Filter purchases for week before last
-      const weekBeforeLastPurchases = rows.filter(row => {
-        const createdLocal = row.get('Created Local (UTC+1)') || '';
-        const purchaseDate = new Date(createdLocal);
-        return purchaseDate >= weekBeforeLastStart && purchaseDate <= weekBeforeLastEnd;
-      });
-      
-      if (lastWeekPurchases.length === 0) {
-        logInfo('No purchases found for last week');
-        return null;
-      }
-      
-      // Analyze last week
-      let lastWeekRevenue = 0;
-      const lastWeekGeo = new Map();
-      const lastWeekCreatives = new Map();
-      const dailyStats = new Map();
-      
-      for (const purchase of lastWeekPurchases) {
-        const amount = parseFloat(purchase.get('Total Amount') || '0');
-        lastWeekRevenue += amount;
-        
-        // GEO analysis
-        const geo = purchase.get('GEO') || '';
-        const country = geo.split(',')[0].trim();
-        if (country) {
-          lastWeekGeo.set(country, (lastWeekGeo.get(country) || 0) + 1);
-        }
-        
-        // Creatives analysis
-        const adName = purchase.get('Ad Name') || '';
-        if (adName) {
-          lastWeekCreatives.set(adName, (lastWeekCreatives.get(adName) || 0) + 1);
-        }
-        
-        // Daily stats
-        const createdLocal = purchase.get('Created Local (UTC+1)') || '';
-        const day = createdLocal.split(' ')[0];
-        if (day) {
-          if (!dailyStats.has(day)) {
-            dailyStats.set(day, { sales: 0, revenue: 0 });
-          }
-          const dayStats = dailyStats.get(day);
-          dayStats.sales += 1;
-          dayStats.revenue += amount;
-        }
-      }
-      
-      // Analyze week before last for comparison
-      let weekBeforeLastRevenue = 0;
-      for (const purchase of weekBeforeLastPurchases) {
-        const amount = parseFloat(purchase.get('Total Amount') || '0');
-        weekBeforeLastRevenue += amount;
-      }
-      
-      // Calculate growth
-      const revenueGrowth = weekBeforeLastRevenue > 0 ? 
-        ((lastWeekRevenue - weekBeforeLastRevenue) / weekBeforeLastRevenue * 100).toFixed(1) : 0;
-      const salesGrowth = weekBeforeLastPurchases.length > 0 ? 
-        ((lastWeekPurchases.length - weekBeforeLastPurchases.length) / weekBeforeLastPurchases.length * 100).toFixed(1) : 0;
-      
-      // Top countries and creatives
-      const topCountries = Array.from(lastWeekGeo.entries())
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3);
-      
-      const topCreatives = Array.from(lastWeekCreatives.entries())
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3);
-      
-      // Daily breakdown
-      const dailyBreakdown = Array.from(dailyStats.entries())
-        .sort((a, b) => a[0].localeCompare(b[0]))
-        .map(([day, stats]) => {
-          const dayName = new Date(day).toLocaleDateString('en-US', { weekday: 'short' });
-          return `• ${dayName} (${day}): ${stats.sales} sales, $${stats.revenue.toFixed(2)}`;
-        });
-      
-      // Формируем отчет (restored from old working version)
-      const weekStartStr = lastWeekStart.toISOString().split('T')[0];
-      const weekEndStr = lastWeekEnd.toISOString().split('T')[0];
-      
-      const reportText = `📊 **Weekly Report - Past Week (${weekStartStr} - ${weekEndStr})**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-💰 **Total Revenue:** $${lastWeekRevenue.toFixed(2)}
-📈 **Revenue Growth:** ${revenueGrowth > 0 ? '+' : ''}${revenueGrowth}% vs week before
-🛒 **Total Sales:** ${lastWeekPurchases.length}
-📊 **Sales Growth:** ${salesGrowth > 0 ? '+' : ''}${salesGrowth}% vs week before
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🌍 **Top Countries (Past Week):**
-${topCountries.map(([country, count], i) => `${i + 1}. ${country}: ${count} sales`).join('\n')}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎨 **Top Creatives (Past Week):**
-${topCreatives.map(([creative, count], i) => `${i + 1}. ${creative}: ${count} sales`).join('\n')}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📅 **Daily Breakdown (Past Week):**
-${dailyBreakdown.join('\n')}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⏰ **Report generated:** ${utcPlus1.toLocaleString('ru-RU', { timeZone: 'Europe/Berlin' })} UTC+1`;
-      
-      logInfo('📤 Отправляю еженедельный отчет:', { reportText });
-      
-      return reportText;
+      return report;
       
     } catch (error) {
       logError('Error generating weekly report', error);
       throw error;
     }
+  }
+
+  getWeekData(rows, weeksAgo = 0) {
+    // weeksAgo: 0 = текущая неделя, 1 = прошлая неделя
+    const now = new Date();
+    const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+    const startOfWeek = new Date(utcPlus1);
+    startOfWeek.setDate(utcPlus1.getDate() - utcPlus1.getDay() + 1 - (weeksAgo * 7)); // Понедельник
+    startOfWeek.setHours(0, 0, 0, 0);
+    
+    const endOfWeek = new Date(startOfWeek);
+    endOfWeek.setDate(startOfWeek.getDate() + 6); // Воскресенье
+    endOfWeek.setHours(23, 59, 59, 999);
+    
+    const weekRows = rows.filter(row => {
+      const created = new Date(row.get('Created Local (UTC+1)'));
+      return created >= startOfWeek && created <= endOfWeek;
+    });
+    
+    const revenue = weekRows.reduce((sum, row) => 
+      sum + parseFloat(row.get('Total Amount') || 0), 0
+    );
+    
+    // Анализ стран
+    const countryStats = new Map();
+    const campaignStats = new Map();
+    
+    for (const row of weekRows) {
+      // GEO анализ
+      const geo = row.get('GEO') || '';
+      const country = geo.split(',')[0].trim();
+      if (country) {
+        countryStats.set(country, (countryStats.get(country) || 0) + 1);
+      }
+      
+      // Анализ кампаний
+      const campaign = row.get('Campaign') || '';
+      if (campaign) {
+        const amount = parseFloat(row.get('Total Amount') || 0);
+        if (campaignStats.has(campaign)) {
+          campaignStats.get(campaign).count++;
+          campaignStats.get(campaign).revenue += amount;
+        } else {
+          campaignStats.set(campaign, { count: 1, revenue: amount });
+        }
+      }
+    }
+    
+    // Топ-3 страны
+    const topCountries = Array.from(countryStats.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([country, count]) => ({ country, count }));
+    
+    // Топ-3 кампании по выручке
+    const topCampaigns = Array.from(campaignStats.entries())
+      .sort((a, b) => b[1].revenue - a[1].revenue)
+      .slice(0, 3)
+      .map(([name, stats]) => ({ name, revenue: stats.revenue }));
+    
+    return {
+      startDate: startOfWeek.toISOString().split('T')[0],
+      endDate: endOfWeek.toISOString().split('T')[0],
+      revenue,
+      purchases: weekRows.length,
+      aov: weekRows.length > 0 ? revenue / weekRows.length : 0,
+      topCountries,
+      topCampaigns
+    };
   }
   
   // Generate GEO alert (restored from old working version)
