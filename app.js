@@ -16,6 +16,30 @@ import { metrics } from './src/services/metrics.js';
 
 const app = express();
 
+// Alert history storage
+const alertHistory = [];
+const MAX_HISTORY = 100;
+
+// Function to save alert history
+function saveAlertHistory(alertType, status, message, metadata = {}) {
+  const historyEntry = {
+    type: alertType,
+    status: status, // 'sent', 'failed', 'skipped'
+    message: message,
+    metadata: metadata,
+    timestamp: new Date().toISOString()
+  };
+  
+  alertHistory.unshift(historyEntry);
+  
+  // Limit history size
+  if (alertHistory.length > MAX_HISTORY) {
+    alertHistory.pop();
+  }
+  
+  metrics.increment('alert_history_recorded', 1, { type: alertType, status });
+}
+
 // Purchase cache is now managed by purchaseCache service
 
 // Interval variables for graceful shutdown
@@ -285,7 +309,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/auto-sync', '/ping', '/health']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/auto-sync', '/ping', '/health']
 }));
 
 // Health check
@@ -1455,6 +1479,25 @@ app.get('/api/creative-alert', async (req, res) => {
       error: error.message
     });
   }
+});
+
+// Alert history endpoint
+app.get('/api/alerts/history', (req, res) => {
+  const limit = parseInt(req.query.limit) || 50;
+  const type = req.query.type; // filter by type
+  
+  let filtered = alertHistory;
+  
+  if (type) {
+    filtered = alertHistory.filter(entry => entry.type === type);
+  }
+  
+  res.json({
+    success: true,
+    message: 'Alert history',
+    total: filtered.length,
+    history: filtered.slice(0, limit)
+  });
 });
 
 // Last purchases endpoint
