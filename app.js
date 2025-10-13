@@ -1480,7 +1480,7 @@ app.listen(ENV.PORT, () => {
     }, 30000);
     
     // Then every 5 minutes
-    setInterval(async () => {
+    syncInterval = setInterval(async () => {
       try {
         console.log('🔄 Running scheduled sync...');
         const result = await runSync();
@@ -1499,7 +1499,7 @@ app.listen(ENV.PORT, () => {
       console.log('🌍 Starting hourly GEO alerts...');
       
       // Only run on scheduled intervals (every hour)
-      setInterval(async () => {
+      geoAlertInterval = setInterval(async () => {
         try {
           console.log('🌍 Running hourly GEO alert...');
           const response = await fetch(`http://localhost:${ENV.PORT}/api/geo-alert`, {
@@ -1557,7 +1557,7 @@ app.listen(ENV.PORT, () => {
       
       // Schedule weekly interval after first run
       setTimeout(() => {
-        setInterval(async () => {
+        weeklyReportInterval = setInterval(async () => {
           const now = new Date();
           const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
           const weekKey = utcPlus1.toISOString().split('T')[0]; // YYYY-MM-DD
@@ -1584,7 +1584,7 @@ app.listen(ENV.PORT, () => {
       console.log('📊 Starting daily stats alerts...');
       
       // Check every 2 minutes for 7:00 UTC+1
-      setInterval(async () => {
+      dailyStatsInterval = setInterval(async () => {
         const now = new Date();
         const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
         const hour = utcPlus1.getUTCHours();
@@ -1615,7 +1615,7 @@ app.listen(ENV.PORT, () => {
       console.log('🎨 Starting creative alerts...');
       
       // Check every 2 minutes for 10:00 and 22:00 UTC+1
-      setInterval(async () => {
+      creativeAlertInterval = setInterval(async () => {
         const now = new Date();
         const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
         const hour = utcPlus1.getUTCHours();
@@ -1650,7 +1650,7 @@ app.listen(ENV.PORT, () => {
     scheduleCreativeAlert();
     
     // Start automatic alert cleanup (every 24 hours)
-    setInterval(cleanOldAlerts, 24 * 60 * 60 * 1000);
+    alertCleanupInterval = setInterval(cleanOldAlerts, 24 * 60 * 60 * 1000);
     
     // Run initial cleanup after 10 seconds
     setTimeout(cleanOldAlerts, 10000);
@@ -1668,6 +1668,117 @@ app.listen(ENV.PORT, () => {
   } else {
     console.log('⏸️ Automatic sync is DISABLED (AUTO_SYNC_DISABLED=true)');
   }
+});
+
+// Graceful shutdown handling
+let syncInterval = null;
+let geoAlertInterval = null;
+let dailyStatsInterval = null;
+let creativeAlertInterval = null;
+let weeklyReportInterval = null;
+let alertCleanupInterval = null;
+
+// Store interval references for cleanup
+const storeIntervalRefs = () => {
+  // These will be set when intervals are created
+  // We'll need to modify the scheduling functions to return interval IDs
+};
+
+// Graceful shutdown function
+async function gracefulShutdown(signal) {
+  logger.info(`${signal} received, shutting down gracefully...`, {
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+  
+  try {
+    // Stop all intervals
+    if (syncInterval) {
+      clearInterval(syncInterval);
+      logger.info('Stopped sync interval');
+    }
+    
+    if (geoAlertInterval) {
+      clearInterval(geoAlertInterval);
+      logger.info('Stopped GEO alert interval');
+    }
+    
+    if (dailyStatsInterval) {
+      clearInterval(dailyStatsInterval);
+      logger.info('Stopped daily stats interval');
+    }
+    
+    if (creativeAlertInterval) {
+      clearInterval(creativeAlertInterval);
+      logger.info('Stopped creative alert interval');
+    }
+    
+    if (weeklyReportInterval) {
+      clearInterval(weeklyReportInterval);
+      logger.info('Stopped weekly report interval');
+    }
+    
+    if (alertCleanupInterval) {
+      clearInterval(alertCleanupInterval);
+      logger.info('Stopped alert cleanup interval');
+    }
+    
+    // Clear any pending timeouts
+    // Note: We can't easily track all setTimeout calls, but this is a start
+    
+    // Close any database connections if they exist
+    // await googleSheets.disconnect(); // Uncomment if disconnect method exists
+    
+    // Final cleanup
+    logger.info('Graceful shutdown completed', {
+      timestamp: new Date().toISOString(),
+      finalUptime: process.uptime()
+    });
+    
+    // Give a moment for logs to flush
+    setTimeout(() => {
+      process.exit(0);
+    }, 1000);
+    
+  } catch (error) {
+    logger.error('Error during graceful shutdown', {
+      error: error.message,
+      stack: error.stack,
+      timestamp: new Date().toISOString()
+    });
+    
+    // Force exit after 5 seconds if graceful shutdown fails
+    setTimeout(() => {
+      logger.error('Forcing exit after graceful shutdown timeout');
+      process.exit(1);
+    }, 5000);
+  }
+}
+
+// Handle different shutdown signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught Exception', {
+    error: error.message,
+    stack: error.stack,
+    timestamp: new Date().toISOString()
+  });
+  
+  gracefulShutdown('UNCAUGHT_EXCEPTION');
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Rejection', {
+    reason: reason,
+    promise: promise,
+    timestamp: new Date().toISOString()
+  });
+  
+  gracefulShutdown('UNHANDLED_REJECTION');
 });
 
 export default app;
