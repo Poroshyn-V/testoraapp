@@ -17,6 +17,38 @@ import { notificationQueue } from './src/services/notificationQueue.js';
 import { campaignAnalyzer } from './src/services/campaignAnalyzer.js';
 import { duplicateChecker } from './src/services/duplicateChecker.js';
 import { formatPaymentForSheets, formatTelegramNotification } from './src/utils/formatting.js';
+
+// Глобальные переменные для locks
+const syncLock = new Map(); // customerId -> timestamp
+
+function acquireCustomerLock(customerId) {
+  const now = Date.now();
+  const existingLock = syncLock.get(customerId);
+  
+  if (existingLock && (now - existingLock) < 5 * 60 * 1000) {
+    return false;
+  }
+  
+  syncLock.set(customerId, now);
+  return true;
+}
+
+function releaseCustomerLock(customerId) {
+  syncLock.delete(customerId);
+}
+
+// Периодическая очистка старых locks
+setInterval(() => {
+  const now = Date.now();
+  const staleThreshold = 10 * 60 * 1000;
+  
+  for (const [customerId, timestamp] of syncLock.entries()) {
+    if (now - timestamp > staleThreshold) {
+      logger.warn(`Removing stale lock for customer ${customerId}`);
+      syncLock.delete(customerId);
+    }
+  }
+}, 10 * 60 * 1000);
 import { validateEmail, validateCustomerId, validatePaymentId, validateAmount } from './src/utils/validation.js';
 import { purchaseCache } from './src/services/purchaseCache.js';
 import { metrics } from './src/services/metrics.js';
@@ -1835,6 +1867,7 @@ app.post('/api/test-batch-operations', async (req, res) => {
 });
 
 // Sync payments endpoint - SIMPLIFIED AND RELIABLE
+// Обновленный sync-payments endpoint
 app.post('/api/sync-payments', async (req, res) => {
   const startTime = Date.now();
   const results = {
@@ -1843,7 +1876,8 @@ app.post('/api/sync-payments', async (req, res) => {
     errors: [],
     newPurchases: 0,
     updatedPurchases: 0,
-    skipped: 0
+    skipped: 0,
+    duplicatesAvoided: 0
   };
   
   try {
@@ -1851,6 +1885,11 @@ app.post('/api/sync-payments', async (req, res) => {
       timestamp: new Date().toISOString(),
       startTime: startTime
     });
+    
+    // 🔄 КРИТИЧЕСКИ ВАЖНО: Обновляем кэш дубликатов перед sync
+    if (duplicateChecker.isCacheStale()) {
+      await duplicateChecker.refreshCache();
+    }
     
     // Get recent payments from Stripe
     const payments = await fetchWithRetry(() => getRecentPayments(100));
@@ -1864,24 +1903,22 @@ app.post('/api/sync-payments', async (req, res) => {
       return true;
     });
     
-    // Get existing payment IDs from Google Sheets to avoid duplicates
-    const existingRows = await googleSheets.getAllRows();
-    const existingPaymentIds = new Set();
-    
-    for (const row of existingRows) {
-      const paymentIds = row.get('Payment Intent IDs');
-      if (paymentIds && paymentIds !== 'N/A') {
-        const ids = paymentIds.split(', ').map(id => id.trim());
-        ids.forEach(id => existingPaymentIds.add(id));
+    // 🔍 Фильтруем платежи используя кэш
+    const newPayments = successfulPayments.filter(p => {
+      const check = duplicateChecker.paymentIntentExists(p.id);
+      if (check.exists) {
+        logger.info(`Payment Intent ${p.id} already processed for customer ${check.customerId}`, {
+          paymentId: p.id,
+          customerId: check.customerId
+        });
+        return false;
       }
-    }
-    
-    // Filter out already processed payments
-    const newPayments = successfulPayments.filter(p => !existingPaymentIds.has(p.id));
+      return true;
+    });
     
     logger.info('Payment filtering', { 
       total: successfulPayments.length, 
-      existing: existingPaymentIds.size,
+      alreadyProcessed: successfulPayments.length - newPayments.length,
       new: newPayments.length 
     });
     
@@ -1937,135 +1974,204 @@ app.post('/api/sync-payments', async (req, res) => {
     
     logger.info(`Grouped ${newPayments.length} payments into ${groupedPurchases.size} customer groups`);
     
-    // Process each customer group with transaction-like error handling
+    // Process each customer group
     for (const [dateKey, group] of groupedPurchases) {
-      try {
-        const customer = group.customer;
-        const payments = group.payments;
-        const firstPayment = group.firstPayment;
-        
-        const customerId = customer?.id;
-        if (!customerId) {
-          results.skipped++;
-          logger.warn('Skipping group with no customer ID', { dateKey });
-          continue;
-        }
+      const customer = group.customer;
+      const payments = group.payments;
+      const firstPayment = group.firstPayment;
+      const customerId = customer?.id;
       
-        // Check if customer already exists in Google Sheets
-        const existingCustomers = await fetchWithRetry(() => googleSheets.findRows({ 'Customer ID': customerId }));
+      if (!customerId) {
+        results.skipped++;
+        continue;
+      }
+      
+      // 🔒 Acquire customer lock
+      if (!acquireCustomerLock(customerId)) {
+        results.skipped++;
+        logger.warn('Customer already being processed, skipping', { customerId });
+        continue;
+      }
+      
+      try {
+      
+        // 🔍 ПЕРВАЯ ПРОВЕРКА: Используем кэш
+        const existsInCache = duplicateChecker.customerExists(customerId);
         
-        if (existingCustomers.length > 0) {
-          // Customer exists - update existing record with new payments
-          logger.info(`Updating existing customer ${customerId} with ${payments.length} new payments`);
-          
-          // Get all payments for this customer from Stripe
-          const allPayments = await fetchWithRetry(() => getCustomerPayments(customerId));
-        const allSuccessfulPayments = allPayments.filter(p => {
-          if (p.status !== 'succeeded' || !p.customer) return false;
-          if (p.description && p.description.toLowerCase().includes('subscription update')) {
-            return false;
-          }
-          return true;
-        });
+        // 🔍 ВТОРАЯ ПРОВЕРКА: Проверяем Google Sheets (на случай если кэш устарел)
+        const existingCustomers = await fetchWithRetry(() => 
+          googleSheets.findRows({ 'Customer ID': customerId })
+        );
         
-        // Calculate totals
-        let totalAmountAll = 0;
-        let paymentCountAll = 0;
-        const paymentIdsAll = [];
-        
-        for (const p of allSuccessfulPayments) {
-          totalAmountAll += p.amount;
-          paymentCountAll++;
-          paymentIdsAll.push(p.id);
-        }
-        
-        // Delete ALL duplicate rows first
-        for (let i = 1; i < existingCustomers.length; i++) {
-          try {
-            await fetchWithRetry(() => existingCustomers[i].delete());
-          } catch (error) {
-            logger.warn(`Could not delete duplicate row:`, error.message);
-          }
-        }
-        
-        // Get fresh row data after deleting duplicates
-        const freshCustomers = await fetchWithRetry(() => googleSheets.findRows({ 'Customer ID': customerId }));
-        if (freshCustomers.length === 0) {
-          logger.warn('Customer row disappeared after cleanup, skipping update', { customerId });
-          continue;
-        }
-        
-        const freshCustomer = freshCustomers[0];
-        
-        // Update existing row with fresh data
-        await fetchWithRetry(() => googleSheets.updateRow(freshCustomer, {
-          'Purchase ID': `purchase_${customerId}`,
-          'Total Amount': (totalAmountAll / 100).toFixed(2),
-          'Payment Count': paymentCountAll.toString(),
-          'Payment Intent IDs': paymentIdsAll.join(', ')
-        }));
-        
-        // Send notification for upsell
-        const currentPaymentCount = parseInt(freshCustomer.get('Payment Count') || '0');
-        if (allSuccessfulPayments.length > currentPaymentCount) {
-          logger.info('Sending notification for upsell', { 
-            customerId, 
-            currentCount: currentPaymentCount,
-            newCount: allSuccessfulPayments.length 
+        if (existingCustomers.length > 1) {
+          // Если нашли дубликаты - это проблема, логируем
+          logger.error('⚠️ DUPLICATE DETECTED during sync!', {
+            customerId,
+            duplicateCount: existingCustomers.length,
+            action: 'Will update first row and delete others'
           });
           
+          results.duplicatesAvoided++;
+          
+          // Удаляем дубликаты немедленно
+          for (let i = 1; i < existingCustomers.length; i++) {
+            try {
+              await fetchWithRetry(() => existingCustomers[i].delete());
+              logger.info(`Deleted duplicate row for customer ${customerId}`);
+            } catch (error) {
+              logger.warn(`Could not delete duplicate:`, error.message);
+            }
+          }
+        }
+        
+        if (existingCustomers.length > 0) {
+          // Customer exists - UPDATE
+          logger.info(`Updating existing customer ${customerId}`);
+          
+          const allPayments = await fetchWithRetry(() => getCustomerPayments(customerId));
+          const allSuccessfulPayments = allPayments.filter(p => {
+            if (p.status !== 'succeeded' || !p.customer) return false;
+            if (p.description && p.description.toLowerCase().includes('subscription update')) {
+              return false;
+            }
+            return true;
+          });
+          
+          let totalAmountAll = 0;
+          let paymentCountAll = 0;
+          const paymentIdsAll = [];
+          
+          for (const p of allSuccessfulPayments) {
+            totalAmountAll += p.amount;
+            paymentCountAll++;
+            paymentIdsAll.push(p.id);
+          }
+          
+          const updateData = {
+            'Purchase ID': `purchase_${customerId}`,
+            'Total Amount': (totalAmountAll / 100).toFixed(2),
+            'Payment Count': paymentCountAll.toString(),
+            'Payment Intent IDs': paymentIdsAll.join(', ')
+          };
+          
+          await fetchWithRetry(() => 
+            googleSheets.updateRow(existingCustomers[0], updateData)
+          );
+          
+          // 🔄 Обновляем кэш
+          duplicateChecker.updateCache(customerId, {
+            purchaseId: updateData['Purchase ID'],
+            paymentIntentIds: paymentIdsAll,
+            totalAmount: updateData['Total Amount'],
+            paymentCount: updateData['Payment Count']
+          });
+        
+          // Send notification
           const sheetData = {
-            'Ad Name': freshCustomer.get('Ad Name') || 'N/A',
-            'Adset Name': freshCustomer.get('Adset Name') || 'N/A',
-            'Campaign Name': freshCustomer.get('Campaign Name') || 'N/A',
-            'Creative Link': freshCustomer.get('Creative Link') || 'N/A',
+            'Ad Name': existingCustomers[0].get('Ad Name') || 'N/A',
+            'Adset Name': existingCustomers[0].get('Adset Name') || 'N/A',
+            'Campaign Name': existingCustomers[0].get('Campaign Name') || 'N/A',
+            'Creative Link': existingCustomers[0].get('Creative Link') || 'N/A',
             'Total Amount': (totalAmountAll / 100).toFixed(2),
             'Payment Count': paymentCountAll.toString(),
             'Payment Intent IDs': paymentIdsAll.join(', ')
           };
           
           const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
-          
           await sendPurchaseNotification(latestPayment, customer, sheetData, 'upsell');
-        }
         
         // Increment counters for updated customer
         results.updatedPurchases++;
         results.processed++;
         
-      } else {
-        // New customer - add to Google Sheets with grouped payments
-        logger.info('Adding new customer with grouped payments', { customerId, paymentCount: payments.length });
+        } else {
+          // Customer doesn't exist - ADD NEW
+          logger.info(`Adding new customer ${customerId}`);
+          
+          // 🔍 ТРОЙНАЯ ПРОВЕРКА перед добавлением (критично!)
+          const tripleCheck = await fetchWithRetry(() => 
+            googleSheets.findRows({ 'Customer ID': customerId })
+          );
+          
+          if (tripleCheck.length > 0) {
+            logger.warn('⚠️ Customer appeared during processing! Converting to UPDATE', {
+              customerId,
+              action: 'update_instead_of_add'
+            });
+            
+            results.duplicatesAvoided++;
+            
+            // Обновляем вместо добавления
+            const allPayments = await fetchWithRetry(() => getCustomerPayments(customerId));
+            const allSuccessfulPayments = allPayments.filter(p => {
+              if (p.status !== 'succeeded' || !p.customer) return false;
+              if (p.description && p.description.toLowerCase().includes('subscription update')) {
+                return false;
+              }
+              return true;
+            });
+            
+            let totalAmountAll = 0;
+            let paymentCountAll = 0;
+            const paymentIdsAll = [];
+            
+            for (const p of allSuccessfulPayments) {
+              totalAmountAll += p.amount;
+              paymentCountAll++;
+              paymentIdsAll.push(p.id);
+            }
+            
+            await fetchWithRetry(() => 
+              googleSheets.updateRow(tripleCheck[0], {
+                'Purchase ID': `purchase_${customerId}`,
+                'Total Amount': (totalAmountAll / 100).toFixed(2),
+                'Payment Count': paymentCountAll.toString(),
+                'Payment Intent IDs': paymentIdsAll.join(', ')
+              })
+            );
+            
+            results.updatedPurchases++;
+            results.processed++;
+            
+            continue;
+          }
+          
+          // Безопасно добавляем новую строку
+          const rowData = formatPaymentForSheets(firstPayment, customer);
         
-        // Use first payment for formatting, but include all payments in totals
-        const rowData = formatPaymentForSheets(firstPayment, customer);
+          let totalAmount = 0;
+          const paymentIds = [];
+          for (const p of payments) {
+            totalAmount += p.amount;
+            paymentIds.push(p.id);
+          }
+          
+          rowData['Purchase ID'] = `purchase_${customerId}_${firstPayment.created}`;
+          rowData['Total Amount'] = (totalAmount / 100).toFixed(2);
+          rowData['Payment Count'] = payments.length.toString();
+          rowData['Payment Intent IDs'] = paymentIds.join(', ');
+          
+          await fetchWithRetry(() => googleSheets.addRow(rowData));
+          
+          // 🔄 Добавляем в кэш
+          duplicateChecker.addToCache(customerId, {
+            purchaseId: rowData['Purchase ID'],
+            paymentIntentIds: paymentIds,
+            totalAmount: rowData['Total Amount'],
+            paymentCount: rowData['Payment Count']
+          });
         
-        // Calculate totals for all payments in group
-        let totalAmount = 0;
-        const paymentIds = [];
-        for (const p of payments) {
-          totalAmount += p.amount;
-          paymentIds.push(p.id);
-        }
-        
-        rowData['Purchase ID'] = `purchase_${customerId}_${firstPayment.created}`;
-        rowData['Total Amount'] = (totalAmount / 100).toFixed(2);
-        rowData['Payment Count'] = payments.length.toString();
-        rowData['Payment Intent IDs'] = paymentIds.join(', ');
-        
-        await fetchWithRetry(() => googleSheets.addRow(rowData));
-        
-        // Send notification for new customer with grouped data
-        const sheetData = {
-          'Ad Name': rowData['Ad Name'] || 'N/A',
-          'Adset Name': rowData['Adset Name'] || 'N/A',
-          'Campaign Name': rowData['Campaign Name'] || 'N/A',
-          'Creative Link': rowData['Creative Link'] || 'N/A',
-          'Total Amount': (totalAmount / 100).toFixed(2),
-          'Payment Count': payments.length.toString(),
-          'Payment Intent IDs': paymentIds.join(', ')
-        };
-        
+          // Send notification
+          const sheetData = {
+            'Ad Name': rowData['Ad Name'] || 'N/A',
+            'Adset Name': rowData['Adset Name'] || 'N/A',
+            'Campaign Name': rowData['Campaign Name'] || 'N/A',
+            'Creative Link': rowData['Creative Link'] || 'N/A',
+            'Total Amount': (totalAmount / 100).toFixed(2),
+            'Payment Count': payments.length.toString(),
+            'Payment Intent IDs': paymentIds.join(', ')
+          };
+          
           await sendPurchaseNotification(firstPayment, customer, sheetData, 'new_purchase');
           
           results.newPurchases++;
@@ -2086,10 +2192,26 @@ app.post('/api/sync-payments', async (req, res) => {
           error: error.message,
           stack: error.stack
         });
+      } finally {
+        // 🔓 ВСЕГДА освобождаем lock
+        releaseCustomerLock(customerId);
       }
     }
     
     const duration = Date.now() - startTime;
+    
+    // Если были предотвращены дубликаты, отправляем уведомление
+    if (results.duplicatesAvoided > 0) {
+      const duplicateAlert = `⚠️ DUPLICATES AVOIDED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🛡️ Prevented: ${results.duplicatesAvoided} duplicates
+✅ During sync at: ${new Date().toLocaleTimeString()}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+System prevented duplicate entries`;
+      
+      await sendTextNotifications(duplicateAlert);
+    }
+    
     logger.info('Sync completed', { 
       ...results,
       totalPayments: newPayments.length,
@@ -2106,7 +2228,7 @@ app.post('/api/sync-payments', async (req, res) => {
     
     res.json({
       success: true,
-      message: `Sync completed! Processed ${results.processed} groups (${results.newPurchases} new, ${results.updatedPurchases} updated), ${results.failed} failed`,
+      message: `Sync completed! Processed ${results.processed} (${results.newPurchases} new, ${results.updatedPurchases} updated), avoided ${results.duplicatesAvoided} duplicates`,
       ...results,
       total_payments: newPayments.length,
       total_groups: groupedPurchases.size,
