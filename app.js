@@ -1006,7 +1006,7 @@ app.get('/api/campaigns/list', async (req, res) => {
     const campaignMap = new Map();
     
     for (const purchase of purchases) {
-      const name = purchase.get('Campaign Name') || 'Unknown';
+      const name = purchase.get('UTM Campaign') || purchase.get('Campaign Name') || 'Unknown';
       
       if (!campaignMap.has(name)) {
         campaignMap.set(name, {

@@ -119,7 +119,7 @@ class CampaignAnalyzer {
     const campaigns = new Map();
     
     for (const purchase of purchases) {
-      const campaignName = purchase.get('Campaign Name') || 'Unknown';
+      const campaignName = purchase.get('UTM Campaign') || purchase.get('Campaign Name') || 'Unknown';
       const adsetName = purchase.get('Adset Name') || 'Unknown';
       const adName = purchase.get('Ad Name') || 'Unknown';
       const creativeLink = purchase.get('Creative Link') || 'N/A';
@@ -430,7 +430,7 @@ class CampaignAnalyzer {
       const timeframePurchases = this.filterByTimeframe(rows, timeframe);
       
       // Debug: log all unique campaign names in timeframe
-      const uniqueCampaigns = [...new Set(timeframePurchases.map(row => row.get('Campaign Name') || 'Unknown'))];
+      const uniqueCampaigns = [...new Set(timeframePurchases.map(row => row.get('UTM Campaign') || row.get('Campaign Name') || 'Unknown'))];
       logger.info('Debug: Unique campaigns in timeframe', { 
         timeframe, 
         uniqueCampaigns, 
@@ -438,7 +438,7 @@ class CampaignAnalyzer {
       });
       
       const purchases = timeframePurchases.filter(row => {
-        const rowCampaignName = row.get('Campaign Name') || 'Unknown';
+        const rowCampaignName = row.get('UTM Campaign') || row.get('Campaign Name') || 'Unknown';
         return rowCampaignName === campaignName;
       });
       
