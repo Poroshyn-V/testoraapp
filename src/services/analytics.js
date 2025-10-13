@@ -160,31 +160,42 @@ export class AnalyticsService {
       
       const rows = await googleSheets.getAllRows();
       
-      // Get today's date
-      const today = new Date();
-      const utcPlus1 = new Date(today.getTime() + 60 * 60 * 1000);
-      const todayStart = new Date(utcPlus1);
-      todayStart.setHours(0, 0, 0, 0);
+      // Get last week dates (Monday to Sunday)
+      const now = new Date();
+      const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+      const currentWeekStart = new Date(utcPlus1);
+      currentWeekStart.setDate(utcPlus1.getDate() - utcPlus1.getDay() + 1); // Monday
+      currentWeekStart.setHours(0, 0, 0, 0);
       
-      const todayEnd = new Date(utcPlus1);
-      todayEnd.setHours(23, 59, 59, 999);
+      // Analyze last week (not current week)
+      const lastWeekStart = new Date(currentWeekStart);
+      lastWeekStart.setDate(currentWeekStart.getDate() - 7);
       
-      // Filter today's purchases
-      const todayPurchases = rows.filter(row => {
-        const createdLocal = row.get('Created Local (UTC+1)') || '';
-        const purchaseDate = new Date(createdLocal);
-        return purchaseDate >= todayStart && purchaseDate <= todayEnd;
+      const lastWeekEnd = new Date(lastWeekStart);
+      lastWeekEnd.setDate(lastWeekStart.getDate() + 6);
+      lastWeekEnd.setHours(23, 59, 59, 999);
+      
+      logInfo('Analyzing last week for GEO alert', {
+        lastWeekStart: lastWeekStart.toISOString().split('T')[0],
+        lastWeekEnd: lastWeekEnd.toISOString().split('T')[0]
       });
       
-      if (todayPurchases.length === 0) {
-        logInfo('No purchases found for today');
+      // Filter last week's purchases
+      const lastWeekPurchases = rows.filter(row => {
+        const createdLocal = row.get('Created Local (UTC+1)') || '';
+        const purchaseDate = new Date(createdLocal);
+        return purchaseDate >= lastWeekStart && purchaseDate <= lastWeekEnd;
+      });
+      
+      if (lastWeekPurchases.length === 0) {
+        logInfo('No purchases found for last week');
         return null;
       }
       
       // Analyze GEO data
       const geoStats = new Map();
       
-      for (const purchase of todayPurchases) {
+      for (const purchase of lastWeekPurchases) {
         const geo = purchase.get('GEO') || '';
         const country = geo.split(',')[0].trim();
         if (country) {
@@ -199,14 +210,14 @@ export class AnalyticsService {
       
       const alertData = {
         topCountries,
-        totalSales: todayPurchases.length,
-        date: todayStart.toISOString().split('T')[0]
+        totalSales: lastWeekPurchases.length,
+        date: lastWeekStart.toISOString().split('T')[0]
       };
       
       const alertText = formatGeoAlert(alertData);
       
       logInfo('GEO alert generated successfully', {
-        totalSales: todayPurchases.length,
+        totalSales: lastWeekPurchases.length,
         topCountries: topCountries.length
       });
       
