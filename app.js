@@ -59,7 +59,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/load-existing', '/api/check-duplicates', '/health']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/load-existing', '/api/check-duplicates', '/auto-sync', '/ping', '/health']
 }));
 
 // Health check
@@ -120,6 +120,62 @@ app.get('/api/load-existing', async (req, res) => {
   }
 });
 
+// Check duplicates endpoint
+app.get('/api/check-duplicates', async (req, res) => {
+  try {
+    logger.info('🔍 Проверяю дубликаты в Google Sheets...');
+    
+    const rows = await googleSheets.getAllRows();
+    
+    logger.info(`📋 Проверяю ${rows.length} строк на дубликаты...`);
+    
+    // Ищем дубликаты по email + дата + сумма
+    const duplicates = [];
+    const seen = new Map();
+    
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const email = row.get('Email') || '';
+      const date = row.get('Created Local (UTC+1)') || '';
+      const amount = row.get('Total Amount') || '';
+      
+      if (email && date && amount) {
+        const key = `${email}_${date}_${amount}`;
+        
+        if (seen.has(key)) {
+          duplicates.push({
+            row: i + 1,
+            email: email,
+            date: date,
+            amount: amount,
+            purchaseId: row.get('Purchase ID') || '',
+            duplicateOf: seen.get(key)
+          });
+        } else {
+          seen.set(key, i + 1);
+        }
+      }
+    }
+    
+    logger.info(`🔍 Найдено ${duplicates.length} дубликатов`);
+    
+    res.json({
+      success: true,
+      message: `Found ${duplicates.length} duplicates in ${rows.length} rows`,
+      total_rows: rows.length,
+      duplicates_count: duplicates.length,
+      duplicates: duplicates.slice(0, 10) // Показываем первые 10
+    });
+    
+  } catch (error) {
+    logger.error('Error checking duplicates', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Memory status endpoint
 app.get('/api/memory-status', (req, res) => {
   res.json({
@@ -161,6 +217,49 @@ app.get('/api/metrics', (req, res) => {
       arch: process.arch,
       pid: process.pid
     }
+  });
+});
+
+// Auto-sync endpoint
+app.get('/auto-sync', async (req, res) => {
+  try {
+    logger.info('🔄 Принудительная автоСинхронизация...');
+    
+    // Используем тот же endpoint что и основной sync
+    const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+    if (!response.ok) {
+      logger.error('❌ Auto-sync request failed:', { status: response.status, statusText: response.statusText });
+      return res.status(500).json({ error: 'Auto-sync request failed' });
+    }
+    
+    const result = await response.json();
+    logger.info('✅ Auto-sync completed:', result);
+    
+    res.json({ 
+      success: true, 
+      message: `Auto-sync completed! ${result.processed || 0} NEW purchases processed`,
+      processed: result.processed || 0,
+      total_groups: result.total_groups || 0
+    });
+    
+  } catch (error) {
+    logger.error('Auto-sync failed:', error);
+    return res.status(500).json({ error: 'Auto-sync failed: ' + error.message });
+  }
+});
+
+// Ping endpoint
+app.get('/ping', (_req, res) => {
+  logger.info('💓 PING: Поддерживаю активность Railway...');
+  logger.info('🕐 Время:', { timestamp: new Date().toISOString() });
+  res.status(200).json({ 
+    status: 'alive', 
+    timestamp: new Date().toISOString(),
+    message: 'Railway не заснет!' 
   });
 });
 
