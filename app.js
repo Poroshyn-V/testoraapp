@@ -365,7 +365,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/smart-alerts', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/api/alerts/dashboard', '/api/alerts/cooldown-stats', '/api/performance-stats', '/auto-sync', '/ping', '/health']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/smart-alerts', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/api/alerts/dashboard', '/api/alerts/cooldown-stats', '/api/performance-stats', '/api/status', '/auto-sync', '/ping', '/health']
 }));
 
 // Health check
@@ -478,6 +478,24 @@ async function checkTelegramConnection() {
     };
   }
 }
+
+// Endpoint для внешних систем мониторинга (UptimeRobot, Pingdom)
+app.get('/api/status', async (_req, res) => {
+  const isHealthy = !isSyncing && syncInterval && purchaseCache.size() > 0;
+  
+  res.status(isHealthy ? 200 : 503).json({
+    status: isHealthy ? 'ok' : 'degraded',
+    sync: {
+      active: !isSyncing,
+      scheduled: !!syncInterval
+    },
+    cache: {
+      loaded: purchaseCache.size() > 0,
+      size: purchaseCache.size()
+    },
+    timestamp: new Date().toISOString()
+  });
+});
 
 // Load existing purchases endpoint
 app.get('/api/load-existing', async (req, res) => {
