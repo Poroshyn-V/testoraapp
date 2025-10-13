@@ -54,6 +54,9 @@ let creativeAlertInterval = null;
 let weeklyReportInterval = null;
 let alertCleanupInterval = null;
 
+// Emergency stop flag
+let emergencyStop = false;
+
 // Helper function for sending purchase notifications with metrics
 async function sendPurchaseNotification(payment, customer, sheetData, type) {
   const amount = parseFloat(sheetData['Total Amount'] || 0);
@@ -278,6 +281,14 @@ async function runSync() {
   const timerId = metrics.startTimer('sync_operation');
   const startTime = Date.now();
   
+  if (emergencyStop) {
+    metrics.increment('sync_skipped', 1, { reason: 'emergency_stop' });
+    logger.warn('⛔ Sync blocked by emergency stop', {
+      timestamp: new Date().toISOString()
+    });
+    return { success: false, message: 'Emergency stop active' };
+  }
+  
   if (isSyncing) {
     metrics.increment('sync_skipped', 1, { reason: 'already_in_progress' });
     logger.warn('⚠️ Sync already in progress, skipping this cycle...', {
@@ -365,7 +376,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/smart-alerts', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/api/alerts/dashboard', '/api/alerts/cooldown-stats', '/api/performance-stats', '/api/status', '/auto-sync', '/ping', '/health']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/smart-alerts', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/api/alerts/dashboard', '/api/alerts/cooldown-stats', '/api/performance-stats', '/api/status', '/api/emergency-stop', '/api/emergency-resume', '/auto-sync', '/ping', '/health']
 }));
 
 // Health check
@@ -385,6 +396,7 @@ app.get('/health', async (_req, res) => {
     
     const healthStatus = {
       status: allServicesHealthy ? 'healthy' : 'degraded',
+      emergencyStop: emergencyStop,
       timestamp: new Date().toISOString(),
       uptime: {
         seconds: Math.floor(uptime),
@@ -493,6 +505,73 @@ app.get('/api/status', async (_req, res) => {
       loaded: purchaseCache.size() > 0,
       size: purchaseCache.size()
     },
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Emergency stop endpoint
+app.post('/api/emergency-stop', (req, res) => {
+  const { reason } = req.body;
+  
+  emergencyStop = true;
+  logger.error('🚨 EMERGENCY STOP ACTIVATED', {
+    reason: reason || 'Manual activation',
+    timestamp: new Date().toISOString(),
+    activatedBy: req.ip
+  });
+  
+  // Stop all intervals
+  if (syncInterval) {
+    clearInterval(syncInterval);
+    syncInterval = null;
+  }
+  if (geoAlertInterval) {
+    clearInterval(geoAlertInterval);
+    geoAlertInterval = null;
+  }
+  if (dailyStatsInterval) {
+    clearInterval(dailyStatsInterval);
+    dailyStatsInterval = null;
+  }
+  if (creativeAlertInterval) {
+    clearInterval(creativeAlertInterval);
+    creativeAlertInterval = null;
+  }
+  if (weeklyReportInterval) {
+    clearInterval(weeklyReportInterval);
+    weeklyReportInterval = null;
+  }
+  if (alertCleanupInterval) {
+    clearInterval(alertCleanupInterval);
+    alertCleanupInterval = null;
+  }
+  
+  saveAlertHistory('emergency_stop', 'sent', 'Emergency stop activated', {
+    reason,
+    ip: req.ip
+  });
+  
+  res.json({
+    success: true,
+    message: 'Emergency stop activated. All automatic operations halted.',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Resume endpoint
+app.post('/api/emergency-resume', (req, res) => {
+  emergencyStop = false;
+  logger.info('✅ Emergency stop deactivated', {
+    timestamp: new Date().toISOString()
+  });
+  
+  saveAlertHistory('emergency_resume', 'sent', 'Emergency stop deactivated', {
+    ip: req.ip
+  });
+  
+  res.json({
+    success: true,
+    message: 'Emergency stop deactivated. Restart server to resume operations.',
     timestamp: new Date().toISOString()
   });
 });
@@ -2003,6 +2082,11 @@ app.get('/api/debug-geo', async (req, res) => {
 
 // Check for missed alerts function
 async function checkMissedAlerts() {
+  if (emergencyStop) {
+    logger.warn('⛔ Missed alerts check blocked by emergency stop');
+    return;
+  }
+  
   const now = new Date();
   const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
   const currentHour = utcPlus1.getUTCHours();
