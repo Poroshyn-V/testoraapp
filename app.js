@@ -97,12 +97,21 @@ let emergencyStop = false;
 // Helper function for sending purchase notifications with metrics
 async function sendPurchaseNotification(payment, customer, sheetData, type) {
   // 🔍 Проверяем, не является ли это дубликатом перед отправкой уведомления
-  const paymentCheck = duplicateChecker.paymentIntentExists(payment.id);
-  if (paymentCheck.exists) {
-    logger.info(`Skipping notification for duplicate payment ${payment.id}`, {
+  if (purchaseCache.has(payment.id)) {
+    logger.info(`Skipping notification for duplicate payment ${payment.id} (purchaseCache)`, {
       paymentId: payment.id,
       customerId: customer.id,
-      reason: 'duplicate_detected'
+      reason: 'duplicate_detected_purchaseCache'
+    });
+    return; // Не отправляем уведомление для дубликата
+  }
+  
+  const paymentCheck = duplicateChecker.paymentIntentExists(payment.id);
+  if (paymentCheck.exists) {
+    logger.info(`Skipping notification for duplicate payment ${payment.id} (duplicateChecker)`, {
+      paymentId: payment.id,
+      customerId: customer.id,
+      reason: 'duplicate_detected_duplicateChecker'
     });
     return; // Не отправляем уведомление для дубликата
   }
@@ -2010,17 +2019,30 @@ app.post('/api/sync-payments', async (req, res) => {
     // 🔄 ОБНОВЛЯЕМ кэш дубликатов прямо перед фильтрацией для максимальной точности
     await duplicateChecker.refreshCache();
     
-    // 🔍 Фильтруем платежи используя свежий кэш
+    // 🔍 Фильтруем платежи используя ОСНОВНУЮ систему purchaseCache
     const newPayments = successfulPayments.filter(p => {
-      const check = duplicateChecker.paymentIntentExists(p.id);
-      if (check.exists) {
-        logger.info(`Payment Intent ${p.id} already processed for customer ${check.customerId}`, {
+      // Проверяем в основной системе purchaseCache
+      if (purchaseCache.has(p.id)) {
+        logger.info(`Payment Intent ${p.id} already processed (purchaseCache)`, {
           paymentId: p.id,
-          customerId: check.customerId
+          reason: 'already_in_purchase_cache'
         });
         results.duplicatesAvoided++;
         return false;
       }
+      
+      // Дополнительная проверка в duplicateChecker
+      const check = duplicateChecker.paymentIntentExists(p.id);
+      if (check.exists) {
+        logger.info(`Payment Intent ${p.id} already processed (duplicateChecker)`, {
+          paymentId: p.id,
+          customerId: check.customerId,
+          reason: 'already_in_duplicate_checker'
+        });
+        results.duplicatesAvoided++;
+        return false;
+      }
+      
       return true;
     });
     
@@ -2045,12 +2067,21 @@ app.post('/api/sync-payments', async (req, res) => {
     
     for (const payment of newPayments) {
       // 🔍 ДОПОЛНИТЕЛЬНАЯ проверка дубликатов прямо в цикле
+      if (purchaseCache.has(payment.id)) {
+        logger.warn(`DUPLICATE DETECTED in processing loop (purchaseCache): ${payment.id}`, {
+          paymentId: payment.id,
+          reason: 'duplicate_in_processing_loop_purchaseCache'
+        });
+        results.duplicatesAvoided++;
+        continue; // Пропускаем этот платеж
+      }
+      
       const duplicateCheck = duplicateChecker.paymentIntentExists(payment.id);
       if (duplicateCheck.exists) {
-        logger.warn(`DUPLICATE DETECTED in processing loop: ${payment.id}`, {
+        logger.warn(`DUPLICATE DETECTED in processing loop (duplicateChecker): ${payment.id}`, {
           paymentId: payment.id,
           customerId: duplicateCheck.customerId,
-          reason: 'duplicate_in_processing_loop'
+          reason: 'duplicate_in_processing_loop_duplicateChecker'
         });
         results.duplicatesAvoided++;
         continue; // Пропускаем этот платеж
@@ -2178,7 +2209,14 @@ app.post('/api/sync-payments', async (req, res) => {
             googleSheets.updateRow(existingCustomers[0], updateData)
           );
           
-          // 🔄 Обновляем кэш
+          // 🔄 КРИТИЧЕСКИ ВАЖНО: Добавляем новые платежи в ОСНОВНУЮ систему purchaseCache
+          for (const paymentId of paymentIdsAll) {
+            if (!purchaseCache.has(paymentId)) {
+              purchaseCache.add(paymentId);
+            }
+          }
+          
+          // 🔄 Обновляем кэш дубликатов
           duplicateChecker.updateCache(customerId, {
             purchaseId: updateData['Purchase ID'],
             paymentIntentIds: paymentIdsAll,
@@ -2203,13 +2241,14 @@ app.post('/api/sync-payments', async (req, res) => {
           const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
           
           // 🔍 Дополнительная проверка: отправляем уведомление только если это действительно новый платеж
-          const isNewPayment = !duplicateChecker.paymentIntentExists(latestPayment.id).exists;
+          const isNewPayment = !purchaseCache.has(latestPayment.id) && !duplicateChecker.paymentIntentExists(latestPayment.id).exists;
           if (isNewPayment) {
             await sendPurchaseNotification(latestPayment, customer, sheetData, 'upsell');
           } else {
             logger.info(`Skipping upsell notification for already processed payment ${latestPayment.id}`, {
               paymentId: latestPayment.id,
-              customerId: customer.id
+              customerId: customer.id,
+              reason: 'already_processed'
             });
           }
         
@@ -2286,7 +2325,12 @@ app.post('/api/sync-payments', async (req, res) => {
           
           await fetchWithRetry(() => googleSheets.addRow(rowData));
           
-          // 🔄 Добавляем в кэш
+          // 🔄 КРИТИЧЕСКИ ВАЖНО: Добавляем в ОСНОВНУЮ систему purchaseCache
+          for (const paymentId of paymentIds) {
+            purchaseCache.add(paymentId);
+          }
+          
+          // 🔄 Добавляем в кэш дубликатов
           duplicateChecker.addToCache(customerId, {
             purchaseId: rowData['Purchase ID'],
             paymentIntentIds: paymentIds,
@@ -2309,13 +2353,14 @@ app.post('/api/sync-payments', async (req, res) => {
           };
           
           // 🔍 Дополнительная проверка: отправляем уведомление только если это действительно новый платеж
-          const isNewPayment = !duplicateChecker.paymentIntentExists(firstPayment.id).exists;
+          const isNewPayment = !purchaseCache.has(firstPayment.id) && !duplicateChecker.paymentIntentExists(firstPayment.id).exists;
           if (isNewPayment) {
             await sendPurchaseNotification(firstPayment, customer, sheetData, 'new_purchase');
           } else {
             logger.info(`Skipping new purchase notification for already processed payment ${firstPayment.id}`, {
               paymentId: firstPayment.id,
-              customerId: customer.id
+              customerId: customer.id,
+              reason: 'already_processed'
             });
           }
           
