@@ -571,32 +571,59 @@ app.post('/api/sync-payments', async (req, res) => {
       });
     }
     
-    // GROUP PAYMENTS BY CUSTOMER FIRST (restored from old working version)
-    const customerGroups = new Map();
+    // GROUP PAYMENTS BY CUSTOMER WITH TIME WINDOW (restored from old working version)
+    const groupedPurchases = new Map();
     
     for (const payment of newPayments) {
       const customer = await getCustomer(payment.customer);
       const customerId = customer?.id;
       if (!customerId) continue;
       
-      if (!customerGroups.has(customerId)) {
-        customerGroups.set(customerId, {
-          customer,
-          payments: []
-        });
+      // Ищем существующую группу для этого клиента в течение 3 часов
+      let foundGroup = null;
+      const threeHoursInSeconds = 3 * 60 * 60; // 3 часа в секундах
+      
+      for (const [key, group] of groupedPurchases.entries()) {
+        if (key.startsWith(customerId + '_')) {
+          const timeDiff = Math.abs(payment.created - group.firstPayment.created);
+          if (timeDiff <= threeHoursInSeconds) {
+            foundGroup = group;
+            break;
+          }
+        }
       }
-      customerGroups.get(customerId).payments.push(payment);
+      
+      if (foundGroup) {
+        // Добавляем к существующей группе
+        foundGroup.payments.push(payment);
+        foundGroup.totalAmount += payment.amount;
+        logger.info(`Added upsell to group: ${payment.id} - $${(payment.amount / 100).toFixed(2)}`);
+      } else {
+        // Создаем новую группу
+        const groupKey = `${customerId}_${payment.created}`;
+        groupedPurchases.set(groupKey, {
+          customer,
+          payments: [payment],
+          totalAmount: payment.amount,
+          firstPayment: payment
+        });
+        logger.info(`Created new group: ${payment.id} - $${(payment.amount / 100).toFixed(2)}`);
+      }
     }
     
-    logger.info(`Grouped ${newPayments.length} payments into ${customerGroups.size} customer groups`);
+    logger.info(`Grouped ${newPayments.length} payments into ${groupedPurchases.size} customer groups`);
     
     // Process each customer group
     let processedCount = 0;
     let newPurchases = 0;
     
-    for (const [customerId, group] of customerGroups) {
+    for (const [dateKey, group] of groupedPurchases) {
       const customer = group.customer;
       const payments = group.payments;
+      const firstPayment = group.firstPayment;
+      
+      const customerId = customer?.id;
+      if (!customerId) continue;
       
       // Check if customer already exists in Google Sheets
       const existingCustomers = await googleSheets.findRows({ 'Customer ID': customerId });
@@ -679,28 +706,39 @@ app.post('/api/sync-payments', async (req, res) => {
         processedCount++;
         
       } else {
-        // New customer - add to Google Sheets
-        logger.info('Adding new customer', { customerId });
+        // New customer - add to Google Sheets with grouped payments
+        logger.info('Adding new customer with grouped payments', { customerId, paymentCount: payments.length });
         
-        const rowData = formatPaymentForSheets(payment, customer);
-        rowData['Total Amount'] = (payment.amount / 100).toFixed(2);
-        rowData['Payment Count'] = '1';
-        rowData['Payment Intent IDs'] = payment.id;
+        // Use first payment for formatting, but include all payments in totals
+        const rowData = formatPaymentForSheets(firstPayment, customer);
+        
+        // Calculate totals for all payments in group
+        let totalAmount = 0;
+        const paymentIds = [];
+        for (const p of payments) {
+          totalAmount += p.amount;
+          paymentIds.push(p.id);
+        }
+        
+        rowData['Purchase ID'] = `purchase_${customerId}_${firstPayment.created}`;
+        rowData['Total Amount'] = (totalAmount / 100).toFixed(2);
+        rowData['Payment Count'] = payments.length.toString();
+        rowData['Payment Intent IDs'] = paymentIds.join(', ');
         
         await googleSheets.addRow(rowData);
         
-        // Send notification for new customer
+        // Send notification for new customer with grouped data
         const sheetData = {
           'Ad Name': rowData['Ad Name'] || 'N/A',
           'Adset Name': rowData['Adset Name'] || 'N/A',
           'Campaign Name': rowData['Campaign Name'] || 'N/A',
           'Creative Link': rowData['Creative Link'] || 'N/A',
-          'Total Amount': (payment.amount / 100).toFixed(2),
-          'Payment Count': '1',
-          'Payment Intent IDs': payment.id
+          'Total Amount': (totalAmount / 100).toFixed(2),
+          'Payment Count': payments.length.toString(),
+          'Payment Intent IDs': paymentIds.join(', ')
         };
         
-        await sendNotifications(payment, customer, sheetData);
+        await sendNotifications(firstPayment, customer, sheetData);
         
         newPurchases++;
         processedCount++;
