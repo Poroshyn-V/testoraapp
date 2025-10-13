@@ -18,6 +18,13 @@ const app = express();
 const existingPurchases = new Set();
 const processedPurchaseIds = new Set();
 
+// Alert tracking to prevent duplicate sends
+const sentAlerts = {
+  dailyStats: new Set(),
+  creativeAlert: new Set(),
+  weeklyReport: new Set()
+};
+
 // Load existing purchases from Google Sheets into memory
 async function loadExistingPurchases() {
   try {
@@ -1263,15 +1270,22 @@ app.listen(ENV.PORT, () => {
       // Schedule weekly interval after first run
       setTimeout(() => {
         setInterval(async () => {
-          try {
-            console.log('📊 Running weekly report...');
-            const response = await fetch(`http://localhost:${ENV.PORT}/api/weekly-report`, {
-              method: 'GET'
-            });
-            const result = await response.json();
-            console.log(`✅ Weekly report completed: ${result.message}`);
-          } catch (error) {
-            console.error('❌ Weekly report failed:', error.message);
+          const now = new Date();
+          const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+          const weekKey = utcPlus1.toISOString().split('T')[0]; // YYYY-MM-DD
+          
+          if (!sentAlerts.weeklyReport.has(weekKey)) {
+            try {
+              console.log('📊 Running weekly report...');
+              const response = await fetch(`http://localhost:${ENV.PORT}/api/weekly-report`, {
+                method: 'GET'
+              });
+              const result = await response.json();
+              console.log(`✅ Weekly report completed: ${result.message}`);
+              sentAlerts.weeklyReport.add(weekKey);
+            } catch (error) {
+              console.error('❌ Weekly report failed:', error.message);
+            }
           }
         }, 7 * 24 * 60 * 60 * 1000); // 7 days
       }, timeUntilMonday);
@@ -1290,15 +1304,19 @@ app.listen(ENV.PORT, () => {
         
         // Check for 7:00 UTC+1 (with ±2 minutes tolerance)
         if (hour === 7 && minute >= 0 && minute <= 2) {
-          try {
-            console.log('📊 Running daily stats alert...');
-            const response = await fetch(`http://localhost:${ENV.PORT}/api/daily-stats`, {
-              method: 'GET'
-            });
-            const result = await response.json();
-            console.log(`✅ Daily stats completed: ${result.message}`);
-          } catch (error) {
-            console.error('❌ Daily stats failed:', error.message);
+          const today = utcPlus1.toISOString().split('T')[0];
+          if (!sentAlerts.dailyStats.has(today)) {
+            try {
+              console.log('📊 Running daily stats alert...');
+              const response = await fetch(`http://localhost:${ENV.PORT}/api/daily-stats`, {
+                method: 'GET'
+              });
+              const result = await response.json();
+              console.log(`✅ Daily stats completed: ${result.message}`);
+              sentAlerts.dailyStats.add(today);
+            } catch (error) {
+              console.error('❌ Daily stats failed:', error.message);
+            }
           }
         }
       }, 2 * 60 * 1000); // 2 minutes
@@ -1318,15 +1336,20 @@ app.listen(ENV.PORT, () => {
         // Check for 10:00 and 22:00 UTC+1 (with ±2 minutes tolerance)
         if ((hour === 10 && minute >= 0 && minute <= 2) || 
             (hour === 22 && minute >= 0 && minute <= 2)) {
-          try {
-            console.log('🎨 Running creative alert...');
-            const response = await fetch(`http://localhost:${ENV.PORT}/api/creative-alert`, {
-              method: 'GET'
-            });
-            const result = await response.json();
-            console.log(`✅ Creative alert completed: ${result.message}`);
-          } catch (error) {
-            console.error('❌ Creative alert failed:', error.message);
+          const today = utcPlus1.toISOString().split('T')[0];
+          const alertKey = `${today}_${hour}`;
+          if (!sentAlerts.creativeAlert.has(alertKey)) {
+            try {
+              console.log('🎨 Running creative alert...');
+              const response = await fetch(`http://localhost:${ENV.PORT}/api/creative-alert`, {
+                method: 'GET'
+              });
+              const result = await response.json();
+              console.log(`✅ Creative alert completed: ${result.message}`);
+              sentAlerts.creativeAlert.add(alertKey);
+            } catch (error) {
+              console.error('❌ Creative alert failed:', error.message);
+            }
           }
         }
       }, 2 * 60 * 1000); // 2 minutes
