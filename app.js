@@ -1680,10 +1680,34 @@ app.get('/api/weekly-report', async (req, res) => {
 // GEO alert endpoint
 app.get('/api/geo-alert', async (req, res) => {
   try {
+    const now = new Date();
+    const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+    const today = utcPlus1.toISOString().split('T')[0];
+    const currentHour = utcPlus1.getUTCHours();
+    const currentMinute = utcPlus1.getUTCMinutes();
+    
+    // Защита от спама: не отправляем GEO алерт чаще чем раз в 30 минут
+    const geoAlertKey = `geo_${today}_${currentHour}_${Math.floor(currentMinute / 30)}`;
+    
+    if (sentAlerts.geoAlert && sentAlerts.geoAlert.has(geoAlertKey)) {
+      logger.info('🌍 GEO alert already sent for this 30-minute window, skipping');
+      return res.json({
+        success: true,
+        message: 'GEO alert already sent for this time window'
+      });
+    }
+    
     const alert = await analytics.generateGeoAlert();
     
     if (alert) {
       await sendTextNotifications(alert);
+      
+      // Отмечаем, что GEO алерт был отправлен
+      if (!sentAlerts.geoAlert) {
+        sentAlerts.geoAlert = new Set();
+      }
+      sentAlerts.geoAlert.add(geoAlertKey);
+      
       res.json({
         success: true,
         message: 'GEO alert sent successfully'
@@ -1761,10 +1785,33 @@ app.get('/api/anomaly-check', async (req, res) => {
 // Creative alert endpoint
 app.get('/api/creative-alert', async (req, res) => {
   try {
+    const now = new Date();
+    const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+    const today = utcPlus1.toISOString().split('T')[0];
+    const currentHour = utcPlus1.getUTCHours();
+    
+    // Защита от спама: не отправляем Creative алерт чаще чем раз в час
+    const creativeAlertKey = `creative_${today}_${currentHour}`;
+    
+    if (sentAlerts.creativeAlert && sentAlerts.creativeAlert.has(creativeAlertKey)) {
+      logger.info('🎨 Creative alert already sent for this hour, skipping');
+      return res.json({
+        success: true,
+        message: 'Creative alert already sent for this hour'
+      });
+    }
+    
     const alert = await analytics.generateCreativeAlert();
     
     if (alert) {
       await sendTextNotifications(alert);
+      
+      // Отмечаем, что Creative алерт был отправлен
+      if (!sentAlerts.creativeAlert) {
+        sentAlerts.creativeAlert = new Set();
+      }
+      sentAlerts.creativeAlert.add(creativeAlertKey);
+      
       res.json({
         success: true,
         message: 'Creative alert sent successfully'
@@ -2210,21 +2257,8 @@ async function checkMissedAlerts() {
     });
   }
   
-  // Проверяем GEO Alert - если приложение запускается, отправляем GEO алерт
-  if (!sentAlerts.geoAlert || sentAlerts.geoAlert.size === 0) {
-    logger.info('🌍 Sending initial GEO alert on startup...');
-    try {
-      const response = await fetch(`http://localhost:${ENV.PORT}/api/geo-alert`, {
-        method: 'GET'
-      });
-      const result = await response.json();
-      if (result.success) {
-        logger.info('✅ Initial GEO alert sent successfully');
-      }
-    } catch (error) {
-      logger.error('❌ Failed to send initial GEO alert:', error.message);
-    }
-  }
+  // GEO Alert будет отправлен через scheduleGeoAlert (через 30 секунд)
+  // Не отправляем здесь, чтобы избежать дублирования
   
   // Проверяем Creative Alert (должен отправиться в настроенное время)
   if (currentHour >= alertConfig.creativeAlertHours[0] && currentHour < alertConfig.creativeAlertHours[1]) {
