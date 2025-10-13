@@ -547,6 +547,7 @@ app.get('/', (_req, res) => res.json({
     '/api/status',
     '/api/emergency-stop',
     '/api/emergency-resume',
+    '/api/force-notifications',
     '/api/notification-queue/stats',
     '/api/notification-queue/clear',
     '/api/notification-queue/pause',
@@ -771,6 +772,162 @@ app.post('/api/emergency-resume', (req, res) => {
     message: 'Emergency stop deactivated. Restart server to resume operations.',
     timestamp: new Date().toISOString()
   });
+});
+
+// Force send notifications for specific customers
+app.post('/api/force-notifications', async (req, res) => {
+  try {
+    const { customerIds } = req.body;
+    
+    if (!customerIds || !Array.isArray(customerIds)) {
+      return res.status(400).json({
+        success: false,
+        error: 'customerIds array is required'
+      });
+    }
+    
+    const results = [];
+    
+    for (const customerId of customerIds) {
+      try {
+        // Get customer data from Stripe
+        const customer = await fetchWithRetry(() => getCustomer(customerId));
+        if (!customer) {
+          results.push({
+            customerId,
+            success: false,
+            error: 'Customer not found in Stripe'
+          });
+          continue;
+        }
+        
+        // Get customer payments
+        const payments = await fetchWithRetry(() => getCustomerPayments(customerId));
+        const successfulPayments = payments.filter(p => {
+          if (p.status !== 'succeeded' || !p.customer) return false;
+          if (p.description && p.description.toLowerCase().includes('subscription update')) {
+            return false;
+          }
+          return true;
+        });
+        
+        if (successfulPayments.length === 0) {
+          results.push({
+            customerId,
+            success: false,
+            error: 'No successful payments found'
+          });
+          continue;
+        }
+        
+        // Get customer data from Google Sheets
+        const sheetRows = await fetchWithRetry(() => 
+          googleSheets.findRows({ 'Customer ID': customerId })
+        );
+        
+        if (sheetRows.length === 0) {
+          results.push({
+            customerId,
+            success: false,
+            error: 'Customer not found in Google Sheets'
+          });
+          continue;
+        }
+        
+        const sheetRow = sheetRows[0];
+        const latestPayment = successfulPayments[successfulPayments.length - 1];
+        
+        // Prepare sheet data
+        const sheetData = {
+          'Ad Name': sheetRow.get('Ad Name') || 'N/A',
+          'Adset Name': sheetRow.get('Adset Name') || 'N/A',
+          'Campaign Name': sheetRow.get('Campaign Name') || 'N/A',
+          'Creative Link': sheetRow.get('Creative Link') || 'N/A',
+          'Total Amount': sheetRow.get('Total Amount') || '0',
+          'Payment Count': sheetRow.get('Payment Count') || '0',
+          'Payment Intent IDs': sheetRow.get('Payment Intent IDs') || 'N/A'
+        };
+        
+        // Force send notification (bypass duplicate checks)
+        const amount = parseFloat(sheetData['Total Amount'] || 0);
+        
+        // VIP purchase alert
+        if (amount >= alertConfig.vipPurchaseThreshold) {
+          const alertType = `vip_${customer.id}`;
+          
+          if (alertCooldown.canSend(alertType, alertConfig.cooldownMinutes.vip)) {
+            const vipAlert = `💎 VIP PURCHASE ALERT!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 Amount: $${amount.toFixed(2)}
+👤 Customer: ${customer.email || 'N/A'}
+🆔 ID: ${customer.id}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎉 High-value customer detected!`;
+            
+            await notificationQueue.add({
+              type: 'vip_purchase',
+              channel: 'telegram',
+              message: vipAlert,
+              metadata: { 
+                amount, 
+                customerId: customer.id,
+                customerEmail: customer.email 
+              }
+            });
+            
+            alertCooldown.markSent(alertType);
+            saveAlertHistory('vip_purchase', 'sent', vipAlert, { 
+              amount, 
+              customerId: customer.id,
+              customerEmail: customer.email 
+            });
+          }
+        }
+        
+        // Regular notification
+        const notificationMessage = await formatTelegramNotification(latestPayment, customer, sheetData);
+        
+        await notificationQueue.add({
+          type: 'new_purchase',
+          channel: 'telegram',
+          message: notificationMessage,
+          metadata: {
+            paymentId: latestPayment.id,
+            customerId: customer.id,
+            amount: amount
+          }
+        });
+        
+        results.push({
+          customerId,
+          success: true,
+          message: 'Notification sent successfully',
+          amount: amount,
+          email: customer.email
+        });
+        
+      } catch (error) {
+        results.push({
+          customerId,
+          success: false,
+          error: error.message
+        });
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Processed ${customerIds.length} customers`,
+      results
+    });
+    
+  } catch (error) {
+    logger.error('Error in force notifications', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
 });
 
 // Notification queue management endpoints
