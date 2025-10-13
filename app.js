@@ -3373,25 +3373,11 @@ app.listen(ENV.PORT, () => {
       }
     }, alertConfig.syncInterval * 60 * 1000); // Configurable sync interval
     
-    // GEO Alert every hour
+    // GEO Alert every hour (scheduled only, no initial run)
     const scheduleGeoAlert = () => {
-      console.log('🌍 Starting hourly GEO alerts...');
+      console.log('🌍 Starting hourly GEO alerts (scheduled only)...');
       
-      // Run first GEO alert after 30 seconds
-      setTimeout(async () => {
-        try {
-          console.log('🌍 Running initial GEO alert...');
-          const response = await fetch(`http://localhost:${ENV.PORT}/api/geo-alert`, {
-            method: 'GET'
-          });
-          const result = await response.json();
-          console.log(`✅ Initial GEO alert completed: ${result.message}`);
-        } catch (error) {
-          console.error('❌ Initial GEO alert failed:', error.message);
-        }
-      }, 30000); // 30 seconds
-      
-      // Then run on scheduled intervals (every hour)
+      // Run on scheduled intervals (every hour) - NO initial run to prevent spam on deploy
       geoAlertInterval = setInterval(async () => {
         try {
           console.log('🌍 Running scheduled GEO alert...');
