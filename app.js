@@ -1828,6 +1828,51 @@ app.get('/api/debug-geo', async (req, res) => {
   }
 });
 
+// Check for missed alerts function
+async function checkMissedAlerts() {
+  const now = new Date();
+  const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+  const currentHour = utcPlus1.getUTCHours();
+  const today = utcPlus1.toISOString().split('T')[0];
+  
+  // Проверяем Daily Stats (должен отправиться в 7:00)
+  if (currentHour >= 7 && currentHour < 23 && !sentAlerts.dailyStats.has(today)) {
+    logger.info('📊 Sending missed daily stats alert...');
+    try {
+      const response = await fetch(`http://localhost:${ENV.PORT}/api/daily-stats`, {
+        method: 'GET'
+      });
+      const result = await response.json();
+      if (result.success) {
+        sentAlerts.dailyStats.add(today);
+        logger.info('✅ Missed daily stats sent successfully');
+      }
+    } catch (error) {
+      logger.error('❌ Failed to send missed daily stats:', error.message);
+    }
+  }
+  
+  // Проверяем Creative Alert (должен отправиться в 10:00 и 22:00)
+  if (currentHour >= 10 && currentHour < 22) {
+    const morning = `${today}_10`;
+    if (!sentAlerts.creativeAlert.has(morning)) {
+      logger.info('🎨 Sending missed morning creative alert...');
+      try {
+        const response = await fetch(`http://localhost:${ENV.PORT}/api/creative-alert`, {
+          method: 'GET'
+        });
+        const result = await response.json();
+        if (result.success) {
+          sentAlerts.creativeAlert.add(morning);
+          logger.info('✅ Missed morning creative alert sent');
+        }
+      } catch (error) {
+        logger.error('❌ Failed to send missed creative alert:', error.message);
+      }
+    }
+  }
+}
+
 // Error handlers
 app.use(errorHandler);
 app.use(notFoundHandler);
@@ -1851,6 +1896,16 @@ app.listen(ENV.PORT, () => {
       console.error('❌ Failed to load existing purchases:', error.message);
     }
   }, 5000); // Load after 5 seconds
+
+  // Check for missed alerts on startup
+  setTimeout(async () => {
+    try {
+      console.log('🔍 Checking for missed alerts...');
+      await checkMissedAlerts();
+    } catch (error) {
+      console.error('❌ Failed to check missed alerts:', error.message);
+    }
+  }, 10000); // После 10 секунд
 
   // Start automatic synchronization
   if (!ENV.AUTO_SYNC_DISABLED) {
