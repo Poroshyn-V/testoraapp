@@ -9,7 +9,11 @@
     "start:new": "node app-new.js",
     "build": "echo 'No build needed for JS'",
     "sync": "node sync-stripe.js",
-    "vercel-build": "echo 'No build needed for JS'"
+    "vercel-build": "echo 'No build needed for JS'",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest --watch"
   },
   "dependencies": {
     "body-parser": "^1.20.2",
@@ -26,6 +30,8 @@
     "@types/node": "^20.11.30",
     "@vercel/node": "^3.0.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.8",
+    "@vitest/coverage-v8": "^2.1.8"
   }
 }
