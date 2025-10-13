@@ -473,7 +473,7 @@ app.get('/api/metrics', (req, res) => {
       ...getCacheStats(),
       rateLimitConnections: getRateLimitStats().activeConnections,
       existingPurchases: purchaseCache.size(),
-      processedPurchases: processedPurchaseIds.size
+      processedPurchases: purchaseCache.processedPurchaseIds.size
     },
     performance: {
       nodeVersion: process.version,
