@@ -668,6 +668,159 @@ app.post('/api/notification-queue/resume', (req, res) => {
   }
 });
 
+// Check and fix duplicates endpoint
+app.get('/api/check-duplicates', async (req, res) => {
+  try {
+    logger.info('🔍 Starting duplicate check...');
+    
+    const rows = await googleSheets.getAllRows();
+    const customerGroups = new Map();
+    const duplicates = [];
+    
+    // Group rows by Customer ID
+    for (const row of rows) {
+      const customerId = row.get('Customer ID');
+      if (!customerId || customerId === 'N/A') continue;
+      
+      if (!customerGroups.has(customerId)) {
+        customerGroups.set(customerId, []);
+      }
+      customerGroups.get(customerId).push(row);
+    }
+    
+    // Find customers with multiple rows
+    for (const [customerId, customerRows] of customerGroups.entries()) {
+      if (customerRows.length > 1) {
+        duplicates.push({
+          customerId,
+          count: customerRows.length,
+          rows: customerRows.map(row => ({
+            rowNumber: row.rowNumber,
+            email: row.get('Email'),
+            totalAmount: row.get('Total Amount'),
+            paymentCount: row.get('Payment Count'),
+            paymentIds: row.get('Payment Intent IDs')
+          }))
+        });
+      }
+    }
+    
+    logger.info(`Found ${duplicates.length} customers with duplicates`);
+    
+    res.json({
+      success: true,
+      message: `Found ${duplicates.length} customers with duplicate entries`,
+      duplicates: duplicates,
+      totalCustomers: customerGroups.size,
+      totalRows: rows.length
+    });
+    
+  } catch (error) {
+    logger.error('Error checking duplicates', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Fix duplicates endpoint
+app.post('/api/fix-duplicates', async (req, res) => {
+  try {
+    logger.info('🔧 Starting duplicate fix...');
+    
+    const rows = await googleSheets.getAllRows();
+    const customerGroups = new Map();
+    let fixedCount = 0;
+    let deletedCount = 0;
+    
+    // Group rows by Customer ID
+    for (const row of rows) {
+      const customerId = row.get('Customer ID');
+      if (!customerId || customerId === 'N/A') continue;
+      
+      if (!customerGroups.has(customerId)) {
+        customerGroups.set(customerId, []);
+      }
+      customerGroups.get(customerId).push(row);
+    }
+    
+    // Fix each customer with duplicates
+    for (const [customerId, customerRows] of customerGroups.entries()) {
+      if (customerRows.length > 1) {
+        logger.info(`Fixing duplicates for customer ${customerId} (${customerRows.length} rows)`);
+        
+        // Get all payments for this customer from Stripe
+        const allPayments = await fetchWithRetry(() => getCustomerPayments(customerId));
+        const allSuccessfulPayments = allPayments.filter(p => {
+          if (p.status !== 'succeeded' || !p.customer) return false;
+          if (p.description && p.description.toLowerCase().includes('subscription update')) {
+            return false;
+          }
+          return true;
+        });
+        
+        // Calculate totals
+        let totalAmountAll = 0;
+        let paymentCountAll = 0;
+        const paymentIdsAll = [];
+        
+        for (const p of allSuccessfulPayments) {
+          totalAmountAll += p.amount;
+          paymentCountAll++;
+          paymentIdsAll.push(p.id);
+        }
+        
+        // Keep the first row, delete the rest
+        const keepRow = customerRows[0];
+        const deleteRows = customerRows.slice(1);
+        
+        // Delete duplicate rows
+        for (const row of deleteRows) {
+          try {
+            await fetchWithRetry(() => row.delete());
+            deletedCount++;
+            logger.info(`Deleted duplicate row ${row.rowNumber} for customer ${customerId}`);
+          } catch (error) {
+            logger.warn(`Could not delete row ${row.rowNumber}:`, error.message);
+          }
+        }
+        
+        // Update the kept row with correct data
+        try {
+          await fetchWithRetry(() => googleSheets.updateRow(keepRow, {
+            'Purchase ID': `purchase_${customerId}`,
+            'Total Amount': (totalAmountAll / 100).toFixed(2),
+            'Payment Count': paymentCountAll.toString(),
+            'Payment Intent IDs': paymentIdsAll.join(', ')
+          }));
+          
+          fixedCount++;
+          logger.info(`Updated row ${keepRow.rowNumber} for customer ${customerId} with ${paymentCountAll} payments`);
+        } catch (error) {
+          logger.warn(`Could not update row ${keepRow.rowNumber}:`, error.message);
+        }
+      }
+    }
+    
+    logger.info(`Fixed ${fixedCount} customers, deleted ${deletedCount} duplicate rows`);
+    
+    res.json({
+      success: true,
+      message: `Fixed ${fixedCount} customers with duplicates`,
+      fixedCustomers: fixedCount,
+      deletedRows: deletedCount
+    });
+    
+  } catch (error) {
+    logger.error('Error fixing duplicates', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Load existing purchases endpoint
 app.get('/api/load-existing', async (req, res) => {
   try {
