@@ -9,6 +9,7 @@ import { stripe, getRecentPayments, getCustomerPayments, getCustomer } from './s
 import { sendNotifications, sendTextNotifications } from './src/services/notifications.js';
 import googleSheets from './src/services/googleSheets.js';
 import { analytics } from './src/services/analytics.js';
+import { smartAlerts } from './src/services/smartAlerts.js';
 import { formatPaymentForSheets, formatTelegramNotification } from './src/utils/formatting.js';
 import { validateEmail, validateCustomerId, validatePaymentId, validateAmount } from './src/utils/validation.js';
 import { purchaseCache } from './src/services/purchaseCache.js';
@@ -309,7 +310,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/api/alerts/dashboard', '/auto-sync', '/ping', '/health']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/smart-alerts', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/api/alerts/dashboard', '/auto-sync', '/ping', '/health']
 }));
 
 // Health check
@@ -1542,6 +1543,28 @@ app.get('/api/alerts/dashboard', async (req, res) => {
     logger.error('Error getting alert dashboard', error);
     res.status(500).json({
       success: false,
+      error: error.message
+    });
+  }
+});
+
+// Smart alerts endpoint
+app.get('/api/smart-alerts', async (req, res) => {
+  try {
+    const results = await smartAlerts.runAllChecks();
+    
+    res.json({
+      success: true,
+      message: 'Smart alerts check completed',
+      results,
+      alertsSent: Object.values(results).filter(Boolean).length
+    });
+    
+  } catch (error) {
+    logger.error('Error running smart alerts', error);
+    res.status(500).json({
+      success: false,
+      message: 'Smart alerts failed',
       error: error.message
     });
   }
