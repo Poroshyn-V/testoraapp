@@ -53,6 +53,7 @@ import { validateEmail, validateCustomerId, validatePaymentId, validateAmount } 
 import { purchaseCache } from './src/services/purchaseCache.js';
 import { metrics } from './src/services/metrics.js';
 import { clearSheetsCache } from './src/utils/cache.js';
+import { distributedLock } from './src/services/distributedLock.js';
 
 const app = express();
 
@@ -390,6 +391,7 @@ async function loadExistingPurchases() {
 async function runSync() {
   const timerId = metrics.startTimer('sync_operation');
   const startTime = Date.now();
+  let lockId = null;
   
   if (emergencyStop) {
     metrics.increment('sync_skipped', 1, { reason: 'emergency_stop' });
@@ -399,12 +401,26 @@ async function runSync() {
     return { success: false, message: 'Emergency stop active' };
   }
   
+  // 🔒 Используем распределенную блокировку для sync
+  try {
+    lockId = await distributedLock.acquire('sync_operation', 10, 200);
+    logger.info('🔒 Sync lock acquired', { lockId });
+  } catch (error) {
+    metrics.increment('sync_skipped', 1, { reason: 'lock_failed' });
+    logger.warn('⚠️ Failed to acquire sync lock, skipping this cycle...', {
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+    return { success: false, message: 'Failed to acquire sync lock' };
+  }
+  
   if (isSyncing) {
     metrics.increment('sync_skipped', 1, { reason: 'already_in_progress' });
     logger.warn('⚠️ Sync already in progress, skipping this cycle...', {
       timestamp: new Date().toISOString(),
       duration: `${Date.now() - startTime}ms`
     });
+    distributedLock.release('sync_operation', lockId);
     return { success: false, message: 'Sync already in progress' };
   }
   
@@ -469,6 +485,12 @@ async function runSync() {
     return { success: false, message: 'Sync failed', error: error.message };
   } finally {
     isSyncing = false;
+    
+    // 🔓 Освобождаем распределенную блокировку
+    if (lockId) {
+      distributedLock.release('sync_operation', lockId);
+    }
+    
     const totalDuration = Date.now() - startTime;
     logger.info('🔓 Sync lock released', {
       totalDuration: `${totalDuration}ms`,
@@ -578,6 +600,9 @@ app.get('/health', async (_req, res) => {
         purchases: purchaseCache.size(),
         processedPurchases: purchaseCache.processedPurchaseIds.size,
         duplicateChecker: duplicateChecker.getStats()
+      },
+      locks: {
+        distributed: distributedLock.getStats()
       },
       alerts: {
         cooldowns: alertCooldown.getStats(),
@@ -1107,6 +1132,35 @@ app.get('/api/duplicate-checker/stats', (req, res) => {
       success: false,
       error: error.message
     });
+  }
+});
+
+// Distributed lock management endpoints
+app.get('/api/distributed-locks/stats', (req, res) => {
+  try {
+    const stats = distributedLock.getStats();
+    res.json({
+      success: true,
+      message: 'Distributed lock statistics',
+      ...stats
+    });
+  } catch (error) {
+    logger.error('Error getting distributed lock stats', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/distributed-locks/cleanup', (req, res) => {
+  try {
+    const cleaned = distributedLock.cleanup();
+    res.json({
+      success: true,
+      message: `Cleaned ${cleaned} stale locks`,
+      cleaned
+    });
+  } catch (error) {
+    logger.error('Error cleaning distributed locks', error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
@@ -2092,7 +2146,23 @@ app.post('/api/sync-payments', async (req, res) => {
       const customerId = customer?.id;
       if (!customerId) continue;
       
-      // Ищем существующую группу для этого клиента в течение 3 часов
+      // 🔒 Получаем блокировку для этого клиента
+      let customerLockId = null;
+      try {
+        customerLockId = await distributedLock.acquire(`customer_${customerId}`, 5, 100);
+        logger.debug(`🔒 Customer lock acquired for ${customerId}`, { customerLockId });
+      } catch (error) {
+        logger.warn(`⚠️ Failed to acquire customer lock for ${customerId}, skipping payment ${payment.id}`, {
+          error: error.message,
+          customerId,
+          paymentId: payment.id
+        });
+        results.duplicatesAvoided++;
+        continue;
+      }
+      
+      try {
+        // Ищем существующую группу для этого клиента в течение 3 часов
       let foundGroup = null;
       const threeHoursInSeconds = 3 * 60 * 60; // 3 часа в секундах
       
@@ -2121,6 +2191,13 @@ app.post('/api/sync-payments', async (req, res) => {
           firstPayment: payment
         });
         logger.info(`Created new group: ${payment.id} - $${(payment.amount / 100).toFixed(2)}`);
+      }
+      } finally {
+        // 🔓 Освобождаем блокировку клиента
+        if (customerLockId) {
+          distributedLock.release(`customer_${customerId}`, customerLockId);
+          logger.debug(`🔓 Customer lock released for ${customerId}`, { customerLockId });
+        }
       }
     }
     

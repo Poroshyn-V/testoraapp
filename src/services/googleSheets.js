@@ -3,6 +3,7 @@ import { JWT } from 'google-auth-library';
 import { ENV } from '../config/env.js';
 import { logInfo, logError } from '../utils/logging.js';
 import { getCachedSheetsData } from '../utils/cache.js';
+import { distributedLock } from './distributedLock.js';
 
 // Google Sheets service
 class GoogleSheetsService {
@@ -332,6 +333,60 @@ class GoogleSheetsService {
   async getCustomer(customerId) {
     const rows = await this.findRows({ 'Customer ID': customerId });
     return rows.length > 0 ? rows[0] : null;
+  }
+
+  // Add row if not exists with distributed lock protection
+  async addRowIfNotExists(data, uniqueField = 'Customer ID') {
+    const uniqueValue = data[uniqueField];
+    const lockKey = `sheet_add_${uniqueField}_${uniqueValue}`;
+    let lockId = null;
+    
+    try {
+      // 🔒 Получаем эксклюзивную блокировку
+      lockId = await distributedLock.acquire(lockKey);
+      
+      logInfo(`Checking if row exists (with lock): ${uniqueField}=${uniqueValue}`);
+      
+      // Проверяем существование внутри блокировки
+      const existing = await this.findRows({ [uniqueField]: uniqueValue });
+      
+      if (existing.length > 0) {
+        logInfo(`Row already exists for ${uniqueField}=${uniqueValue}`, {
+          rowCount: existing.length,
+          rowNumber: existing[0].rowNumber
+        });
+        
+        return {
+          success: false,
+          exists: true,
+          action: 'skipped',
+          row: existing[0]
+        };
+      }
+      
+      // Добавляем строку (всё ещё держим блокировку)
+      logInfo(`Adding new row: ${uniqueField}=${uniqueValue}`);
+      const newRow = await this.addRow(data);
+      
+      // Маленькая задержка для надёжности
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      return {
+        success: true,
+        exists: false,
+        action: 'added',
+        row: newRow
+      };
+      
+    } catch (error) {
+      logError(`Error in addRowIfNotExists for ${uniqueField}=${uniqueValue}`, error);
+      throw error;
+    } finally {
+      // 🔓 ВСЕГДА освобождаем блокировку
+      if (lockId) {
+        distributedLock.release(lockKey, lockId);
+      }
+    }
   }
 }
 
