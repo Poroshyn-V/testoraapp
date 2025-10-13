@@ -27,6 +27,71 @@ const sentAlerts = {
   weeklyReport: new Set()
 };
 
+// Clean old alert records to prevent memory leaks
+function cleanOldAlerts() {
+  const now = new Date();
+  const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+  const today = utcPlus1.toISOString().split('T')[0];
+  const yesterday = new Date(utcPlus1);
+  yesterday.setDate(utcPlus1.getDate() - 1);
+  const yesterdayStr = yesterday.toISOString().split('T')[0];
+  
+  logger.info('🧹 Cleaning old alert records...', {
+    before: {
+      dailyStats: sentAlerts.dailyStats.size,
+      creativeAlert: sentAlerts.creativeAlert.size,
+      weeklyReport: sentAlerts.weeklyReport.size
+    },
+    timestamp: new Date().toISOString()
+  });
+  
+  // Clean daily stats - keep only today and yesterday
+  const oldDailyStats = sentAlerts.dailyStats.size;
+  sentAlerts.dailyStats = new Set(
+    Array.from(sentAlerts.dailyStats).filter(date => 
+      date >= yesterdayStr
+    )
+  );
+  
+  // Clean creative alerts - keep only today and yesterday
+  const oldCreativeAlerts = sentAlerts.creativeAlert.size;
+  sentAlerts.creativeAlert = new Set(
+    Array.from(sentAlerts.creativeAlert).filter(alertKey => {
+      const date = alertKey.split('_')[0];
+      return date >= yesterdayStr;
+    })
+  );
+  
+  // Clean weekly reports - keep only last 2 weeks
+  const twoWeeksAgo = new Date(utcPlus1);
+  twoWeeksAgo.setDate(utcPlus1.getDate() - 14);
+  const twoWeeksAgoStr = twoWeeksAgo.toISOString().split('T')[0];
+  
+  const oldWeeklyReports = sentAlerts.weeklyReport.size;
+  sentAlerts.weeklyReport = new Set(
+    Array.from(sentAlerts.weeklyReport).filter(date => 
+      date >= twoWeeksAgoStr
+    )
+  );
+  
+  const cleaned = {
+    dailyStats: oldDailyStats - sentAlerts.dailyStats.size,
+    creativeAlert: oldCreativeAlerts - sentAlerts.creativeAlert.size,
+    weeklyReport: oldWeeklyReports - sentAlerts.weeklyReport.size
+  };
+  
+  logger.info('✅ Alert records cleaned', {
+    after: {
+      dailyStats: sentAlerts.dailyStats.size,
+      creativeAlert: sentAlerts.creativeAlert.size,
+      weeklyReport: sentAlerts.weeklyReport.size
+    },
+    cleaned: cleaned,
+    totalCleaned: cleaned.dailyStats + cleaned.creativeAlert + cleaned.weeklyReport,
+    timestamp: new Date().toISOString()
+  });
+}
+
 // Retry logic for external APIs
 async function fetchWithRetry(fn, retries = 3, delay = 1000) {
   const startTime = Date.now();
@@ -166,7 +231,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/load-existing', '/api/check-duplicates', '/auto-sync', '/ping', '/health']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/auto-sync', '/ping', '/health']
 }));
 
 // Health check
@@ -326,6 +391,29 @@ app.get('/api/sync-status', (req, res) => {
     status: isSyncing ? 'in_progress' : 'idle',
     timestamp: new Date().toISOString()
   });
+});
+
+// Clean old alerts endpoint
+app.post('/api/clean-alerts', (req, res) => {
+  try {
+    cleanOldAlerts();
+    res.json({
+      success: true,
+      message: 'Old alert records cleaned successfully',
+      currentSizes: {
+        dailyStats: sentAlerts.dailyStats.size,
+        creativeAlert: sentAlerts.creativeAlert.size,
+        weeklyReport: sentAlerts.weeklyReport.size
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Error cleaning alerts', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
 });
 
 // Metrics endpoint
@@ -1523,6 +1611,12 @@ app.listen(ENV.PORT, () => {
     scheduleDailyStats();
     scheduleCreativeAlert();
     
+    // Start automatic alert cleanup (every 24 hours)
+    setInterval(cleanOldAlerts, 24 * 60 * 60 * 1000);
+    
+    // Run initial cleanup after 10 seconds
+    setTimeout(cleanOldAlerts, 10000);
+    
     console.log('🤖 AUTOMATIC SYSTEM ENABLED:');
     console.log('   ✅ Checks Stripe every 5 minutes');
     console.log('   ✅ Adds new purchases to Google Sheets');
@@ -1531,6 +1625,7 @@ app.listen(ENV.PORT, () => {
     console.log('   ✅ Daily stats every morning at 7:00 UTC+1');
     console.log('   ✅ Creative alerts at 10:00 and 22:00 UTC+1');
     console.log('   ✅ Weekly reports every Monday at 9 AM UTC+1');
+    console.log('   ✅ Automatic memory cleanup every 24 hours');
     console.log('   ✅ Works WITHOUT manual intervention');
   } else {
     console.log('⏸️ Automatic sync is DISABLED (AUTO_SYNC_DISABLED=true)');
