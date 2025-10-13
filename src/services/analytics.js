@@ -482,6 +482,84 @@ export class AnalyticsService {
     }
   }
   
+  // Generate anomaly check (restored from old working version)
+  async generateAnomalyCheck() {
+    try {
+      logInfo('🚨 Проверяю аномалии в продажах...');
+      
+      const rows = await googleSheets.getAllRows();
+      
+      const now = new Date();
+      const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+      
+      // Анализируем последние 2 часа
+      const twoHoursAgo = new Date(utcPlus1.getTime() - 2 * 60 * 60 * 1000);
+      const recentPurchases = rows.filter(row => {
+        const createdLocal = row.get('Created Local (UTC+1)') || '';
+        const purchaseDate = new Date(createdLocal);
+        return purchaseDate >= twoHoursAgo;
+      });
+      
+      // Анализируем тот же период вчера
+      const yesterdayStart = new Date(utcPlus1);
+      yesterdayStart.setDate(utcPlus1.getDate() - 1);
+      yesterdayStart.setHours(utcPlus1.getHours() - 2, 0, 0, 0);
+      
+      const yesterdayEnd = new Date(yesterdayStart);
+      yesterdayEnd.setHours(yesterdayStart.getHours() + 2, 0, 0, 0);
+      
+      const yesterdayPurchases = rows.filter(row => {
+        const createdLocal = row.get('Created Local (UTC+1)') || '';
+        const purchaseDate = new Date(createdLocal);
+        return purchaseDate >= yesterdayStart && purchaseDate <= yesterdayEnd;
+      });
+      
+      logInfo(`📊 Последние 2 часа: ${recentPurchases.length} покупок`);
+      logInfo(`📊 Вчера в то же время: ${yesterdayPurchases.length} покупок`);
+      
+      if (yesterdayPurchases.length === 0) {
+        logInfo('📭 Нет данных за вчера - пропускаю проверку аномалий');
+        return null;
+      }
+      
+      // Рассчитываем изменение
+      const changePercent = ((recentPurchases.length - yesterdayPurchases.length) / yesterdayPurchases.length * 100);
+      const isSignificantDrop = changePercent <= -50; // Падение на 50% или больше
+      const isSignificantSpike = changePercent >= 100; // Рост на 100% или больше
+      
+      if (isSignificantDrop || isSignificantSpike) {
+        const alertType = isSignificantDrop ? '🚨 SALES DROP ALERT!' : '📈 SALES SPIKE ALERT!';
+        const emoji = isSignificantDrop ? '⚠️' : '🚀';
+        const direction = isSignificantDrop ? 'dropped' : 'spiked';
+        
+        const timeStr = utcPlus1.toLocaleTimeString('ru-RU', { 
+          timeZone: 'Europe/Berlin',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+        
+        const alertText = `${alertType}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${emoji} Sales ${direction} ${Math.abs(changePercent).toFixed(1)}% in last 2 hours
+📊 Current: ${recentPurchases.length} sales vs ${yesterdayPurchases.length} yesterday
+🕐 Time: ${timeStr} UTC+1
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${isSignificantDrop ? '🔍 Check your campaigns!' : '🎉 Great performance!'}`;
+        
+        logInfo('📤 Отправляю алерт об аномалии:', { alertText });
+        
+        return alertText;
+      } else {
+        logInfo(`📊 Продажи в норме: ${changePercent.toFixed(1)}% изменение`);
+        return null;
+      }
+      
+    } catch (error) {
+      logError('Error checking sales anomalies', error);
+      throw error;
+    }
+  }
+  
   // Generate creative alert
   async generateCreativeAlert() {
     try {

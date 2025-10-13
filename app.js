@@ -645,6 +645,33 @@ app.get('/api/daily-stats', async (req, res) => {
   }
 });
 
+// Anomaly check endpoint
+app.get('/api/anomaly-check', async (req, res) => {
+  try {
+    const alert = await analytics.generateAnomalyCheck();
+    
+    if (alert) {
+      await sendTextNotifications(alert);
+      res.json({
+        success: true,
+        message: 'Anomaly alert sent successfully'
+      });
+    } else {
+      res.json({
+        success: true,
+        message: 'No anomalies detected'
+      });
+    }
+  } catch (error) {
+    logger.error('Error checking anomalies', error);
+    res.status(500).json({
+      success: false,
+      message: 'Anomaly check failed',
+      error: error.message
+    });
+  }
+});
+
 // Creative alert endpoint
 app.get('/api/creative-alert', async (req, res) => {
   try {
