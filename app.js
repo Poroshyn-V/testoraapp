@@ -309,7 +309,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/auto-sync', '/ping', '/health']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/api/alerts/dashboard', '/auto-sync', '/ping', '/health']
 }));
 
 // Health check
@@ -1498,6 +1498,53 @@ app.get('/api/alerts/history', (req, res) => {
     total: filtered.length,
     history: filtered.slice(0, limit)
   });
+});
+
+// Alert dashboard endpoint
+app.get('/api/alerts/dashboard', async (req, res) => {
+  try {
+    const now = new Date();
+    const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+    const today = utcPlus1.toISOString().split('T')[0];
+    const currentHour = utcPlus1.getUTCHours();
+    
+    // Какие алерты уже отправлены сегодня
+    const alertStatus = {
+      today: today,
+      currentTime: utcPlus1.toISOString(),
+      sentToday: {
+        dailyStats: sentAlerts.dailyStats.has(today),
+        creativeAlertMorning: sentAlerts.creativeAlert.has(`${today}_10`),
+        creativeAlertEvening: sentAlerts.creativeAlert.has(`${today}_22`),
+        geoAlerts: Array.from(sentAlerts.dailyStats).filter(d => d === today).length
+      },
+      upcoming: {
+        nextDailyStats: currentHour < 7 ? 'Today at 7:00 UTC+1' : 'Tomorrow at 7:00 UTC+1',
+        nextCreativeAlert: currentHour < 10 ? 'Today at 10:00 UTC+1' : 
+                          currentHour < 22 ? 'Today at 22:00 UTC+1' : 
+                          'Tomorrow at 10:00 UTC+1',
+        nextWeeklyReport: 'Next Monday at 9:00 UTC+1'
+      },
+      memoryStatus: {
+        dailyStatsCache: sentAlerts.dailyStats.size,
+        creativeAlertCache: sentAlerts.creativeAlert.size,
+        weeklyReportCache: sentAlerts.weeklyReport.size
+      }
+    };
+    
+    res.json({
+      success: true,
+      message: 'Alert dashboard status',
+      ...alertStatus
+    });
+    
+  } catch (error) {
+    logger.error('Error getting alert dashboard', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
 });
 
 // Last purchases endpoint
