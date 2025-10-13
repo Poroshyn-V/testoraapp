@@ -11,6 +11,7 @@ import googleSheets from './src/services/googleSheets.js';
 import { analytics } from './src/services/analytics.js';
 import { smartAlerts } from './src/services/smartAlerts.js';
 import { alertConfig } from './src/config/alertConfig.js';
+import { alertCooldown } from './src/utils/alertCooldown.js';
 import { formatPaymentForSheets, formatTelegramNotification } from './src/utils/formatting.js';
 import { validateEmail, validateCustomerId, validatePaymentId, validateAmount } from './src/utils/validation.js';
 import { purchaseCache } from './src/services/purchaseCache.js';
@@ -54,6 +55,32 @@ let alertCleanupInterval = null;
 
 // Helper function for sending purchase notifications with metrics
 async function sendPurchaseNotification(payment, customer, sheetData, type) {
+  const amount = parseFloat(sheetData['Total Amount'] || 0);
+  
+  // VIP purchase alert
+  if (amount >= alertConfig.vipPurchaseThreshold) {
+    const alertType = `vip_${customer.id}`;
+    
+    if (alertCooldown.canSend(alertType, alertConfig.cooldownMinutes.vip)) {
+      const vipAlert = `💎 VIP PURCHASE ALERT!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 Amount: $${amount.toFixed(2)}
+👤 Customer: ${customer.email || 'N/A'}
+🆔 ID: ${customer.id}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🎉 High-value customer detected!`;
+      
+      await sendTextNotifications(vipAlert);
+      alertCooldown.markSent(alertType);
+      saveAlertHistory('vip_purchase', 'sent', vipAlert, { 
+        amount, 
+        customerId: customer.id,
+        customerEmail: customer.email 
+      });
+    }
+  }
+  
+  // Regular notification
   try {
     await sendNotifications(payment, customer, sheetData);
     metrics.increment('notification_sent', 1, { type });
@@ -311,7 +338,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/smart-alerts', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/api/alerts/dashboard', '/auto-sync', '/ping', '/health']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/smart-alerts', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/api/alerts/dashboard', '/api/alerts/cooldown-stats', '/auto-sync', '/ping', '/health']
 }));
 
 // Health check
@@ -1566,6 +1593,28 @@ app.get('/api/smart-alerts', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Smart alerts failed',
+      error: error.message
+    });
+  }
+});
+
+// Alert cooldown stats endpoint
+app.get('/api/alerts/cooldown-stats', (req, res) => {
+  try {
+    const stats = alertCooldown.getStats();
+    
+    res.json({
+      success: true,
+      message: 'Alert cooldown statistics',
+      stats,
+      config: {
+        cooldownMinutes: alertConfig.cooldownMinutes
+      }
+    });
+  } catch (error) {
+    logger.error('Error getting cooldown stats', error);
+    res.status(500).json({
+      success: false,
       error: error.message
     });
   }
