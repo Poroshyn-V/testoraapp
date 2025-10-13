@@ -727,7 +727,10 @@ app.get('/api/check-duplicates', async (req, res) => {
 // Fix duplicates endpoint
 app.post('/api/fix-duplicates', async (req, res) => {
   try {
-    logger.info('🔧 Starting duplicate fix...');
+    logger.info('🔧 Starting aggressive duplicate fix...');
+    
+    // Clear Google Sheets cache first
+    await googleSheets.clearCache();
     
     const rows = await googleSheets.getAllRows();
     const customerGroups = new Map();
@@ -771,16 +774,20 @@ app.post('/api/fix-duplicates', async (req, res) => {
           paymentIdsAll.push(p.id);
         }
         
-        // Keep the first row, delete the rest
+        // Sort rows by row number to keep the first one
+        customerRows.sort((a, b) => a.rowNumber - b.rowNumber);
         const keepRow = customerRows[0];
         const deleteRows = customerRows.slice(1);
         
-        // Delete duplicate rows
+        // Delete duplicate rows (in reverse order to avoid row number shifts)
+        deleteRows.sort((a, b) => b.rowNumber - a.rowNumber);
         for (const row of deleteRows) {
           try {
             await fetchWithRetry(() => row.delete());
             deletedCount++;
             logger.info(`Deleted duplicate row ${row.rowNumber} for customer ${customerId}`);
+            // Small delay to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 100));
           } catch (error) {
             logger.warn(`Could not delete row ${row.rowNumber}:`, error.message);
           }
@@ -802,6 +809,9 @@ app.post('/api/fix-duplicates', async (req, res) => {
         }
       }
     }
+    
+    // Clear cache again after all operations
+    await googleSheets.clearCache();
     
     logger.info(`Fixed ${fixedCount} customers, deleted ${deletedCount} duplicate rows`);
     
