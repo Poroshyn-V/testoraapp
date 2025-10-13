@@ -115,6 +115,190 @@ class GoogleSheetsService {
     }
   }
 
+  // Batch update multiple rows efficiently
+  async batchUpdate(updates) {
+    if (!updates || updates.length === 0) {
+      logInfo('No updates to perform');
+      return [];
+    }
+
+    await this.initialize();
+    
+    const startTime = Date.now();
+    const batchSize = 10; // Process in batches to avoid API limits
+    const results = [];
+    
+    try {
+      logInfo('Starting batch update', { 
+        totalUpdates: updates.length,
+        batchSize: batchSize
+      });
+
+      // Process updates in batches
+      for (let i = 0; i < updates.length; i += batchSize) {
+        const batch = updates.slice(i, i + batchSize);
+        const batchNumber = Math.floor(i / batchSize) + 1;
+        const totalBatches = Math.ceil(updates.length / batchSize);
+        
+        logInfo(`Processing batch ${batchNumber}/${totalBatches}`, {
+          batchSize: batch.length,
+          startIndex: i,
+          endIndex: i + batch.length - 1
+        });
+
+        // Process batch updates
+        const batchPromises = batch.map(async ({ row, data }) => {
+          try {
+            // Update row data
+            Object.entries(data).forEach(([key, value]) => {
+              row.set(key, value);
+            });
+            
+            await row.save();
+            
+            return {
+              success: true,
+              rowNumber: row.rowNumber,
+              data: Object.keys(data)
+            };
+          } catch (error) {
+            logError('Failed to update row in batch', error, {
+              rowNumber: row.rowNumber,
+              data: Object.keys(data)
+            });
+            
+            return {
+              success: false,
+              rowNumber: row.rowNumber,
+              error: error.message,
+              data: Object.keys(data)
+            };
+          }
+        });
+
+        const batchResults = await Promise.all(batchPromises);
+        results.push(...batchResults);
+
+        // Add delay between batches to respect API limits
+        if (i + batchSize < updates.length) {
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+      }
+
+      const duration = Date.now() - startTime;
+      const successCount = results.filter(r => r.success).length;
+      const failureCount = results.filter(r => !r.success).length;
+
+      logInfo('Batch update completed', {
+        totalUpdates: updates.length,
+        successCount: successCount,
+        failureCount: failureCount,
+        duration: `${duration}ms`,
+        durationSeconds: Math.round(duration / 1000),
+        avgTimePerUpdate: Math.round(duration / updates.length)
+      });
+
+      return results;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      logError('Batch update failed', error, {
+        totalUpdates: updates.length,
+        duration: `${duration}ms`
+      });
+      throw error;
+    }
+  }
+
+  // Batch add multiple rows efficiently
+  async batchAdd(rowsData) {
+    if (!rowsData || rowsData.length === 0) {
+      logInfo('No rows to add');
+      return [];
+    }
+
+    await this.initialize();
+    
+    const startTime = Date.now();
+    const batchSize = 10; // Process in batches to avoid API limits
+    const results = [];
+    
+    try {
+      logInfo('Starting batch add', { 
+        totalRows: rowsData.length,
+        batchSize: batchSize
+      });
+
+      // Process adds in batches
+      for (let i = 0; i < rowsData.length; i += batchSize) {
+        const batch = rowsData.slice(i, i + batchSize);
+        const batchNumber = Math.floor(i / batchSize) + 1;
+        const totalBatches = Math.ceil(rowsData.length / batchSize);
+        
+        logInfo(`Processing add batch ${batchNumber}/${totalBatches}`, {
+          batchSize: batch.length,
+          startIndex: i,
+          endIndex: i + batch.length - 1
+        });
+
+        // Process batch adds
+        const batchPromises = batch.map(async (rowData) => {
+          try {
+            // Add delay to avoid API limits
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+            const newRow = await this.sheet.addRow(rowData);
+            
+            return {
+              success: true,
+              rowNumber: newRow.rowNumber,
+              data: Object.keys(rowData)
+            };
+          } catch (error) {
+            logError('Failed to add row in batch', error, {
+              data: Object.keys(rowData)
+            });
+            
+            return {
+              success: false,
+              error: error.message,
+              data: Object.keys(rowData)
+            };
+          }
+        });
+
+        const batchResults = await Promise.all(batchPromises);
+        results.push(...batchResults);
+
+        // Add delay between batches to respect API limits
+        if (i + batchSize < rowsData.length) {
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+      }
+
+      const duration = Date.now() - startTime;
+      const successCount = results.filter(r => r.success).length;
+      const failureCount = results.filter(r => !r.success).length;
+
+      logInfo('Batch add completed', {
+        totalRows: rowsData.length,
+        successCount: successCount,
+        failureCount: failureCount,
+        duration: `${duration}ms`,
+        durationSeconds: Math.round(duration / 1000),
+        avgTimePerRow: Math.round(duration / rowsData.length)
+      });
+
+      return results;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      logError('Batch add failed', error, {
+        totalRows: rowsData.length,
+        duration: `${duration}ms`
+      });
+      throw error;
+    }
+  }
+
   // Find rows by criteria
   async findRows(criteria) {
     const rows = await this.getAllRows();

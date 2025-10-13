@@ -231,7 +231,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/auto-sync', '/ping', '/health']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/auto-sync', '/ping', '/health']
 }));
 
 // Health check
@@ -521,6 +521,10 @@ app.post('/api/full-resync', async (req, res) => {
       customerMap.get(customerId).push(row);
     }
     
+    // Collect all updates for batch processing
+    const batchUpdates = [];
+    const rowsToDelete = [];
+    
     // Process each customer
     for (const [customerId, customerRows] of customerMap) {
       try {
@@ -547,40 +551,66 @@ app.post('/api/full-resync', async (req, res) => {
           paymentIdsAll.push(p.id);
         }
         
-        // Delete all duplicate rows (keep only the first one)
+        // Mark duplicate rows for deletion (keep only the first one)
         if (customerRows.length > 1) {
           for (let i = 1; i < customerRows.length; i++) {
-            try {
-              await fetchWithRetry(() => customerRows[i].delete());
-              fixedCount++;
-            } catch (error) {
-              logger.warn(`Could not delete duplicate row:`, error.message);
-            }
+            rowsToDelete.push(customerRows[i]);
+            fixedCount++;
           }
         }
         
-        // Get fresh row data after deleting duplicates
+        // Get fresh row data after marking duplicates for deletion
         const freshCustomers = await fetchWithRetry(() => googleSheets.findRows({ 'Customer ID': customerId }));
         if (freshCustomers.length === 0) continue;
         
         const freshCustomer = freshCustomers[0];
         
-        // Update with correct totals
-        await fetchWithRetry(() => googleSheets.updateRow(freshCustomer, {
-          'Purchase ID': `purchase_${customerId}`,
-          'Total Amount': (totalAmountAll / 100).toFixed(2),
-          'Payment Count': paymentCountAll.toString(),
-          'Payment Intent IDs': paymentIdsAll.join(', ')
-        }));
+        // Add to batch updates
+        batchUpdates.push({
+          row: freshCustomer,
+          data: {
+            'Purchase ID': `purchase_${customerId}`,
+            'Total Amount': (totalAmountAll / 100).toFixed(2),
+            'Payment Count': paymentCountAll.toString(),
+            'Payment Intent IDs': paymentIdsAll.join(', ')
+          }
+        });
         
         processedCount++;
-        
-        // Small delay to avoid rate limits
-        await new Promise(resolve => setTimeout(resolve, 100));
         
       } catch (error) {
         logger.error(`Error processing customer ${customerId}:`, error);
       }
+    }
+    
+    // Execute batch operations
+    logger.info('Executing batch operations', {
+      updates: batchUpdates.length,
+      deletions: rowsToDelete.length
+    });
+    
+    // Batch delete duplicate rows
+    if (rowsToDelete.length > 0) {
+      const deletePromises = rowsToDelete.map(row => 
+        fetchWithRetry(() => row.delete()).catch(error => {
+          logger.warn(`Could not delete duplicate row:`, error.message);
+          return { success: false, error: error.message };
+        })
+      );
+      await Promise.all(deletePromises);
+    }
+    
+    // Batch update all rows
+    if (batchUpdates.length > 0) {
+      const updateResults = await fetchWithRetry(() => googleSheets.batchUpdate(batchUpdates));
+      const successCount = updateResults.filter(r => r.success).length;
+      const failureCount = updateResults.filter(r => !r.success).length;
+      
+      logger.info('Batch update results', {
+        total: batchUpdates.length,
+        success: successCount,
+        failures: failureCount
+      });
     }
     
     const duration = Date.now() - startTime;
@@ -634,21 +664,41 @@ app.post('/api/clean-duplicates', async (req, res) => {
       customerMap.get(customerId).push(row);
     }
     
-    // Remove duplicates for each customer
+    // Collect all duplicate rows for batch deletion
+    const rowsToDelete = [];
+    
     for (const [customerId, customerRows] of customerMap) {
       if (customerRows.length > 1) {
         logger.info(`Found ${customerRows.length} duplicates for customer ${customerId}`);
         
-        // Keep the first row, delete the rest
+        // Keep the first row, mark the rest for deletion
         for (let i = 1; i < customerRows.length; i++) {
-          try {
-            await fetchWithRetry(() => customerRows[i].delete());
-            duplicatesRemoved++;
-          } catch (error) {
-            logger.warn(`Could not delete row ${i} for customer ${customerId}:`, error.message);
-          }
+          rowsToDelete.push(customerRows[i]);
+          duplicatesRemoved++;
         }
       }
+    }
+    
+    // Batch delete all duplicate rows
+    if (rowsToDelete.length > 0) {
+      logger.info(`Batch deleting ${rowsToDelete.length} duplicate rows`);
+      
+      const deletePromises = rowsToDelete.map(row => 
+        fetchWithRetry(() => row.delete()).catch(error => {
+          logger.warn(`Could not delete duplicate row:`, error.message);
+          return { success: false, error: error.message };
+        })
+      );
+      
+      const deleteResults = await Promise.all(deletePromises);
+      const successCount = deleteResults.filter(r => r.success).length;
+      const failureCount = deleteResults.filter(r => !r.success).length;
+      
+      logger.info('Batch delete results', {
+        total: rowsToDelete.length,
+        success: successCount,
+        failures: failureCount
+      });
     }
     
     res.json({
@@ -724,19 +774,44 @@ app.post('/api/remove-test-data', async (req, res) => {
     const rows = await googleSheets.getAllRows();
     let removedCount = 0;
     
+    // Collect test rows for batch deletion
+    const testRowsToDelete = [];
+    
     for (const row of rows) {
       const customerId = row.get('Customer ID');
       const email = row.get('Email');
       
-      // Remove test data
+      // Mark test data for removal
       if (customerId === 'cus_test_123456789' || 
           email === 'test@example.com' ||
           customerId?.includes('test') ||
           email?.includes('test@')) {
-        await fetchWithRetry(() => row.delete());
+        testRowsToDelete.push(row);
         removedCount++;
-        logger.info(`Removed test row: ${customerId} - ${email}`);
+        logger.info(`Marked test row for deletion: ${customerId} - ${email}`);
       }
+    }
+    
+    // Batch delete all test rows
+    if (testRowsToDelete.length > 0) {
+      logger.info(`Batch deleting ${testRowsToDelete.length} test rows`);
+      
+      const deletePromises = testRowsToDelete.map(row => 
+        fetchWithRetry(() => row.delete()).catch(error => {
+          logger.warn(`Could not delete test row:`, error.message);
+          return { success: false, error: error.message };
+        })
+      );
+      
+      const deleteResults = await Promise.all(deletePromises);
+      const successCount = deleteResults.filter(r => r.success).length;
+      const failureCount = deleteResults.filter(r => !r.success).length;
+      
+      logger.info('Batch delete test data results', {
+        total: testRowsToDelete.length,
+        success: successCount,
+        failures: failureCount
+      });
     }
     
     res.json({
@@ -762,6 +837,68 @@ app.post('/api/test-notifications', async (req, res) => {
     message: 'Test notifications disabled to prevent spam',
     timestamp: new Date().toISOString()
   });
+});
+
+// Test batch operations endpoint
+app.post('/api/test-batch-operations', async (req, res) => {
+  try {
+    logger.info('Testing batch operations...');
+    
+    // Get a few rows for testing
+    const rows = await googleSheets.getAllRows();
+    const testRows = rows.slice(0, 3); // Take first 3 rows for testing
+    
+    if (testRows.length === 0) {
+      return res.json({
+        success: false,
+        message: 'No rows available for testing batch operations'
+      });
+    }
+    
+    // Test batch update
+    const batchUpdates = testRows.map((row, index) => ({
+      row: row,
+      data: {
+        'Test Field': `Batch Update ${index + 1}`,
+        'Test Timestamp': new Date().toISOString()
+      }
+    }));
+    
+    const startTime = Date.now();
+    const updateResults = await googleSheets.batchUpdate(batchUpdates);
+    const duration = Date.now() - startTime;
+    
+    const successCount = updateResults.filter(r => r.success).length;
+    const failureCount = updateResults.filter(r => !r.success).length;
+    
+    logger.info('Batch operations test completed', {
+      totalUpdates: batchUpdates.length,
+      successCount: successCount,
+      failureCount: failureCount,
+      duration: `${duration}ms`
+    });
+    
+    res.json({
+      success: true,
+      message: 'Batch operations test completed',
+      results: {
+        totalUpdates: batchUpdates.length,
+        successCount: successCount,
+        failureCount: failureCount,
+        duration: `${duration}ms`,
+        avgTimePerUpdate: Math.round(duration / batchUpdates.length)
+      },
+      updateResults: updateResults
+    });
+    
+  } catch (error) {
+    logger.error('Error testing batch operations', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error testing batch operations',
+      error: error.message
+    });
+  }
 });
 
 // Sync payments endpoint - SIMPLIFIED AND RELIABLE
@@ -1241,6 +1378,7 @@ app.post('/api/fix-sheets-data', async (req, res) => {
     logger.info(`Found ${rows.length} rows to check`);
     
     let fixedCount = 0;
+    const batchUpdates = [];
     
     for (const row of rows) {
       const customerId = row.get('Customer ID');
@@ -1289,25 +1427,41 @@ app.post('/api/fix-sheets-data', async (req, res) => {
         (currentCreativeLink === 'N/A' && newCreativeLink !== 'N/A');
       
       if (needsUpdate) {
-        logger.info(`Updating data for: ${email}`, {
+        logger.info(`Marking for update: ${email}`, {
           adName: `${currentAdName} → ${newAdName}`,
           adsetName: `${currentAdsetName} → ${newAdsetName}`,
           campaignName: `${currentCampaignName} → ${newCampaignName}`,
           creativeLink: `${currentCreativeLink} → ${newCreativeLink}`
         });
         
-        await fetchWithRetry(() => googleSheets.updateRow(row, {
-          'Ad Name': newAdName,
-          'Adset Name': newAdsetName,
-          'Campaign Name': newCampaignName,
-          'Creative Link': newCreativeLink
-        }));
+        // Add to batch updates
+        batchUpdates.push({
+          row: row,
+          data: {
+            'Ad Name': newAdName,
+            'Adset Name': newAdsetName,
+            'Campaign Name': newCampaignName,
+            'Creative Link': newCreativeLink
+          }
+        });
         
         fixedCount++;
       }
+    }
+    
+    // Execute batch updates
+    if (batchUpdates.length > 0) {
+      logger.info(`Executing batch updates for ${batchUpdates.length} rows`);
       
-      // Small delay to avoid rate limits
-      await new Promise(resolve => setTimeout(resolve, 100));
+      const updateResults = await fetchWithRetry(() => googleSheets.batchUpdate(batchUpdates));
+      const successCount = updateResults.filter(r => r.success).length;
+      const failureCount = updateResults.filter(r => !r.success).length;
+      
+      logger.info('Batch update results', {
+        total: batchUpdates.length,
+        success: successCount,
+        failures: failureCount
+      });
     }
     
     logger.info(`Fix completed! Updated ${fixedCount} rows`);

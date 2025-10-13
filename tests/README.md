@@ -8,6 +8,7 @@ This directory contains unit tests for the Stripe Ops application.
 - `formatting.test.js` - Tests for data formatting functions
 - `purchaseCache.test.js` - Tests for purchase cache service
 - `retry.test.js` - Tests for retry logic
+- `batchOperations.test.js` - Tests for batch update operations
 - `setup.js` - Test setup and mocks
 
 ## Running Tests
@@ -34,6 +35,8 @@ The tests cover critical functions including:
 - Data formatting for Google Sheets and notifications
 - Purchase cache operations
 - Retry logic for external API calls
+- Batch operations for Google Sheets (updates and adds)
+- Performance optimization and rate limiting
 - Error handling and edge cases
 
 ## Mocking
