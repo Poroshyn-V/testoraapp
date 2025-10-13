@@ -18,6 +18,17 @@ const app = express();
 
 // Purchase cache is now managed by purchaseCache service
 
+// Helper function for sending purchase notifications with metrics
+async function sendPurchaseNotification(payment, customer, sheetData, type) {
+  try {
+    await sendNotifications(payment, customer, sheetData);
+    metrics.increment('notification_sent', 1, { type });
+  } catch (error) {
+    metrics.increment('notification_failed', 1, { type, error: error.message });
+    logger.error(`Failed to send ${type} notification`, error);
+  }
+}
+
 // Sync protection flag to prevent overlapping synchronizations
 let isSyncing = false;
 
@@ -1188,13 +1199,7 @@ app.post('/api/sync-payments', async (req, res) => {
           
           const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
           
-          try {
-            await sendNotifications(latestPayment, customer, sheetData);
-            metrics.increment('notification_sent', 1, { type: 'upsell' });
-          } catch (error) {
-            metrics.increment('notification_failed', 1, { type: 'upsell', error: error.message });
-            logger.error('Failed to send upsell notification', error);
-          }
+          await sendPurchaseNotification(latestPayment, customer, sheetData, 'upsell');
         }
         
         // Increment counters for updated customer
@@ -1234,13 +1239,7 @@ app.post('/api/sync-payments', async (req, res) => {
           'Payment Intent IDs': paymentIds.join(', ')
         };
         
-          try {
-            await sendNotifications(firstPayment, customer, sheetData);
-            metrics.increment('notification_sent', 1, { type: 'new_purchase' });
-          } catch (error) {
-            metrics.increment('notification_failed', 1, { type: 'new_purchase', error: error.message });
-            logger.error('Failed to send new purchase notification', error);
-          }
+          await sendPurchaseNotification(firstPayment, customer, sheetData, 'new_purchase');
           
           results.newPurchases++;
           results.processed++;
