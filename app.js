@@ -13,6 +13,7 @@ import { smartAlerts } from './src/services/smartAlerts.js';
 import { alertConfig } from './src/config/alertConfig.js';
 import { alertCooldown } from './src/utils/alertCooldown.js';
 import { performanceMonitor } from './src/services/performanceMonitor.js';
+import { notificationQueue } from './src/services/notificationQueue.js';
 import { formatPaymentForSheets, formatTelegramNotification } from './src/utils/formatting.js';
 import { validateEmail, validateCustomerId, validatePaymentId, validateAmount } from './src/utils/validation.js';
 import { purchaseCache } from './src/services/purchaseCache.js';
@@ -74,7 +75,18 @@ async function sendPurchaseNotification(payment, customer, sheetData, type) {
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🎉 High-value customer detected!`;
       
-      await sendTextNotifications(vipAlert);
+      // Add VIP alert to notification queue
+      await notificationQueue.add({
+        type: 'vip_purchase',
+        channel: 'telegram',
+        message: vipAlert,
+        metadata: { 
+          amount, 
+          customerId: customer.id,
+          customerEmail: customer.email 
+        }
+      });
+      
       alertCooldown.markSent(alertType);
       saveAlertHistory('vip_purchase', 'sent', vipAlert, { 
         amount, 
@@ -84,13 +96,26 @@ async function sendPurchaseNotification(payment, customer, sheetData, type) {
     }
   }
   
-  // Regular notification
+  // Regular notification - add to queue for reliable delivery
   try {
-    await sendNotifications(payment, customer, sheetData);
-    metrics.increment('notification_sent', 1, { type });
+    const notificationMessage = await formatTelegramNotification(payment, customer, sheetData);
+    
+    await notificationQueue.add({
+      type: type,
+      channel: 'telegram',
+      message: notificationMessage,
+      metadata: {
+        paymentId: payment.id,
+        customerId: customer.id,
+        amount: amount
+      }
+    });
+    
+    metrics.increment('notification_queued', 1, { type });
+    
   } catch (error) {
     metrics.increment('notification_failed', 1, { type, error: error.message });
-    logger.error(`Failed to send ${type} notification`, error);
+    logger.error(`Failed to queue ${type} notification`, error);
   }
 }
 
@@ -376,7 +401,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/smart-alerts', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/api/alerts/dashboard', '/api/alerts/cooldown-stats', '/api/performance-stats', '/api/status', '/api/emergency-stop', '/api/emergency-resume', '/auto-sync', '/ping', '/health']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/smart-alerts', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/api/alerts/dashboard', '/api/alerts/cooldown-stats', '/api/performance-stats', '/api/status', '/api/emergency-stop', '/api/emergency-resume', '/api/notification-queue/stats', '/api/notification-queue/clear', '/api/notification-queue/pause', '/api/notification-queue/resume', '/auto-sync', '/ping', '/health']
 }));
 
 // Health check
@@ -425,7 +450,8 @@ app.get('/health', async (_req, res) => {
         historySize: alertHistory.length
       },
       performance: performanceMonitor.getStats(),
-      metrics: metrics.getSummary()
+      metrics: metrics.getSummary(),
+      notificationQueue: notificationQueue.getStats()
     };
     
     const statusCode = allServicesHealthy ? 200 : 503;
@@ -574,6 +600,72 @@ app.post('/api/emergency-resume', (req, res) => {
     message: 'Emergency stop deactivated. Restart server to resume operations.',
     timestamp: new Date().toISOString()
   });
+});
+
+// Notification queue management endpoints
+app.get('/api/notification-queue/stats', (req, res) => {
+  try {
+    const stats = notificationQueue.getStats();
+    res.json({
+      success: true,
+      message: 'Notification queue statistics',
+      ...stats
+    });
+  } catch (error) {
+    logger.error('Error getting notification queue stats', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.post('/api/notification-queue/clear', (req, res) => {
+  try {
+    notificationQueue.clear();
+    res.json({
+      success: true,
+      message: 'Notification queue cleared'
+    });
+  } catch (error) {
+    logger.error('Error clearing notification queue', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.post('/api/notification-queue/pause', (req, res) => {
+  try {
+    notificationQueue.pause();
+    res.json({
+      success: true,
+      message: 'Notification queue processing paused'
+    });
+  } catch (error) {
+    logger.error('Error pausing notification queue', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.post('/api/notification-queue/resume', (req, res) => {
+  try {
+    notificationQueue.resume();
+    res.json({
+      success: true,
+      message: 'Notification queue processing resumed'
+    });
+  } catch (error) {
+    logger.error('Error resuming notification queue', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
 });
 
 // Load existing purchases endpoint
