@@ -18,6 +18,38 @@ const app = express();
 const existingPurchases = new Set();
 const processedPurchaseIds = new Set();
 
+// Load existing purchases from Google Sheets into memory
+async function loadExistingPurchases() {
+  try {
+    logger.info('🔄 Загружаю существующие покупки из Google Sheets...');
+    
+    const rows = await googleSheets.getAllRows();
+    
+    logger.info(`📋 Найдено ${rows.length} строк в Google Sheets`);
+    
+    // Очищаем старое хранилище
+    existingPurchases.clear();
+    
+    // Загружаем все существующие Purchase ID
+    for (const row of rows) {
+      const purchaseId = row.get('Purchase ID') || row.get('purchase_id') || '';
+      if (purchaseId) {
+        existingPurchases.add(purchaseId);
+      } else {
+        logger.warn('⚠️ Пустой Purchase ID в строке:', { rowData: row._rawData });
+      }
+    }
+    
+    logger.info(`✅ Загружено ${existingPurchases.size} существующих покупок в память`);
+    logger.info('📝 Примеры покупок:', { 
+      sample: Array.from(existingPurchases).slice(0, 5) 
+    });
+    
+  } catch (error) {
+    logger.error('❌ Ошибка загрузки существующих покупок:', error);
+  }
+}
+
 // Middleware
 app.use(express.json());
 app.use('/api', rateLimit);
@@ -27,7 +59,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/check-duplicates', '/health', '/webhook/stripe']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/load-existing', '/api/check-duplicates', '/health']
 }));
 
 // Health check
@@ -65,6 +97,25 @@ app.get('/health', async (_req, res) => {
       status: 'error',
       message: 'Health check failed',
       timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Load existing purchases endpoint
+app.get('/api/load-existing', async (req, res) => {
+  try {
+    await loadExistingPurchases();
+    res.json({
+      success: true,
+      message: `Loaded ${existingPurchases.size} existing purchases`,
+      count: existingPurchases.size,
+      purchases: Array.from(existingPurchases).slice(0, 10) // Показываем первые 10
+    });
+  } catch (error) {
+    logger.error('Error loading existing purchases', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
   }
 });
@@ -953,6 +1004,17 @@ app.listen(ENV.PORT, () => {
   console.log(`💾 Cache system: Google Sheets caching enabled`);
   console.log(`📝 Structured logging: JSON format with timestamps`);
   
+  // Load existing purchases on startup
+  setTimeout(async () => {
+    try {
+      console.log('📋 Loading existing purchases...');
+      await loadExistingPurchases();
+      console.log(`✅ Loaded ${existingPurchases.size} existing purchases into memory`);
+    } catch (error) {
+      console.error('❌ Failed to load existing purchases:', error.message);
+    }
+  }, 5000); // Load after 5 seconds
+
   // Start automatic synchronization
   if (!ENV.AUTO_SYNC_DISABLED) {
     console.log('🔄 Starting automatic sync every 5 minutes...');
