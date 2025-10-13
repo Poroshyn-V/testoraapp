@@ -1197,7 +1197,9 @@ app.post('/api/sync-payments', async (req, res) => {
           }
         }
         
-        // Variables moved to results object
+        // Increment counters for updated customer
+        results.updatedPurchases++;
+        results.processed++;
         
       } else {
         // New customer - add to Google Sheets with grouped payments
@@ -1278,7 +1280,7 @@ app.post('/api/sync-payments', async (req, res) => {
     
     res.json({
       success: true,
-      message: `Sync completed! Processed ${results.processed} groups, ${results.failed} failed`,
+      message: `Sync completed! Processed ${results.processed} groups (${results.newPurchases} new, ${results.updatedPurchases} updated), ${results.failed} failed`,
       ...results,
       total_payments: newPayments.length,
       total_groups: groupedPurchases.size,
