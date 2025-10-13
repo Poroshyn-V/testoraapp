@@ -2,14 +2,15 @@ import { logInfo, logError } from '../utils/logging.js';
 import googleSheets from './googleSheets.js';
 import { metrics } from './metrics.js';
 import AlertPriority from './alertPriority.js';
+import { alertConfig } from '../config/alertConfig.js';
 
 // Smart alerts service
 export class SmartAlerts {
   constructor() {
     this.thresholds = {
-      revenue_drop_percent: 30, // Если выручка упала на 30%
-      conversion_drop_percent: 20,
-      payment_failure_rate: 10, // Если 10% платежей падают
+      revenue_drop_percent: alertConfig.revenueDrop,
+      conversion_drop_percent: alertConfig.conversionDrop,
+      payment_failure_rate: alertConfig.paymentFailureRate,
       new_geo_threshold: 5 // Если >5 покупок из новой страны
     };
   }

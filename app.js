@@ -10,6 +10,7 @@ import { sendNotifications, sendTextNotifications } from './src/services/notific
 import googleSheets from './src/services/googleSheets.js';
 import { analytics } from './src/services/analytics.js';
 import { smartAlerts } from './src/services/smartAlerts.js';
+import { alertConfig } from './src/config/alertConfig.js';
 import { formatPaymentForSheets, formatTelegramNotification } from './src/utils/formatting.js';
 import { validateEmail, validateCustomerId, validatePaymentId, validateAmount } from './src/utils/validation.js';
 import { purchaseCache } from './src/services/purchaseCache.js';
@@ -1835,8 +1836,8 @@ async function checkMissedAlerts() {
   const currentHour = utcPlus1.getUTCHours();
   const today = utcPlus1.toISOString().split('T')[0];
   
-  // Проверяем Daily Stats (должен отправиться в 7:00)
-  if (currentHour >= 7 && currentHour < 23 && !sentAlerts.dailyStats.has(today)) {
+  // Проверяем Daily Stats (должен отправиться в настроенное время)
+  if (currentHour >= alertConfig.dailyStatsHour && currentHour < 23 && !sentAlerts.dailyStats.has(today)) {
     logger.info('📊 Sending missed daily stats alert...');
     try {
       const response = await fetch(`http://localhost:${ENV.PORT}/api/daily-stats`, {
@@ -1852,9 +1853,9 @@ async function checkMissedAlerts() {
     }
   }
   
-  // Проверяем Creative Alert (должен отправиться в 10:00 и 22:00)
-  if (currentHour >= 10 && currentHour < 22) {
-    const morning = `${today}_10`;
+  // Проверяем Creative Alert (должен отправиться в настроенное время)
+  if (currentHour >= alertConfig.creativeAlertHours[0] && currentHour < alertConfig.creativeAlertHours[1]) {
+    const morning = `${today}_${alertConfig.creativeAlertHours[0]}`;
     if (!sentAlerts.creativeAlert.has(morning)) {
       logger.info('🎨 Sending missed morning creative alert...');
       try {
@@ -1939,7 +1940,7 @@ app.listen(ENV.PORT, () => {
       } catch (error) {
         console.error('❌ Scheduled sync failed:', error.message);
       }
-    }, 5 * 60 * 1000); // 5 minutes
+    }, alertConfig.syncInterval * 60 * 1000); // Configurable sync interval
     
     // GEO Alert every hour
     const scheduleGeoAlert = () => {
@@ -1957,7 +1958,7 @@ app.listen(ENV.PORT, () => {
         } catch (error) {
           console.error('❌ GEO alert failed:', error.message);
         }
-      }, 60 * 60 * 1000); // 1 hour
+      }, alertConfig.geoAlertInterval * 60 * 60 * 1000); // Configurable GEO alert interval
     };
     
     // Weekly Report every Monday at 9 AM UTC+1 (8 AM UTC)
