@@ -2006,10 +2006,12 @@ async function checkMissedAlerts() {
   const now = new Date();
   const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
   const currentHour = utcPlus1.getUTCHours();
+  const currentMinute = utcPlus1.getUTCMinutes();
   const today = utcPlus1.toISOString().split('T')[0];
   
-  // Проверяем Daily Stats (должен отправиться в настроенное время)
-  if (currentHour >= alertConfig.dailyStatsHour && currentHour < 23 && !sentAlerts.dailyStats.has(today)) {
+  // Проверяем Daily Stats только если мы в правильном временном окне (7:00-7:05 UTC+1)
+  // и только если это не первый запуск в течение дня
+  if (currentHour === alertConfig.dailyStatsHour && currentMinute <= 5 && !sentAlerts.dailyStats.has(today)) {
     logger.info('📊 Sending missed daily stats alert...');
     try {
       const response = await fetch(`http://localhost:${ENV.PORT}/api/daily-stats`, {
@@ -2023,6 +2025,13 @@ async function checkMissedAlerts() {
     } catch (error) {
       logger.error('❌ Failed to send missed daily stats:', error.message);
     }
+  } else if (currentHour > alertConfig.dailyStatsHour && !sentAlerts.dailyStats.has(today)) {
+    // Если уже позже 7:00 и daily stats не отправлен, логируем но не отправляем
+    logger.info('📊 Daily stats already missed for today, will not send late report', {
+      currentHour,
+      dailyStatsHour: alertConfig.dailyStatsHour,
+      today
+    });
   }
   
   // Проверяем Creative Alert (должен отправиться в настроенное время)
@@ -2210,8 +2219,8 @@ app.listen(ENV.PORT, () => {
         const hour = utcPlus1.getUTCHours();
         const minute = utcPlus1.getUTCMinutes();
         
-        // Check for 7:00 UTC+1 (with ±2 minutes tolerance)
-        if (hour === 7 && minute >= 0 && minute <= 2) {
+        // Check for exactly 7:00 UTC+1 (with ±1 minute tolerance)
+        if (hour === alertConfig.dailyStatsHour && minute >= 0 && minute <= 1) {
           const today = utcPlus1.toISOString().split('T')[0];
           if (!sentAlerts.dailyStats.has(today)) {
             try {
@@ -2227,7 +2236,7 @@ app.listen(ENV.PORT, () => {
             }
           }
         }
-      }, 2 * 60 * 1000); // 2 minutes
+      }, 60 * 1000); // Check every minute for more precision
     };
     
     // Creative Alert at 10:00 and 22:00 UTC+1
