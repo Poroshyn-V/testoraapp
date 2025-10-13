@@ -1045,6 +1045,50 @@ app.get('/api/campaigns/list', async (req, res) => {
   }
 });
 
+// Debug endpoint to check UTM Campaign data
+app.get('/api/debug/utm-campaigns', async (req, res) => {
+  try {
+    const rows = await googleSheets.getAllRows();
+    const today = new Date();
+    const utcPlus1 = new Date(today.getTime() + 60 * 60 * 1000);
+    const todayStr = utcPlus1.toISOString().split('T')[0];
+    
+    // Get today's purchases
+    const todayPurchases = rows.filter(row => {
+      const createdLocal = row.get('Created Local (UTC+1)') || '';
+      return createdLocal.startsWith(todayStr);
+    });
+    
+    // Check UTM Campaign values
+    const utmCampaigns = todayPurchases.map(row => ({
+      utmCampaign: row.get('UTM Campaign'),
+      campaignName: row.get('Campaign Name'),
+      email: row.get('Email'),
+      amount: row.get('Total Amount')
+    }));
+    
+    // Get unique values
+    const uniqueUtmCampaigns = [...new Set(utmCampaigns.map(p => p.utmCampaign))];
+    const uniqueCampaignNames = [...new Set(utmCampaigns.map(p => p.campaignName))];
+    
+    res.json({
+      success: true,
+      message: 'UTM Campaign debug data',
+      totalPurchases: todayPurchases.length,
+      uniqueUtmCampaigns,
+      uniqueCampaignNames,
+      sampleData: utmCampaigns.slice(0, 5)
+    });
+    
+  } catch (error) {
+    logger.error('Error in UTM Campaign debug', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Load existing purchases endpoint
 app.get('/api/load-existing', async (req, res) => {
   try {
