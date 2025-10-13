@@ -194,18 +194,6 @@ ${dailyBreakdown.join('\n')}
 }
 
 // Format GEO alert
-export function formatGeoAlert(data) {
-  const { topCountries, totalSales, date } = data;
-  
-  return `🌍 **GEO Alert - ${date}**
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 **Total Sales Today:** ${totalSales}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🏆 **Top Countries:**
-${topCountries.map(([country, count], i) => `${i + 1}. ${country}: ${count} sales`).join('\n')}
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⏰ **Alert generated:** ${new Date().toLocaleString('ru-RU', { timeZone: 'Europe/Berlin' })} UTC+1`;
-}
 
 // Format creative alert
 export function formatCreativeAlert(data) {

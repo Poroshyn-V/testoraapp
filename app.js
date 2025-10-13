@@ -6,7 +6,7 @@ import { rateLimit, getRateLimitStats } from './src/middleware/rateLimit.js';
 import { errorHandler, notFoundHandler } from './src/middleware/errorHandler.js';
 import { getCacheStats } from './src/utils/cache.js';
 import { stripe, getRecentPayments, getCustomerPayments, getCustomer } from './src/services/stripe.js';
-import { sendNotifications } from './src/services/notifications.js';
+import { sendNotifications, sendTextNotifications } from './src/services/notifications.js';
 import googleSheets from './src/services/googleSheets.js';
 import { analytics } from './src/services/analytics.js';
 import { formatPaymentForSheets, formatTelegramNotification } from './src/utils/formatting.js';
@@ -570,7 +570,7 @@ app.get('/api/weekly-report', async (req, res) => {
     const report = await analytics.generateWeeklyReport();
     
     if (report) {
-      await sendNotifications(report);
+      await sendTextNotifications(report);
       res.json({
         success: true,
         message: 'Weekly report sent successfully'
@@ -597,7 +597,7 @@ app.get('/api/geo-alert', async (req, res) => {
     const alert = await analytics.generateGeoAlert();
     
     if (alert) {
-      await sendNotifications(alert);
+      await sendTextNotifications(alert);
       res.json({
         success: true,
         message: 'GEO alert sent successfully'
@@ -624,7 +624,7 @@ app.get('/api/creative-alert', async (req, res) => {
     const alert = await analytics.generateCreativeAlert();
     
     if (alert) {
-      await sendNotifications(alert);
+      await sendTextNotifications(alert);
       res.json({
         success: true,
         message: 'Creative alert sent successfully'
@@ -826,7 +826,7 @@ app.get('/api/debug-customer/:customerId', async (req, res) => {
 // Debug endpoint for GEO alert data
 app.get('/api/debug-geo', async (req, res) => {
   try {
-    const rows = await googleSheets.getRows();
+    const rows = await googleSheets.getAllRows();
     
     // Get today's date
     const today = new Date();
@@ -953,12 +953,25 @@ app.listen(ENV.PORT, () => {
         } catch (error) {
           console.error('❌ GEO alert failed:', error.message);
         }
-        
-        // Schedule next week
-        scheduleGeoAlert();
       }, timeUntilMonday);
       
       console.log(`🌍 GEO Alert scheduled for: ${nextMonday.toLocaleString()}`);
+      
+      // Schedule weekly interval after first run
+      setTimeout(() => {
+        setInterval(async () => {
+          try {
+            console.log('🌍 Running weekly GEO alert...');
+            const response = await fetch(`http://localhost:${ENV.PORT}/api/geo-alert`, {
+              method: 'GET'
+            });
+            const result = await response.json();
+            console.log(`✅ GEO alert completed: ${result.message}`);
+          } catch (error) {
+            console.error('❌ GEO alert failed:', error.message);
+          }
+        }, 7 * 24 * 60 * 60 * 1000); // 7 days
+      }, timeUntilMonday);
     };
     
     // Weekly Report every Monday at 9 AM UTC+1 (8 AM UTC)
@@ -981,12 +994,25 @@ app.listen(ENV.PORT, () => {
         } catch (error) {
           console.error('❌ Weekly report failed:', error.message);
         }
-        
-        // Schedule next week
-        scheduleWeeklyReport();
       }, timeUntilMonday);
       
       console.log(`📊 Weekly Report scheduled for: ${nextMonday.toLocaleString()}`);
+      
+      // Schedule weekly interval after first run
+      setTimeout(() => {
+        setInterval(async () => {
+          try {
+            console.log('📊 Running weekly report...');
+            const response = await fetch(`http://localhost:${ENV.PORT}/api/weekly-report`, {
+              method: 'GET'
+            });
+            const result = await response.json();
+            console.log(`✅ Weekly report completed: ${result.message}`);
+          } catch (error) {
+            console.error('❌ Weekly report failed:', error.message);
+          }
+        }, 7 * 24 * 60 * 60 * 1000); // 7 days
+      }, timeUntilMonday);
     };
     
     // Start GEO alert scheduling

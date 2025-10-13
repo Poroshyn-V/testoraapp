@@ -111,3 +111,67 @@ export async function sendNotifications(payment, customer, metadata = {}) {
     throw error;
   }
 }
+
+// Send simple text notifications (for alerts, reports, etc.)
+export async function sendTextNotifications(message) {
+  const promises = [];
+  
+  if (!ENV.NOTIFICATIONS_DISABLED) {
+    if (ENV.TELEGRAM_BOT_TOKEN && ENV.TELEGRAM_CHAT_ID) {
+      promises.push(sendTelegram(message));
+    }
+    
+    if (ENV.SLACK_BOT_TOKEN && ENV.SLACK_CHANNEL_ID) {
+      promises.push(sendSlackText(message));
+    }
+  }
+  
+  if (promises.length === 0) {
+    logInfo('No notification channels configured');
+    return;
+  }
+  
+  try {
+    await Promise.allSettled(promises);
+    logInfo('All text notifications sent successfully');
+  } catch (error) {
+    logError('Error sending text notifications', error);
+    throw error;
+  }
+}
+
+// Send simple text to Slack
+async function sendSlackText(message) {
+  if (!ENV.SLACK_BOT_TOKEN || !ENV.SLACK_CHANNEL_ID) {
+    logInfo('Slack not configured, skipping notification');
+    return;
+  }
+
+  try {
+    const response = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${ENV.SLACK_BOT_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        channel: ENV.SLACK_CHANNEL_ID,
+        text: message
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Slack API error: ${response.status}`);
+    }
+
+    const result = await response.json();
+    if (!result.ok) {
+      throw new Error(`Slack API error: ${result.error}`);
+    }
+
+    logInfo('Successfully sent Slack text notification');
+  } catch (error) {
+    logError('Error sending Slack text notification', error);
+    throw error;
+  }
+}

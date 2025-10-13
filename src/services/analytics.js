@@ -1,5 +1,5 @@
 import { logInfo, logError } from '../utils/logging.js';
-import { formatWeeklyReport, formatGeoAlert, formatCreativeAlert } from '../utils/formatting.js';
+import { formatWeeklyReport, formatCreativeAlert } from '../utils/formatting.js';
 import googleSheets from './googleSheets.js';
 
 // Analytics service
@@ -153,73 +153,72 @@ export class AnalyticsService {
     }
   }
   
-  // Generate GEO alert
+  // Generate GEO alert (restored from old working version)
   async generateGeoAlert() {
     try {
-      logInfo('Generating GEO alert...');
+      logInfo('🌍 Анализирую GEO данные за сегодня...');
       
       const rows = await googleSheets.getAllRows();
       
-      // Get last week dates (Monday to Sunday)
-      const now = new Date();
-      const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
-      const currentWeekStart = new Date(utcPlus1);
-      currentWeekStart.setDate(utcPlus1.getDate() - utcPlus1.getDay() + 1); // Monday
-      currentWeekStart.setHours(0, 0, 0, 0);
+      // Получаем сегодняшнюю дату в UTC+1
+      const today = new Date();
+      const utcPlus1 = new Date(today.getTime() + 60 * 60 * 1000);
+      const todayStr = utcPlus1.toISOString().split('T')[0]; // YYYY-MM-DD
       
-      // Analyze last week (not current week)
-      const lastWeekStart = new Date(currentWeekStart);
-      lastWeekStart.setDate(currentWeekStart.getDate() - 7);
+      logInfo(`📅 Анализирую покупки за ${todayStr} (UTC+1)`);
       
-      const lastWeekEnd = new Date(lastWeekStart);
-      lastWeekEnd.setDate(lastWeekStart.getDate() + 6);
-      lastWeekEnd.setHours(23, 59, 59, 999);
-      
-      logInfo('Analyzing last week for GEO alert', {
-        lastWeekStart: lastWeekStart.toISOString().split('T')[0],
-        lastWeekEnd: lastWeekEnd.toISOString().split('T')[0]
-      });
-      
-      // Filter last week's purchases
-      const lastWeekPurchases = rows.filter(row => {
+      // Фильтруем покупки за сегодня
+      const todayPurchases = rows.filter(row => {
         const createdLocal = row.get('Created Local (UTC+1)') || '';
-        const purchaseDate = new Date(createdLocal);
-        return purchaseDate >= lastWeekStart && purchaseDate <= lastWeekEnd;
+        return createdLocal.includes(todayStr);
       });
       
-      if (lastWeekPurchases.length === 0) {
-        logInfo('No purchases found for last week');
+      logInfo(`📊 Найдено ${todayPurchases.length} покупок за сегодня`);
+      
+      if (todayPurchases.length === 0) {
+        logInfo('📭 Нет покупок за сегодня - пропускаю GEO алерт');
         return null;
       }
       
-      // Analyze GEO data
+      // Анализируем GEO данные
       const geoStats = new Map();
       
-      for (const purchase of lastWeekPurchases) {
-        const geo = purchase.get('GEO') || '';
-        const country = geo.split(',')[0].trim();
-        if (country) {
-          geoStats.set(country, (geoStats.get(country) || 0) + 1);
+      for (const purchase of todayPurchases) {
+        const geo = purchase.get('GEO') || 'Unknown';
+        const country = geo.split(',')[0].trim(); // Берем только страну
+        
+        if (geoStats.has(country)) {
+          geoStats.set(country, geoStats.get(country) + 1);
+        } else {
+          geoStats.set(country, 1);
         }
       }
       
-      // Top countries
-      const topCountries = Array.from(geoStats.entries())
+      // Сортируем по количеству покупок
+      const sortedGeo = Array.from(geoStats.entries())
         .sort((a, b) => b[1] - a[1])
         .slice(0, 3);
       
-      const alertData = {
-        topCountries,
-        totalSales: lastWeekPurchases.length,
-        date: lastWeekStart.toISOString().split('T')[0]
-      };
+      // Формируем ТОП-3
+      const top3 = [];
+      for (const [country, count] of sortedGeo) {
+        const flag = this.getCountryFlag(country);
+        top3.push(`${flag} ${country} - ${count}`);
+      }
       
-      const alertText = formatGeoAlert(alertData);
+      // Добавляем WW (все остальные)
+      const totalToday = todayPurchases.length;
+      const top3Total = sortedGeo.reduce((sum, [, count]) => sum + count, 0);
+      const wwCount = totalToday - top3Total;
       
-      logInfo('GEO alert generated successfully', {
-        totalSales: lastWeekPurchases.length,
-        topCountries: topCountries.length
-      });
+      if (wwCount > 0) {
+        top3.push(`🌍 WW - ${wwCount}`);
+      }
+      
+      // Формируем сообщение
+      const alertText = `📊 **TOP-3 GEO for today (${todayStr})**\n\n${top3.join('\n')}\n\n📈 Total purchases: ${totalToday}`;
+      
+      logInfo('📤 Отправляю GEO алерт:', { alertText });
       
       return alertText;
       
@@ -227,6 +226,164 @@ export class AnalyticsService {
       logError('Error generating GEO alert', error);
       throw error;
     }
+  }
+  
+  // Helper function for country flags
+  getCountryFlag(country) {
+    const flags = {
+      'US': '🇺🇸',
+      'CA': '🇨🇦', 
+      'AU': '🇦🇺',
+      'GB': '🇬🇧',
+      'DE': '🇩🇪',
+      'FR': '🇫🇷',
+      'IT': '🇮🇹',
+      'ES': '🇪🇸',
+      'NL': '🇳🇱',
+      'SE': '🇸🇪',
+      'NO': '🇳🇴',
+      'DK': '🇩🇰',
+      'FI': '🇫🇮',
+      'PL': '🇵🇱',
+      'CZ': '🇨🇿',
+      'HU': '🇭🇺',
+      'RO': '🇷🇴',
+      'BG': '🇧🇬',
+      'HR': '🇭🇷',
+      'SI': '🇸🇮',
+      'SK': '🇸🇰',
+      'LT': '🇱🇹',
+      'LV': '🇱🇻',
+      'EE': '🇪🇪',
+      'IE': '🇮🇪',
+      'PT': '🇵🇹',
+      'GR': '🇬🇷',
+      'CY': '🇨🇾',
+      'MT': '🇲🇹',
+      'LU': '🇱🇺',
+      'AT': '🇦🇹',
+      'BE': '🇧🇪',
+      'CH': '🇨🇭',
+      'IS': '🇮🇸',
+      'LI': '🇱🇮',
+      'MC': '🇲🇨',
+      'SM': '🇸🇲',
+      'VA': '🇻🇦',
+      'AD': '🇦🇩',
+      'JP': '🇯🇵',
+      'KR': '🇰🇷',
+      'CN': '🇨🇳',
+      'IN': '🇮🇳',
+      'BR': '🇧🇷',
+      'MX': '🇲🇽',
+      'AR': '🇦🇷',
+      'CL': '🇨🇱',
+      'CO': '🇨🇴',
+      'PE': '🇵🇪',
+      'VE': '🇻🇪',
+      'EC': '🇪🇨',
+      'BO': '🇧🇴',
+      'PY': '🇵🇾',
+      'UY': '🇺🇾',
+      'GY': '🇬🇾',
+      'SR': '🇸🇷',
+      'GF': '🇬🇫',
+      'FK': '🇫🇰',
+      'ZA': '🇿🇦',
+      'NG': '🇳🇬',
+      'KE': '🇰🇪',
+      'EG': '🇪🇬',
+      'MA': '🇲🇦',
+      'TN': '🇹🇳',
+      'DZ': '🇩🇿',
+      'LY': '🇱🇾',
+      'SD': '🇸🇩',
+      'ET': '🇪🇹',
+      'UG': '🇺🇬',
+      'TZ': '🇹🇿',
+      'GH': '🇬🇭',
+      'CI': '🇨🇮',
+      'SN': '🇸🇳',
+      'ML': '🇲🇱',
+      'BF': '🇧🇫',
+      'NE': '🇳🇪',
+      'TD': '🇹🇩',
+      'CM': '🇨🇲',
+      'CF': '🇨🇫',
+      'CG': '🇨🇬',
+      'CD': '🇨🇩',
+      'AO': '🇦🇴',
+      'ZM': '🇿🇲',
+      'ZW': '🇿🇼',
+      'BW': '🇧🇼',
+      'NA': '🇳🇦',
+      'SZ': '🇸🇿',
+      'LS': '🇱🇸',
+      'MG': '🇲🇬',
+      'MU': '🇲🇺',
+      'SC': '🇸🇨',
+      'KM': '🇰🇲',
+      'YT': '🇾🇹',
+      'RE': '🇷🇪',
+      'DJ': '🇩🇯',
+      'SO': '🇸🇴',
+      'ER': '🇪🇷',
+      'SS': '🇸🇸',
+      'RU': '🇷🇺',
+      'TR': '🇹🇷',
+      'IL': '🇮🇱',
+      'SA': '🇸🇦',
+      'AE': '🇦🇪',
+      'QA': '🇶🇦',
+      'BH': '🇧🇭',
+      'KW': '🇰🇼',
+      'OM': '🇴🇲',
+      'YE': '🇾🇪',
+      'IQ': '🇮🇶',
+      'IR': '🇮🇷',
+      'AF': '🇦🇫',
+      'PK': '🇵🇰',
+      'BD': '🇧🇩',
+      'LK': '🇱🇰',
+      'MV': '🇲🇻',
+      'BT': '🇧🇹',
+      'NP': '🇳🇵',
+      'MM': '🇲🇲',
+      'TH': '🇹🇭',
+      'LA': '🇱🇦',
+      'KH': '🇰🇭',
+      'VN': '🇻🇳',
+      'MY': '🇲🇾',
+      'SG': '🇸🇬',
+      'BN': '🇧🇳',
+      'ID': '🇮🇩',
+      'TL': '🇹🇱',
+      'PH': '🇵🇭',
+      'TW': '🇹🇼',
+      'HK': '🇭🇰',
+      'MO': '🇲🇴',
+      'MN': '🇲🇳',
+      'KZ': '🇰🇿',
+      'UZ': '🇺🇿',
+      'TM': '🇹🇲',
+      'TJ': '🇹🇯',
+      'KG': '🇰🇬',
+      'GE': '🇬🇪',
+      'AM': '🇦🇲',
+      'AZ': '🇦🇿',
+      'BY': '🇧🇾',
+      'MD': '🇲🇩',
+      'UA': '🇺🇦',
+      'MK': '🇲🇰',
+      'RS': '🇷🇸',
+      'ME': '🇲🇪',
+      'BA': '🇧🇦',
+      'XK': '🇽🇰',
+      'AL': '🇦🇱',
+      'Unknown': '❓'
+    };
+    
+    return flags[country] || '🌍';
   }
   
   // Generate creative alert
