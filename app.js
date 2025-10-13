@@ -2247,8 +2247,8 @@ app.post('/api/sync-payments', async (req, res) => {
       timestamp: new Date().toISOString()
     });
     
-    // 🔒 ГЛОБАЛЬНАЯ БЛОКИРОВКА SYNC (только один sync за раз)
-    const syncLockId = await distributedLock.acquire('global_sync', 100, 200);
+    // 🔒 ГЛОБАЛЬНАЯ БЛОКИРОВКА SYNC (только один sync за раз) - используем ту же блокировку что и runSync
+    const syncLockId = await distributedLock.acquire('sync_operation', 100, 200);
     
     try {
       // 🔄 КРИТИЧЕСКИ ВАЖНО: Обновляем ВСЕ кэши ПЕРЕД началом
@@ -2568,8 +2568,8 @@ app.post('/api/sync-payments', async (req, res) => {
       ]);
       
     } finally {
-      // 🔓 Освобождаем глобальный sync lock
-      distributedLock.release('global_sync', syncLockId);
+      // 🔓 Освобождаем sync operation lock
+      distributedLock.release('sync_operation', syncLockId);
     }
     
     const duration = Date.now() - startTime;
