@@ -1222,17 +1222,74 @@ app.listen(ENV.PORT, () => {
       }, timeUntilMonday);
     };
     
-    // Start GEO alert scheduling
-    scheduleGeoAlert();
+    // Daily Stats every morning at 7:00 UTC+1
+    const scheduleDailyStats = () => {
+      console.log('📊 Starting daily stats alerts...');
+      
+      // Check every 2 minutes for 7:00 UTC+1
+      setInterval(async () => {
+        const now = new Date();
+        const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+        const hour = utcPlus1.getUTCHours();
+        const minute = utcPlus1.getUTCMinutes();
+        
+        // Check for 7:00 UTC+1 (with ±2 minutes tolerance)
+        if (hour === 7 && minute >= 0 && minute <= 2) {
+          try {
+            console.log('📊 Running daily stats alert...');
+            const response = await fetch(`http://localhost:${ENV.PORT}/api/daily-stats`, {
+              method: 'GET'
+            });
+            const result = await response.json();
+            console.log(`✅ Daily stats completed: ${result.message}`);
+          } catch (error) {
+            console.error('❌ Daily stats failed:', error.message);
+          }
+        }
+      }, 2 * 60 * 1000); // 2 minutes
+    };
     
-    // Start weekly report scheduling
+    // Creative Alert at 10:00 and 22:00 UTC+1
+    const scheduleCreativeAlert = () => {
+      console.log('🎨 Starting creative alerts...');
+      
+      // Check every 2 minutes for 10:00 and 22:00 UTC+1
+      setInterval(async () => {
+        const now = new Date();
+        const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+        const hour = utcPlus1.getUTCHours();
+        const minute = utcPlus1.getUTCMinutes();
+        
+        // Check for 10:00 and 22:00 UTC+1 (with ±2 minutes tolerance)
+        if ((hour === 10 && minute >= 0 && minute <= 2) || 
+            (hour === 22 && minute >= 0 && minute <= 2)) {
+          try {
+            console.log('🎨 Running creative alert...');
+            const response = await fetch(`http://localhost:${ENV.PORT}/api/creative-alert`, {
+              method: 'GET'
+            });
+            const result = await response.json();
+            console.log(`✅ Creative alert completed: ${result.message}`);
+          } catch (error) {
+            console.error('❌ Creative alert failed:', error.message);
+          }
+        }
+      }, 2 * 60 * 1000); // 2 minutes
+    };
+    
+    // Start all alert scheduling
+    scheduleGeoAlert();
     scheduleWeeklyReport();
+    scheduleDailyStats();
+    scheduleCreativeAlert();
     
     console.log('🤖 AUTOMATIC SYSTEM ENABLED:');
     console.log('   ✅ Checks Stripe every 5 minutes');
     console.log('   ✅ Adds new purchases to Google Sheets');
     console.log('   ✅ Sends notifications to Telegram and Slack');
     console.log('   ✅ GEO alerts every hour');
+    console.log('   ✅ Daily stats every morning at 7:00 UTC+1');
+    console.log('   ✅ Creative alerts at 10:00 and 22:00 UTC+1');
     console.log('   ✅ Weekly reports every Monday at 9 AM UTC+1');
     console.log('   ✅ Works WITHOUT manual intervention');
   } else {
