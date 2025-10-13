@@ -162,7 +162,14 @@ class DuplicateChecker {
             count: customerRows.length,
             keepRow: customerRows[0].rowNumber, // Самая старая запись
             deleteRows: customerRows.slice(1).map(r => r.rowNumber),
-            rows: customerRows
+            rows: customerRows.map(r => ({
+              rowNumber: r.rowNumber,
+              email: r.email,
+              totalAmount: r.totalAmount,
+              paymentCount: r.paymentCount,
+              paymentIntentIds: r.paymentIntentIds,
+              createdUtc: r.createdUtc
+            }))
           });
         }
       }
