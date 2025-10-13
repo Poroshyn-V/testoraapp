@@ -571,22 +571,39 @@ app.post('/api/sync-payments', async (req, res) => {
       });
     }
     
-    // SIMPLE LOGIC: Process each new payment individually
-    let processedCount = 0;
-    let newPurchases = 0;
+    // GROUP PAYMENTS BY CUSTOMER FIRST (restored from old working version)
+    const customerGroups = new Map();
     
     for (const payment of newPayments) {
       const customer = await getCustomer(payment.customer);
       const customerId = customer?.id;
-      
       if (!customerId) continue;
+      
+      if (!customerGroups.has(customerId)) {
+        customerGroups.set(customerId, {
+          customer,
+          payments: []
+        });
+      }
+      customerGroups.get(customerId).payments.push(payment);
+    }
+    
+    logger.info(`Grouped ${newPayments.length} payments into ${customerGroups.size} customer groups`);
+    
+    // Process each customer group
+    let processedCount = 0;
+    let newPurchases = 0;
+    
+    for (const [customerId, group] of customerGroups) {
+      const customer = group.customer;
+      const payments = group.payments;
       
       // Check if customer already exists in Google Sheets
       const existingCustomers = await googleSheets.findRows({ 'Customer ID': customerId });
       
       if (existingCustomers.length > 0) {
-        // Customer exists - update existing record
-        logger.info(`Updating existing customer ${customerId} with new payment ${payment.id}`);
+        // Customer exists - update existing record with new payments
+        logger.info(`Updating existing customer ${customerId} with ${payments.length} new payments`);
         
         // Get all payments for this customer from Stripe
         const allPayments = await getCustomerPayments(customerId);
