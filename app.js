@@ -767,6 +767,15 @@ app.post('/api/test-notifications', async (req, res) => {
 // Sync payments endpoint - SIMPLIFIED AND RELIABLE
 app.post('/api/sync-payments', async (req, res) => {
   const startTime = Date.now();
+  const results = {
+    processed: 0,
+    failed: 0,
+    errors: [],
+    newPurchases: 0,
+    updatedPurchases: 0,
+    skipped: 0
+  };
+  
   try {
     logger.info('Starting payment sync...', { 
       timestamp: new Date().toISOString(),
@@ -774,7 +783,7 @@ app.post('/api/sync-payments', async (req, res) => {
     });
     
     // Get recent payments from Stripe
-    const payments = await getRecentPayments(100);
+    const payments = await fetchWithRetry(() => getRecentPayments(100));
     
     // Filter successful payments
     const successfulPayments = payments.filter(p => {
@@ -858,27 +867,29 @@ app.post('/api/sync-payments', async (req, res) => {
     
     logger.info(`Grouped ${newPayments.length} payments into ${groupedPurchases.size} customer groups`);
     
-    // Process each customer group
-    let processedCount = 0;
-    let newPurchases = 0;
-    
+    // Process each customer group with transaction-like error handling
     for (const [dateKey, group] of groupedPurchases) {
-      const customer = group.customer;
-      const payments = group.payments;
-      const firstPayment = group.firstPayment;
-      
-      const customerId = customer?.id;
-      if (!customerId) continue;
-      
-      // Check if customer already exists in Google Sheets
-      const existingCustomers = await fetchWithRetry(() => googleSheets.findRows({ 'Customer ID': customerId }));
-      
-      if (existingCustomers.length > 0) {
-        // Customer exists - update existing record with new payments
-        logger.info(`Updating existing customer ${customerId} with ${payments.length} new payments`);
+      try {
+        const customer = group.customer;
+        const payments = group.payments;
+        const firstPayment = group.firstPayment;
         
-        // Get all payments for this customer from Stripe
-        const allPayments = await fetchWithRetry(() => getCustomerPayments(customerId));
+        const customerId = customer?.id;
+        if (!customerId) {
+          results.skipped++;
+          logger.warn('Skipping group with no customer ID', { dateKey });
+          continue;
+        }
+      
+        // Check if customer already exists in Google Sheets
+        const existingCustomers = await fetchWithRetry(() => googleSheets.findRows({ 'Customer ID': customerId }));
+        
+        if (existingCustomers.length > 0) {
+          // Customer exists - update existing record with new payments
+          logger.info(`Updating existing customer ${customerId} with ${payments.length} new payments`);
+          
+          // Get all payments for this customer from Stripe
+          const allPayments = await fetchWithRetry(() => getCustomerPayments(customerId));
         const allSuccessfulPayments = allPayments.filter(p => {
           if (p.status !== 'succeeded' || !p.customer) return false;
           if (p.description && p.description.toLowerCase().includes('subscription update')) {
@@ -947,8 +958,7 @@ app.post('/api/sync-payments', async (req, res) => {
           await sendNotifications(latestPayment, customer, sheetData);
         }
         
-        newPurchases++;
-        processedCount++;
+        // Variables moved to results object
         
       } else {
         // New customer - add to Google Sheets with grouped payments
@@ -983,41 +993,69 @@ app.post('/api/sync-payments', async (req, res) => {
           'Payment Intent IDs': paymentIds.join(', ')
         };
         
-        await sendNotifications(firstPayment, customer, sheetData);
+          await sendNotifications(firstPayment, customer, sheetData);
+          
+          results.newPurchases++;
+          results.processed++;
+        }
         
-        newPurchases++;
-        processedCount++;
+      } catch (error) {
+        results.failed++;
+        results.errors.push({
+          dateKey,
+          customerId: customer?.id || 'unknown',
+          error: error.message,
+          errorType: error.name || 'UnknownError'
+        });
+        logger.error('Failed to process customer group', { 
+          dateKey, 
+          customerId: customer?.id || 'unknown',
+          error: error.message,
+          stack: error.stack
+        });
       }
     }
     
     const duration = Date.now() - startTime;
     logger.info('Sync completed', { 
+      ...results,
       totalPayments: newPayments.length,
-      processed: processedCount,
-      newPurchases: newPurchases,
+      totalGroups: groupedPurchases.size,
       duration: `${duration}ms`,
       durationSeconds: Math.round(duration / 1000),
       timestamp: new Date().toISOString(),
       performance: {
         paymentsPerSecond: newPayments.length > 0 ? Math.round(newPayments.length / (duration / 1000)) : 0,
-        avgTimePerPayment: newPayments.length > 0 ? Math.round(duration / newPayments.length) : 0
+        avgTimePerPayment: newPayments.length > 0 ? Math.round(duration / newPayments.length) : 0,
+        successRate: results.processed > 0 ? Math.round((results.processed / (results.processed + results.failed)) * 100) : 0
       }
     });
     
     res.json({
       success: true,
-      message: `Sync completed! Processed ${processedCount} purchase(s)`,
+      message: `Sync completed! Processed ${results.processed} groups, ${results.failed} failed`,
+      ...results,
       total_payments: newPayments.length,
-      processed: processedCount,
-      new_purchases: newPurchases
+      total_groups: groupedPurchases.size,
+      duration: `${duration}ms`
     });
     
   } catch (error) {
-    logger.error('Error in sync-payments endpoint', error);
+    const duration = Date.now() - startTime;
+    logger.error('Critical sync error', {
+      error: error.message,
+      stack: error.stack,
+      duration: `${duration}ms`,
+      timestamp: new Date().toISOString(),
+      results: results
+    });
+    
     res.status(500).json({
       success: false,
-      message: 'Sync failed',
-      error: error.message
+      message: 'Critical sync error occurred',
+      error: error.message,
+      partialResults: results,
+      duration: `${duration}ms`
     });
   }
 });
