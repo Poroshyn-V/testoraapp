@@ -414,7 +414,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/smart-alerts', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/fix-duplicates', '/api/campaign-analysis', '/api/campaign-analysis/report', '/api/campaign-analysis/send', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/api/alerts/dashboard', '/api/alerts/cooldown-stats', '/api/performance-stats', '/api/status', '/api/emergency-stop', '/api/emergency-resume', '/api/notification-queue/stats', '/api/notification-queue/clear', '/api/notification-queue/pause', '/api/notification-queue/resume', '/auto-sync', '/ping', '/health']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/smart-alerts', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/clean-alerts', '/api/load-existing', '/api/check-duplicates', '/api/fix-duplicates', '/api/campaigns/analyze', '/api/campaigns/list', '/api/campaigns/report', '/api/test-batch-operations', '/api/metrics', '/api/metrics/summary', '/api/metrics/reset', '/api/alerts/history', '/api/alerts/dashboard', '/api/alerts/cooldown-stats', '/api/performance-stats', '/api/status', '/api/emergency-stop', '/api/emergency-resume', '/api/notification-queue/stats', '/api/notification-queue/clear', '/api/notification-queue/pause', '/api/notification-queue/resume', '/auto-sync', '/ping', '/health']
 }));
 
 // Health check
@@ -850,15 +850,16 @@ app.post('/api/fix-duplicates', async (req, res) => {
 });
 
 // Campaign analysis endpoints
-app.get('/api/campaign-analysis', async (req, res) => {
+app.get('/api/campaigns/analyze', async (req, res) => {
   try {
-    const timeframe = req.query.timeframe || 'today';
+    const timeframe = req.query.timeframe || 'today'; // today, yesterday, week, month
+    
     const analysis = await campaignAnalyzer.analyzeCampaigns(timeframe);
     
     if (!analysis) {
       return res.json({
         success: true,
-        message: 'No data available for campaign analysis',
+        message: 'No data available for analysis',
         timeframe
       });
     }
@@ -873,75 +874,22 @@ app.get('/api/campaign-analysis', async (req, res) => {
     logger.error('Error in campaign analysis endpoint', error);
     res.status(500).json({
       success: false,
+      message: 'Campaign analysis failed',
       error: error.message
     });
   }
 });
 
-app.get('/api/campaign-analysis/report', async (req, res) => {
-  try {
-    const timeframe = req.query.timeframe || 'today';
-    const analysis = await campaignAnalyzer.analyzeCampaigns(timeframe);
-    
-    if (!analysis) {
-      return res.json({
-        success: true,
-        message: 'No data available for campaign analysis',
-        timeframe
-      });
-    }
-    
-    const report = campaignAnalyzer.formatReport(analysis);
-    
-    res.json({
-      success: true,
-      message: 'Campaign analysis report generated',
-      timeframe,
-      report,
-      analysis
-    });
-    
-  } catch (error) {
-    logger.error('Error generating campaign analysis report', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-app.get('/api/campaign-analysis/send', async (req, res) => {
-  try {
-    const result = await campaignAnalyzer.sendDailyReport();
-    
-    if (!result) {
-      return res.json({
-        success: true,
-        message: 'No actionable recommendations found or cooldown active'
-      });
-    }
-    
-    res.json({
-      success: true,
-      message: 'Campaign analysis report sent successfully',
-      analysis: result
-    });
-    
-  } catch (error) {
-    logger.error('Error sending campaign analysis report', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
-
-app.get('/api/campaign-analysis/:campaignName', async (req, res) => {
+// Single campaign analysis endpoint
+app.get('/api/campaigns/:campaignName/analyze', async (req, res) => {
   try {
     const { campaignName } = req.params;
     const timeframe = req.query.timeframe || 'week';
     
-    const analysis = await campaignAnalyzer.analyzeSingleCampaign(campaignName, timeframe);
+    const analysis = await campaignAnalyzer.analyzeSingleCampaign(
+      decodeURIComponent(campaignName),
+      timeframe
+    );
     
     res.json({
       success: true,
@@ -950,9 +898,104 @@ app.get('/api/campaign-analysis/:campaignName', async (req, res) => {
     });
     
   } catch (error) {
-    logger.error('Error analyzing single campaign', error);
+    logger.error('Error in single campaign analysis', error);
     res.status(500).json({
       success: false,
+      message: 'Single campaign analysis failed',
+      error: error.message
+    });
+  }
+});
+
+// Campaign report endpoint - sends to Telegram
+app.post('/api/campaigns/report', async (req, res) => {
+  try {
+    const timeframe = req.body.timeframe || 'today';
+    
+    const analysis = await campaignAnalyzer.analyzeCampaigns(timeframe);
+    
+    if (!analysis) {
+      return res.json({
+        success: true,
+        message: 'No data for campaign report'
+      });
+    }
+    
+    const report = campaignAnalyzer.formatReport(analysis);
+    await sendTextNotifications(report);
+    
+    saveAlertHistory('campaign_report', 'sent', 'Campaign report sent', {
+      timeframe,
+      scaleRecommendations: analysis.recommendations.scale.length,
+      pauseRecommendations: analysis.recommendations.pause.length
+    });
+    
+    res.json({
+      success: true,
+      message: 'Campaign report sent successfully',
+      recommendations: {
+        scale: analysis.recommendations.scale.length,
+        pause: analysis.recommendations.pause.length,
+        optimize: analysis.recommendations.optimize.length
+      }
+    });
+    
+  } catch (error) {
+    logger.error('Error sending campaign report', error);
+    res.status(500).json({
+      success: false,
+      message: 'Campaign report failed',
+      error: error.message
+    });
+  }
+});
+
+// List all campaigns endpoint
+app.get('/api/campaigns/list', async (req, res) => {
+  try {
+    const timeframe = req.query.timeframe || 'week';
+    
+    const rows = await googleSheets.getAllRows();
+    const purchases = campaignAnalyzer.filterByTimeframe(rows, timeframe);
+    
+    // Get unique campaigns with basic stats
+    const campaignMap = new Map();
+    
+    for (const purchase of purchases) {
+      const name = purchase.get('Campaign Name') || 'Unknown';
+      
+      if (!campaignMap.has(name)) {
+        campaignMap.set(name, {
+          name,
+          purchases: 0,
+          revenue: 0
+        });
+      }
+      
+      const campaign = campaignMap.get(name);
+      campaign.purchases++;
+      campaign.revenue += parseFloat(purchase.get('Total Amount') || 0);
+    }
+    
+    const campaigns = Array.from(campaignMap.values())
+      .map(c => ({
+        ...c,
+        aov: c.revenue / c.purchases
+      }))
+      .sort((a, b) => b.revenue - a.revenue);
+    
+    res.json({
+      success: true,
+      message: `Found ${campaigns.length} campaigns`,
+      timeframe,
+      campaigns
+    });
+    
+  } catch (error) {
+    logger.error('Error listing campaigns', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to list campaigns',
       error: error.message
     });
   }
