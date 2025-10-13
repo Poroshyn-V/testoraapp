@@ -17,6 +17,9 @@ const app = express();
 
 // Purchase cache is now managed by purchaseCache service
 
+// Sync protection flag to prevent overlapping synchronizations
+let isSyncing = false;
+
 // Alert tracking to prevent duplicate sends
 const sentAlerts = {
   dailyStats: new Set(),
@@ -46,6 +49,40 @@ async function loadExistingPurchases() {
   }
 }
 
+// Protected sync function to prevent overlapping synchronizations
+async function runSync() {
+  if (isSyncing) {
+    logger.warn('⚠️ Sync already in progress, skipping this cycle...');
+    return { success: false, message: 'Sync already in progress' };
+  }
+  
+  isSyncing = true;
+  try {
+    logger.info('🔄 Starting protected sync...');
+    
+    // Call the actual sync endpoint logic
+    const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Sync request failed: ${response.status} ${response.statusText}`);
+    }
+    
+    const result = await response.json();
+    logger.info('✅ Protected sync completed:', result);
+    
+    return result;
+  } catch (error) {
+    logger.error('❌ Protected sync failed:', error);
+    return { success: false, message: 'Sync failed', error: error.message };
+  } finally {
+    isSyncing = false;
+    logger.info('🔓 Sync lock released');
+  }
+}
+
 // Middleware
 app.use(express.json());
 app.use('/api', rateLimit);
@@ -55,7 +92,7 @@ app.get('/', (_req, res) => res.json({
   message: 'Stripe Ops API is running!',
   status: 'ok',
   timestamp: new Date().toISOString(),
-  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/cache-stats', '/api/load-existing', '/api/check-duplicates', '/auto-sync', '/ping', '/health']
+  endpoints: ['/api/test', '/api/sync-payments', '/api/geo-alert', '/api/creative-alert', '/api/daily-stats', '/api/weekly-report', '/api/anomaly-check', '/api/memory-status', '/api/cache-stats', '/api/sync-status', '/api/load-existing', '/api/check-duplicates', '/auto-sync', '/ping', '/health']
 }));
 
 // Health check
@@ -84,6 +121,10 @@ app.get('/health', async (_req, res) => {
       memory: {
         existingPurchases: purchaseCache.size(),
         processedPurchases: purchaseCache.processedPurchaseIds.size
+      },
+      sync: {
+        isSyncing: isSyncing,
+        status: isSyncing ? 'in_progress' : 'idle'
       }
     };
     
@@ -202,6 +243,17 @@ app.get('/api/cache-stats', (req, res) => {
   }
 });
 
+// Sync status endpoint
+app.get('/api/sync-status', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Sync status',
+    isSyncing: isSyncing,
+    status: isSyncing ? 'in_progress' : 'idle',
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Metrics endpoint
 app.get('/api/metrics', (req, res) => {
   const memUsage = process.memoryUsage();
@@ -239,26 +291,21 @@ app.get('/auto-sync', async (req, res) => {
   try {
     logger.info('🔄 Принудительная автоСинхронизация...');
     
-    // Используем тот же endpoint что и основной sync
-    const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' }
-    });
+    const result = await runSync();
     
-    if (!response.ok) {
-      logger.error('❌ Auto-sync request failed:', { status: response.status, statusText: response.statusText });
-      return res.status(500).json({ error: 'Auto-sync request failed' });
+    if (result.success) {
+      res.json({ 
+        success: true, 
+        message: `Auto-sync completed! ${result.processed || 0} NEW purchases processed`,
+        processed: result.processed || 0,
+        total_groups: result.total_groups || 0
+      });
+    } else {
+      res.status(500).json({ 
+        success: false,
+        error: result.message || 'Auto-sync failed'
+      });
     }
-    
-    const result = await response.json();
-    logger.info('✅ Auto-sync completed:', result);
-    
-    res.json({ 
-      success: true, 
-      message: `Auto-sync completed! ${result.processed || 0} NEW purchases processed`,
-      processed: result.processed || 0,
-      total_groups: result.total_groups || 0
-    });
     
   } catch (error) {
     logger.error('Auto-sync failed:', error);
@@ -1206,12 +1253,12 @@ app.listen(ENV.PORT, () => {
     setInterval(async () => {
       try {
         console.log('🔄 Running scheduled sync...');
-        const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        });
-        const result = await response.json();
-        console.log(`✅ Scheduled sync completed: ${result.total_payments || 0} payments processed`);
+        const result = await runSync();
+        if (result.success) {
+          console.log(`✅ Scheduled sync completed: ${result.total_payments || 0} payments processed`);
+        } else {
+          console.log(`⚠️ Scheduled sync skipped: ${result.message}`);
+        }
       } catch (error) {
         console.error('❌ Scheduled sync failed:', error.message);
       }
