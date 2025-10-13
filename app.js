@@ -2034,6 +2034,22 @@ async function checkMissedAlerts() {
     });
   }
   
+  // Проверяем GEO Alert - если приложение запускается, отправляем GEO алерт
+  if (!sentAlerts.geoAlert || sentAlerts.geoAlert.size === 0) {
+    logger.info('🌍 Sending initial GEO alert on startup...');
+    try {
+      const response = await fetch(`http://localhost:${ENV.PORT}/api/geo-alert`, {
+        method: 'GET'
+      });
+      const result = await response.json();
+      if (result.success) {
+        logger.info('✅ Initial GEO alert sent successfully');
+      }
+    } catch (error) {
+      logger.error('❌ Failed to send initial GEO alert:', error.message);
+    }
+  }
+  
   // Проверяем Creative Alert (должен отправиться в настроенное время)
   if (currentHour >= alertConfig.creativeAlertHours[0] && currentHour < alertConfig.creativeAlertHours[1]) {
     const morning = `${today}_${alertConfig.creativeAlertHours[0]}`;
@@ -2127,17 +2143,31 @@ app.listen(ENV.PORT, () => {
     const scheduleGeoAlert = () => {
       console.log('🌍 Starting hourly GEO alerts...');
       
-      // Only run on scheduled intervals (every hour)
-      geoAlertInterval = setInterval(async () => {
+      // Run first GEO alert after 30 seconds
+      setTimeout(async () => {
         try {
-          console.log('🌍 Running hourly GEO alert...');
+          console.log('🌍 Running initial GEO alert...');
           const response = await fetch(`http://localhost:${ENV.PORT}/api/geo-alert`, {
             method: 'GET'
           });
           const result = await response.json();
-          console.log(`✅ GEO alert completed: ${result.message}`);
+          console.log(`✅ Initial GEO alert completed: ${result.message}`);
         } catch (error) {
-          console.error('❌ GEO alert failed:', error.message);
+          console.error('❌ Initial GEO alert failed:', error.message);
+        }
+      }, 30000); // 30 seconds
+      
+      // Then run on scheduled intervals (every hour)
+      geoAlertInterval = setInterval(async () => {
+        try {
+          console.log('🌍 Running scheduled GEO alert...');
+          const response = await fetch(`http://localhost:${ENV.PORT}/api/geo-alert`, {
+            method: 'GET'
+          });
+          const result = await response.json();
+          console.log(`✅ Scheduled GEO alert completed: ${result.message}`);
+        } catch (error) {
+          console.error('❌ Scheduled GEO alert failed:', error.message);
         }
       }, alertConfig.geoAlertInterval * 60 * 60 * 1000); // Configurable GEO alert interval
     };
