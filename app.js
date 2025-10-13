@@ -319,6 +319,14 @@ app.get('/health', async (_req, res) => {
         isSyncing: isSyncing,
         status: isSyncing ? 'in_progress' : 'idle'
       },
+      intervals: {
+        sync: syncInterval ? 'active' : 'inactive',
+        geoAlert: geoAlertInterval ? 'active' : 'inactive',
+        dailyStats: dailyStatsInterval ? 'active' : 'inactive',
+        creativeAlert: creativeAlertInterval ? 'active' : 'inactive',
+        weeklyReport: weeklyReportInterval ? 'active' : 'inactive',
+        alertCleanup: alertCleanupInterval ? 'active' : 'inactive'
+      },
       metrics: metrics.getSummary()
     };
     
