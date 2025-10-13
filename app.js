@@ -122,6 +122,107 @@ app.get('/api/test', (req, res) => {
   });
 });
 
+// Full resync endpoint - fix all existing data
+app.post('/api/full-resync', async (req, res) => {
+  try {
+    logger.info('Starting full resync...');
+    
+    // Get all existing rows
+    const rows = await googleSheets.getAllRows();
+    const customerMap = new Map();
+    let processedCount = 0;
+    let fixedCount = 0;
+    
+    // Group rows by Customer ID
+    for (const row of rows) {
+      const customerId = row.get('Customer ID');
+      if (!customerId || customerId === 'N/A') continue;
+      
+      if (!customerMap.has(customerId)) {
+        customerMap.set(customerId, []);
+      }
+      customerMap.get(customerId).push(row);
+    }
+    
+    // Process each customer
+    for (const [customerId, customerRows] of customerMap) {
+      try {
+        // Get all payments for this customer from Stripe
+        const allPayments = await getCustomerPayments(customerId);
+        const allSuccessfulPayments = allPayments.filter(p => {
+          if (p.status !== 'succeeded' || !p.customer) return false;
+          if (p.description && p.description.toLowerCase().includes('subscription update')) {
+            return false;
+          }
+          return true;
+        });
+        
+        if (allSuccessfulPayments.length === 0) continue;
+        
+        // Calculate totals
+        let totalAmountAll = 0;
+        let paymentCountAll = 0;
+        const paymentIdsAll = [];
+        
+        for (const p of allSuccessfulPayments) {
+          totalAmountAll += p.amount;
+          paymentCountAll++;
+          paymentIdsAll.push(p.id);
+        }
+        
+        // Delete all duplicate rows (keep only the first one)
+        if (customerRows.length > 1) {
+          for (let i = 1; i < customerRows.length; i++) {
+            try {
+              await customerRows[i].delete();
+              fixedCount++;
+            } catch (error) {
+              logger.warn(`Could not delete duplicate row:`, error.message);
+            }
+          }
+        }
+        
+        // Get fresh row data after deleting duplicates
+        const freshCustomers = await googleSheets.findRows({ 'Customer ID': customerId });
+        if (freshCustomers.length === 0) continue;
+        
+        const freshCustomer = freshCustomers[0];
+        
+        // Update with correct totals
+        await googleSheets.updateRow(freshCustomer, {
+          'Purchase ID': `purchase_${customerId}`,
+          'Total Amount': (totalAmountAll / 100).toFixed(2),
+          'Payment Count': paymentCountAll.toString(),
+          'Payment Intent IDs': paymentIdsAll.join(', ')
+        });
+        
+        processedCount++;
+        
+        // Small delay to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+      } catch (error) {
+        logger.error(`Error processing customer ${customerId}:`, error);
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Full resync completed! Processed ${processedCount} customers, fixed ${fixedCount} duplicates`,
+      processed_customers: processedCount,
+      fixed_duplicates: fixedCount
+    });
+    
+  } catch (error) {
+    logger.error('Error in full resync', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error in full resync',
+      error: error.message
+    });
+  }
+});
+
 // Clean duplicates endpoint
 app.post('/api/clean-duplicates', async (req, res) => {
   try {
