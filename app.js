@@ -164,7 +164,8 @@ const sentAlerts = {
   creativeAlert: new Set(),
   weeklyReport: new Set(),
   geoAlert: new Set(),
-  campaignAnalysis: new Set()
+  campaignAnalysis: new Set(),
+  duplicateCheck: new Set()
 };
 
 // Clean old alert records to prevent memory leaks
@@ -180,7 +181,9 @@ function cleanOldAlerts() {
     before: {
       dailyStats: sentAlerts.dailyStats.size,
       creativeAlert: sentAlerts.creativeAlert.size,
-      weeklyReport: sentAlerts.weeklyReport.size
+      weeklyReport: sentAlerts.weeklyReport.size,
+      campaignAnalysis: sentAlerts.campaignAnalysis.size,
+      duplicateCheck: sentAlerts.duplicateCheck.size
     },
     timestamp: new Date().toISOString()
   });
@@ -222,21 +225,32 @@ function cleanOldAlerts() {
     )
   );
   
+  // Clean duplicate check - keep only today and yesterday
+  const oldDuplicateCheck = sentAlerts.duplicateCheck.size;
+  sentAlerts.duplicateCheck = new Set(
+    Array.from(sentAlerts.duplicateCheck).filter(date => 
+      date >= yesterdayStr
+    )
+  );
+  
   const cleaned = {
     dailyStats: oldDailyStats - sentAlerts.dailyStats.size,
     creativeAlert: oldCreativeAlerts - sentAlerts.creativeAlert.size,
     weeklyReport: oldWeeklyReports - sentAlerts.weeklyReport.size,
-    campaignAnalysis: oldCampaignAnalysis - sentAlerts.campaignAnalysis.size
+    campaignAnalysis: oldCampaignAnalysis - sentAlerts.campaignAnalysis.size,
+    duplicateCheck: oldDuplicateCheck - sentAlerts.duplicateCheck.size
   };
   
   logger.info('✅ Alert records cleaned', {
     after: {
       dailyStats: sentAlerts.dailyStats.size,
       creativeAlert: sentAlerts.creativeAlert.size,
-      weeklyReport: sentAlerts.weeklyReport.size
+      weeklyReport: sentAlerts.weeklyReport.size,
+      campaignAnalysis: sentAlerts.campaignAnalysis.size,
+      duplicateCheck: sentAlerts.duplicateCheck.size
     },
     cleaned: cleaned,
-    totalCleaned: cleaned.dailyStats + cleaned.creativeAlert + cleaned.weeklyReport,
+    totalCleaned: cleaned.dailyStats + cleaned.creativeAlert + cleaned.weeklyReport + cleaned.campaignAnalysis + cleaned.duplicateCheck,
     timestamp: new Date().toISOString()
   });
 }
@@ -2988,6 +3002,74 @@ app.listen(ENV.PORT, () => {
       console.error('❌ Failed to load existing purchases:', error.message);
     }
   }, 5000); // Load after 5 seconds
+
+  // Загрузка кэша дубликатов при старте
+  setTimeout(async () => {
+    try {
+      console.log('🔍 Initializing duplicate checker cache...');
+      await duplicateChecker.refreshCache();
+      console.log(`✅ Duplicate checker ready with ${duplicateChecker.getStats().customersInCache} customers`);
+    } catch (error) {
+      console.error('❌ Failed to initialize duplicate checker:', error.message);
+    }
+  }, 7000); // После загрузки existing purchases
+
+  // Автоматическое обновление кэша каждые 5 минут
+  setInterval(async () => {
+    try {
+      if (duplicateChecker.isCacheStale()) {
+        console.log('🔄 Refreshing duplicate checker cache...');
+        await duplicateChecker.refreshCache();
+      }
+    } catch (error) {
+      console.error('❌ Failed to refresh duplicate cache:', error.message);
+    }
+  }, 5 * 60 * 1000);
+
+  // Автоматическая проверка и исправление дубликатов каждый день в 3:00 UTC+1
+  setInterval(async () => {
+    const now = new Date();
+    const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+    const hour = utcPlus1.getUTCHours();
+    const minute = utcPlus1.getUTCMinutes();
+    
+    if (hour === 3 && minute >= 0 && minute <= 5) {
+      const today = utcPlus1.toISOString().split('T')[0];
+      
+      if (!sentAlerts.duplicateCheck.has(today)) {
+        try {
+          console.log('🔍 Running automatic duplicate check...');
+          
+          const duplicates = await duplicateChecker.findAllDuplicates();
+          
+          if (duplicates.duplicatesFound > 0) {
+            console.log(`⚠️ Found ${duplicates.duplicatesFound} duplicates, fixing...`);
+            
+            const response = await fetch(`http://localhost:${ENV.PORT}/api/fix-duplicates`, {
+              method: 'POST'
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+              const alert = `🔧 AUTOMATIC DUPLICATE CLEANUP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ Fixed: ${result.fixedCustomers} customers
+🗑️ Deleted: ${result.deletedRows} rows
+📅 ${new Date().toLocaleDateString()}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+              
+              await sendTextNotifications(alert);
+            }
+          }
+          
+          sentAlerts.duplicateCheck.add(today);
+        } catch (error) {
+          console.error('❌ Automatic duplicate check failed:', error.message);
+        }
+      }
+    }
+  }, 5 * 60 * 1000);
 
   // Check for missed alerts on startup
   setTimeout(async () => {
