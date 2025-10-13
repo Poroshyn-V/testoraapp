@@ -37,9 +37,10 @@ export function shortId(id: string): string {
 
 export function formatTelegram(session: Stripe.Checkout.Session, customerMetadata: any = {}) {
   const m = { ...session.metadata, ...customerMetadata };
-  const amount = ((session.amount_total ?? 0) / 100).toFixed(2);
+  const amount = session.amount_total ? (session.amount_total / 100).toFixed(2) : '0.00';
   const currency = (session.currency || 'usd').toUpperCase();
   const email = session.customer_details?.email || session.customer_email || 'N/A';
+  const customerId = session.customer || 'unknown';
   
   // Extract geo data
   const geoCountry = m.geo_country || m.country || session.customer_details?.address?.country || 'Unknown';
@@ -58,7 +59,7 @@ export function formatTelegram(session: Stripe.Checkout.Session, customerMetadat
   const campaignName = rawCampaignName ? formatCampaignName(rawCampaignName) : null;
   
   // Create STRUCTURED notification message
-  let message = `🟢 Purchase purchase_${session.customer || 'unknown'} was processed!
+  let message = `🟢 Purchase purchase_${customerId} was processed!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 💳 Payment Method: Card
 💰 Amount: ${amount} ${currency}
