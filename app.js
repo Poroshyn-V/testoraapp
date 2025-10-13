@@ -374,31 +374,28 @@ app.get('/health', async (_req, res) => {
     const memUsage = process.memoryUsage();
     const uptime = process.uptime();
     
+    // Test external services
+    const serviceChecks = {
+      stripe: await checkStripeConnection(),
+      googleSheets: await checkGoogleSheetsConnection(),
+      telegram: await checkTelegramConnection()
+    };
+    
+    const allServicesHealthy = Object.values(serviceChecks).every(check => check.status === 'healthy');
+    
     const healthStatus = {
-      status: 'ok',
+      status: allServicesHealthy ? 'healthy' : 'degraded',
       timestamp: new Date().toISOString(),
-      uptime,
-      memory: memUsage,
-      environment: {
-        nodeVersion: process.version,
-        platform: process.platform,
-        arch: process.arch
+      uptime: {
+        seconds: Math.floor(uptime),
+        human: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m`
       },
-      services: {
-        stripe: 'connected',
-        googleSheets: ENV.GOOGLE_SERVICE_EMAIL ? 'configured' : 'not_configured',
-        telegram: ENV.TELEGRAM_BOT_TOKEN ? 'configured' : 'not_configured',
-        slack: ENV.SLACK_BOT_TOKEN ? 'configured' : 'not_configured'
-      },
-      rateLimit: getRateLimitStats(),
       memory: {
-        existingPurchases: purchaseCache.size(),
-        processedPurchases: purchaseCache.processedPurchaseIds.size
+        heapUsed: `${Math.round(memUsage.heapUsed / 1024 / 1024)}MB`,
+        heapTotal: `${Math.round(memUsage.heapTotal / 1024 / 1024)}MB`,
+        rss: `${Math.round(memUsage.rss / 1024 / 1024)}MB`
       },
-      sync: {
-        isSyncing: isSyncing,
-        status: isSyncing ? 'in_progress' : 'idle'
-      },
+      services: serviceChecks,
       intervals: {
         sync: syncInterval ? 'active' : 'inactive',
         geoAlert: geoAlertInterval ? 'active' : 'inactive',
@@ -407,18 +404,80 @@ app.get('/health', async (_req, res) => {
         weeklyReport: weeklyReportInterval ? 'active' : 'inactive',
         alertCleanup: alertCleanupInterval ? 'active' : 'inactive'
       },
+      cache: {
+        purchases: purchaseCache.size(),
+        processedPurchases: purchaseCache.processedPurchaseIds.size
+      },
+      alerts: {
+        cooldowns: alertCooldown.getStats(),
+        historySize: alertHistory.length
+      },
+      performance: performanceMonitor.getStats(),
       metrics: metrics.getSummary()
     };
     
-    res.status(200).json(healthStatus);
+    const statusCode = allServicesHealthy ? 200 : 503;
+    res.status(statusCode).json(healthStatus);
+    
   } catch (error) {
     res.status(500).json({
-      status: 'error',
+      status: 'unhealthy',
       message: 'Health check failed',
+      error: error.message,
       timestamp: new Date().toISOString()
     });
   }
 });
+
+// Helper functions for health checks
+async function checkStripeConnection() {
+  try {
+    const startTime = Date.now();
+    await stripe.customers.list({ limit: 1 });
+    return {
+      status: 'healthy',
+      responseTime: `${Date.now() - startTime}ms`
+    };
+  } catch (error) {
+    return {
+      status: 'unhealthy',
+      error: error.message
+    };
+  }
+}
+
+async function checkGoogleSheetsConnection() {
+  try {
+    const startTime = Date.now();
+    await googleSheets.getAllRows(); // cached
+    return {
+      status: 'healthy',
+      responseTime: `${Date.now() - startTime}ms`
+    };
+  } catch (error) {
+    return {
+      status: 'unhealthy',
+      error: error.message
+    };
+  }
+}
+
+async function checkTelegramConnection() {
+  try {
+    const startTime = Date.now();
+    const response = await fetch(`https://api.telegram.org/bot${ENV.TELEGRAM_BOT_TOKEN}/getMe`);
+    const isHealthy = response.ok;
+    return {
+      status: isHealthy ? 'healthy' : 'unhealthy',
+      responseTime: `${Date.now() - startTime}ms`
+    };
+  } catch (error) {
+    return {
+      status: 'unhealthy',
+      error: error.message
+    };
+  }
+}
 
 // Load existing purchases endpoint
 app.get('/api/load-existing', async (req, res) => {
