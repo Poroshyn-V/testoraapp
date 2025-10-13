@@ -15,6 +15,7 @@ import { alertCooldown } from './src/utils/alertCooldown.js';
 import { performanceMonitor } from './src/services/performanceMonitor.js';
 import { notificationQueue } from './src/services/notificationQueue.js';
 import { campaignAnalyzer } from './src/services/campaignAnalyzer.js';
+import { duplicateChecker } from './src/services/duplicateChecker.js';
 import { formatPaymentForSheets, formatTelegramNotification } from './src/utils/formatting.js';
 import { validateEmail, validateCustomerId, validatePaymentId, validateAmount } from './src/utils/validation.js';
 import { purchaseCache } from './src/services/purchaseCache.js';
@@ -277,6 +278,9 @@ async function loadExistingPurchases() {
     
     await purchaseCache.reload();
     
+    // Also refresh duplicate checker cache
+    await duplicateChecker.refreshCache();
+    
     const duration = Date.now() - startTime;
     metrics.endTimer(timerId);
     metrics.increment('load_existing_success');
@@ -436,6 +440,10 @@ app.get('/', (_req, res) => res.json({
     '/api/campaigns/report',
     '/api/campaigns/list',
     '/api/test-batch-operations',
+    '/api/duplicate-checker/stats',
+    '/api/duplicate-checker/refresh',
+    '/api/duplicate-checker/customer/:customerId',
+    '/api/duplicate-checker/payment-intent/:paymentIntentId',
     '/api/metrics',
     '/api/metrics/summary',
     '/api/metrics/reset',
@@ -497,7 +505,8 @@ app.get('/health', async (_req, res) => {
       },
       cache: {
         purchases: purchaseCache.size(),
-        processedPurchases: purchaseCache.processedPurchaseIds.size
+        processedPurchases: purchaseCache.processedPurchaseIds.size,
+        duplicateChecker: duplicateChecker.getStats()
       },
       alerts: {
         cooldowns: alertCooldown.getStats(),
@@ -735,46 +744,13 @@ app.get('/api/check-duplicates', async (req, res) => {
   try {
     logger.info('🔍 Starting duplicate check...');
     
-    const rows = await googleSheets.getAllRows();
-    const customerGroups = new Map();
-    const duplicates = [];
-    
-    // Group rows by Customer ID
-    for (const row of rows) {
-      const customerId = row.get('Customer ID');
-      if (!customerId || customerId === 'N/A') continue;
-      
-      if (!customerGroups.has(customerId)) {
-        customerGroups.set(customerId, []);
-      }
-      customerGroups.get(customerId).push(row);
-    }
-    
-    // Find customers with multiple rows
-    for (const [customerId, customerRows] of customerGroups.entries()) {
-      if (customerRows.length > 1) {
-        duplicates.push({
-          customerId,
-          count: customerRows.length,
-          rows: customerRows.map(row => ({
-            rowNumber: row.rowNumber,
-            email: row.get('Email'),
-            totalAmount: row.get('Total Amount'),
-            paymentCount: row.get('Payment Count'),
-            paymentIds: row.get('Payment Intent IDs')
-          }))
-        });
-      }
-    }
-    
-    logger.info(`Found ${duplicates.length} customers with duplicates`);
+    // Use the new DuplicateChecker service
+    const result = await duplicateChecker.findAllDuplicates();
     
     res.json({
       success: true,
-      message: `Found ${duplicates.length} customers with duplicate entries`,
-      duplicates: duplicates,
-      totalCustomers: customerGroups.size,
-      totalRows: rows.length
+      message: `Found ${result.duplicatesFound} customers with duplicate entries`,
+      ...result
     });
     
   } catch (error) {
@@ -1040,6 +1016,92 @@ app.get('/api/campaigns/list', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to list campaigns',
+      error: error.message
+    });
+  }
+});
+
+// Duplicate checker cache management endpoints
+app.get('/api/duplicate-checker/stats', (req, res) => {
+  try {
+    const stats = duplicateChecker.getStats();
+    res.json({
+      success: true,
+      message: 'Duplicate checker statistics',
+      ...stats
+    });
+  } catch (error) {
+    logger.error('Error getting duplicate checker stats', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.post('/api/duplicate-checker/refresh', async (req, res) => {
+  try {
+    logger.info('🔄 Refreshing duplicate checker cache...');
+    const count = await duplicateChecker.refreshCache();
+    
+    res.json({
+      success: true,
+      message: 'Duplicate checker cache refreshed',
+      customersInCache: count
+    });
+  } catch (error) {
+    logger.error('Error refreshing duplicate checker cache', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.get('/api/duplicate-checker/customer/:customerId', (req, res) => {
+  try {
+    const { customerId } = req.params;
+    
+    if (duplicateChecker.customerExists(customerId)) {
+      const info = duplicateChecker.getCustomerInfo(customerId);
+      res.json({
+        success: true,
+        message: 'Customer found in cache',
+        customerId,
+        info
+      });
+    } else {
+      res.json({
+        success: true,
+        message: 'Customer not found in cache',
+        customerId,
+        exists: false
+      });
+    }
+  } catch (error) {
+    logger.error('Error checking customer in duplicate checker', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+app.get('/api/duplicate-checker/payment-intent/:paymentIntentId', (req, res) => {
+  try {
+    const { paymentIntentId } = req.params;
+    const result = duplicateChecker.paymentIntentExists(paymentIntentId);
+    
+    res.json({
+      success: true,
+      message: result.exists ? 'Payment intent found' : 'Payment intent not found',
+      paymentIntentId,
+      ...result
+    });
+  } catch (error) {
+    logger.error('Error checking payment intent in duplicate checker', error);
+    res.status(500).json({
+      success: false,
       error: error.message
     });
   }
