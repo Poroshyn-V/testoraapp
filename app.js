@@ -1221,21 +1221,7 @@ app.listen(ENV.PORT, () => {
     const scheduleGeoAlert = () => {
       console.log('🌍 Starting hourly GEO alerts...');
       
-      // First alert after 1 minute
-      setTimeout(async () => {
-        try {
-          console.log('🌍 Running first GEO alert...');
-          const response = await fetch(`http://localhost:${ENV.PORT}/api/geo-alert`, {
-            method: 'GET'
-          });
-          const result = await response.json();
-          console.log(`✅ GEO alert completed: ${result.message}`);
-        } catch (error) {
-          console.error('❌ GEO alert failed:', error.message);
-        }
-      }, 60000); // 1 minute
-      
-      // Then every hour
+      // Only run on scheduled intervals (every hour)
       setInterval(async () => {
         try {
           console.log('🌍 Running hourly GEO alert...');
@@ -1390,7 +1376,7 @@ app.listen(ENV.PORT, () => {
     console.log('   ✅ Checks Stripe every 5 minutes');
     console.log('   ✅ Adds new purchases to Google Sheets');
     console.log('   ✅ Sends notifications to Telegram and Slack');
-    console.log('   ✅ GEO alerts every hour');
+    console.log('   ✅ GEO alerts every hour (scheduled only)');
     console.log('   ✅ Daily stats every morning at 7:00 UTC+1');
     console.log('   ✅ Creative alerts at 10:00 and 22:00 UTC+1');
     console.log('   ✅ Weekly reports every Monday at 9 AM UTC+1');
