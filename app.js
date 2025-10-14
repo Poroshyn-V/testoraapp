@@ -3869,11 +3869,10 @@ async function checkMissedAlerts() {
   if (currentHour === alertConfig.dailyStatsHour && currentMinute <= 5 && !sentAlerts.dailyStats.has(today)) {
     logger.info('📊 Sending missed daily stats alert...');
     try {
-      const response = await fetch(`http://localhost:${ENV.PORT}/api/daily-stats`, {
-        method: 'GET'
-      });
-      const result = await response.json();
-      if (result.success) {
+      // ✅ ПРЯМОЙ ВЫЗОВ ВМЕСТО FETCH
+      const stats = await analytics.generateDailyStats();
+      if (stats) {
+        await sendTextNotifications(stats);
         sentAlerts.dailyStats.add(today);
         logger.info('✅ Missed daily stats sent successfully');
       }
@@ -3898,11 +3897,10 @@ async function checkMissedAlerts() {
     if (!sentAlerts.creativeAlert.has(morning)) {
       logger.info('🎨 Sending missed morning creative alert...');
       try {
-        const response = await fetch(`http://localhost:${ENV.PORT}/api/creative-alert`, {
-          method: 'GET'
-        });
-        const result = await response.json();
-        if (result.success) {
+        // ✅ ПРЯМОЙ ВЫЗОВ ВМЕСТО FETCH
+        const alert = await analytics.generateCreativeAlert();
+        if (alert) {
+          await sendTextNotifications(alert);
           sentAlerts.creativeAlert.add(morning);
           logger.info('✅ Missed morning creative alert sent');
         }
@@ -3979,21 +3977,48 @@ app.listen(ENV.PORT, () => {
           if (duplicates.duplicatesFound > 0) {
             console.log(`⚠️ Found ${duplicates.duplicatesFound} duplicates, fixing...`);
             
-            const response = await fetch(`http://localhost:${ENV.PORT}/api/fix-duplicates`, {
-              method: 'POST'
-            });
+            // ✅ ПРЯМОЙ ВЫЗОВ ВМЕСТО FETCH - используем уже существующую логику
+            const rows = await googleSheets.getAllRows();
+            const customerMap = new Map();
+            let duplicatesRemoved = 0;
             
-            const result = await response.json();
+            // Group rows by Customer ID
+            for (const row of rows) {
+              const customerId = row.get('Customer ID');
+              if (!customerId || customerId === 'N/A') continue;
+              
+              if (!customerMap.has(customerId)) {
+                customerMap.set(customerId, []);
+              }
+              customerMap.get(customerId).push(row);
+            }
             
-            if (result.success) {
+            // Remove duplicates
+            for (const [customerId, customerRows] of customerMap) {
+              if (customerRows.length > 1) {
+                console.log(`Found ${customerRows.length} duplicates for customer ${customerId}`);
+                for (let i = 1; i < customerRows.length; i++) {
+                  await googleSheets.deleteRow(customerRows[i].rowNumber);
+                  duplicatesRemoved++;
+                }
+              }
+            }
+            
+            if (duplicatesRemoved > 0) {
               const alert = `🔧 AUTOMATIC DUPLICATE CLEANUP
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ Fixed: ${result.fixedCustomers} customers
-🗑️ Deleted: ${result.deletedRows} rows
+✅ Fixed: ${customerMap.size} customers
+🗑️ Deleted: ${duplicatesRemoved} rows
 📅 ${new Date().toLocaleDateString()}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
               
               await sendTextNotifications(alert);
+              
+              // Refresh caches
+              await Promise.all([
+                duplicateChecker.refreshCache(),
+                purchaseCache.reload()
+              ]);
             }
           }
           
@@ -4196,12 +4221,13 @@ app.listen(ENV.PORT, () => {
         if (!sentAlerts.weeklyReport.has(weekKey)) {
           try {
             console.log('📊 Running weekly report...');
-            const response = await fetch(`http://localhost:${ENV.PORT}/api/weekly-report`, {
-              method: 'GET'
-            });
-            const result = await response.json();
-            console.log(`✅ Weekly report completed: ${result.message}`);
-            sentAlerts.weeklyReport.add(weekKey);
+            // ✅ ПРЯМОЙ ВЫЗОВ ВМЕСТО FETCH
+            const report = await analytics.generateWeeklyReport();
+            if (report) {
+              await sendTextNotifications(report);
+              console.log('✅ Weekly report completed');
+              sentAlerts.weeklyReport.add(weekKey);
+            }
           } catch (error) {
             console.error('❌ Weekly report failed:', error.message);
           }
@@ -4218,12 +4244,13 @@ app.listen(ENV.PORT, () => {
           if (!sentAlerts.weeklyReport.has(weekKey)) {
             try {
               console.log('📊 Running weekly report...');
-              const response = await fetch(`http://localhost:${ENV.PORT}/api/weekly-report`, {
-                method: 'GET'
-              });
-              const result = await response.json();
-              console.log(`✅ Weekly report completed: ${result.message}`);
-              sentAlerts.weeklyReport.add(weekKey);
+              // ✅ ПРЯМОЙ ВЫЗОВ ВМЕСТО FETCH
+              const report = await analytics.generateWeeklyReport();
+              if (report) {
+                await sendTextNotifications(report);
+                console.log('✅ Weekly report completed');
+                sentAlerts.weeklyReport.add(weekKey);
+              }
             } catch (error) {
               console.error('❌ Weekly report failed:', error.message);
             }
