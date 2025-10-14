@@ -541,6 +541,7 @@ app.get('/', (_req, res) => res.json({
     '/api/sync-diagnostics',
     '/api/force-unlock-sync',
     '/api/force-sync',
+    '/api/restart-auto-sync',
     '/api/intervals-status',
     '/api/test-notification',
     '/api/check-recent-payments',
@@ -3246,6 +3247,7 @@ app.get('/api/alerts/dashboard', async (req, res) => {
         creativeAlertCache: sentAlerts.creativeAlert.size,
         weeklyReportCache: sentAlerts.weeklyReport.size
       }
+      
     };
     
     res.json({
@@ -3690,6 +3692,37 @@ app.post('/api/force-sync', async (req, res) => {
   }
 });
 
+// Restart automatic sync endpoint
+app.post('/api/restart-auto-sync', async (req, res) => {
+  try {
+    logger.info('🔄 Restarting automatic sync...');
+    
+    // Очищаем все блокировки
+    isSyncing = false;
+    distributedLock.forceRelease('sync_operation');
+    syncLock.clear();
+    
+    // Сбрасываем время последней синхронизации
+    global.lastSyncTime = 0;
+    
+    // Запускаем синхронизацию сразу
+    const result = await runSync();
+    
+    res.json({
+      success: true,
+      message: 'Automatic sync restarted',
+      result: result,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Error restarting auto sync', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Check intervals status endpoint
 app.get('/api/intervals-status', (req, res) => {
   try {
@@ -4036,6 +4069,27 @@ app.listen(ENV.PORT, () => {
         }
       }
     }, 60000); // Проверяем каждую минуту
+    
+    // Еще более агрессивная система проверки каждые 30 секунд
+    const aggressiveSyncCheck = setInterval(async () => {
+      const now = Date.now();
+      const lastSync = global.lastSyncTime || 0;
+      const timeSinceLastSync = now - lastSync;
+      const syncIntervalMs = alertConfig.syncInterval * 60 * 1000;
+      
+      // Если прошло больше времени чем интервал синхронизации
+      if (timeSinceLastSync > syncIntervalMs && !isSyncing) {
+        console.log('🔄 Aggressive sync triggered - interval exceeded');
+        try {
+          const result = await runSync();
+          if (result.success) {
+            console.log(`✅ Aggressive sync completed: ${result.total_payments || 0} payments processed`);
+          }
+        } catch (error) {
+          console.error('❌ Aggressive sync failed:', error.message);
+        }
+      }
+    }, 30000); // Проверяем каждые 30 секунд
     
     // Автоматическая очистка дубликатов каждые 30 минут
     const duplicateCleanupInterval = setInterval(async () => {
