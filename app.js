@@ -7,7 +7,7 @@ import { rateLimit, getRateLimitStats } from './src/middleware/rateLimit.js';
 import { errorHandler, notFoundHandler } from './src/middleware/errorHandler.js';
 import { getCacheStats } from './src/utils/cache.js';
 import { stripe, getRecentPayments, getCustomerPayments, getCustomer } from './src/services/stripe.js';
-import { sendNotifications, sendTextNotifications } from './src/services/notifications.js';
+import { sendNotifications, sendTextNotifications, sendPurchaseNotification } from './src/services/notifications.js';
 import googleSheets from './src/services/googleSheets.js';
 import { analytics } from './src/services/analytics.js';
 import { smartAlerts } from './src/services/smartAlerts.js';
@@ -97,23 +97,10 @@ let alertCleanupInterval = null;
 // Emergency stop flag
 let emergencyStop = false;
 
-// Helper function for sending purchase notifications with metrics
-async function sendPurchaseNotification(payment, customer, sheetData, type) {
-  // 🔍 Проверяем дубликаты только в duplicateChecker, но НЕ в purchaseCache
-  // потому что purchaseCache обновляется после добавления в таблицу
-  const paymentCheck = duplicateChecker.paymentIntentExists(payment.id);
-  if (paymentCheck.exists) {
-    logger.info(`Skipping notification for duplicate payment ${payment.id} (duplicateChecker)`, {
-      paymentId: payment.id,
-      customerId: customer.id,
-      reason: 'duplicate_detected_duplicateChecker'
-    });
-    return; // Не отправляем уведомление для дубликата
-  }
-  
+// Helper function for VIP purchase alerts
+async function sendVipPurchaseAlert(payment, customer, sheetData) {
   const amount = parseFloat(sheetData['Total Amount'] || 0);
   
-  // VIP purchase alert
   if (amount >= alertConfig.vipPurchaseThreshold) {
     const alertType = `vip_${customer.id}`;
     
@@ -145,28 +132,6 @@ async function sendPurchaseNotification(payment, customer, sheetData, type) {
         customerEmail: customer.email 
       });
     }
-  }
-  
-  // Regular notification - add to queue for reliable delivery
-  try {
-    const notificationMessage = await formatTelegramNotification(payment, customer, sheetData);
-    
-    await notificationQueue.add({
-      type: type,
-      channel: 'telegram',
-      message: notificationMessage,
-      metadata: {
-        paymentId: payment.id,
-        customerId: customer.id,
-        amount: amount
-      }
-    });
-    
-    metrics.increment('notification_queued', 1, { type });
-    
-  } catch (error) {
-    metrics.increment('notification_failed', 1, { type, error: error.message });
-    logger.error(`Failed to queue ${type} notification`, error);
   }
 }
 
@@ -2398,6 +2363,11 @@ async function performSyncLogic() {
             };
             
             const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
+            
+            // Send VIP alert if applicable
+            await sendVipPurchaseAlert(latestPayment, customer, sheetData);
+            
+            // Send regular notification
             await sendPurchaseNotification(latestPayment, customer, sheetData, 'upsell');
             
             results.updatedPurchases++;
@@ -2466,6 +2436,10 @@ async function performSyncLogic() {
               'Payment Intent IDs': rowData['Payment Intent IDs']
             };
             
+            // Send VIP alert if applicable
+            await sendVipPurchaseAlert(firstPayment, customer, sheetData);
+            
+            // Send regular notification
             await sendPurchaseNotification(firstPayment, customer, sheetData, 'new_purchase');
             
             results.processed++;
