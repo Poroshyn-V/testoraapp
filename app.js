@@ -427,6 +427,9 @@ async function runSync() {
       timestamp: new Date().toISOString()
     });
     
+    // Записываем время последней синхронизации
+    global.lastSyncTime = Date.now();
+    
     // Record performance metrics
     const syncDuration = Date.now() - startTime;
     performanceMonitor.recordOperation('sync', syncDuration, {
@@ -537,6 +540,7 @@ app.get('/', (_req, res) => res.json({
     '/api/distributed-locks/release/:lockKey',
     '/api/sync-diagnostics',
     '/api/force-unlock-sync',
+    '/api/force-sync',
     '/auto-sync',
     '/ping',
     '/health'
@@ -3654,6 +3658,35 @@ app.post('/api/force-unlock-sync', async (req, res) => {
   }
 });
 
+// Force sync endpoint - принудительный запуск синхронизации
+app.post('/api/force-sync', async (req, res) => {
+  try {
+    logger.info('🔄 Force sync requested...');
+    
+    // Сбрасываем флаг синхронизации если он застрял
+    if (isSyncing) {
+      logger.warn('⚠️ Sync was stuck, resetting...');
+      isSyncing = false;
+      distributedLock.forceRelease('sync_operation');
+    }
+    
+    const result = await runSync();
+    
+    res.json({
+      success: true,
+      message: 'Force sync completed',
+      result: result,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error('Error in force sync', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Check for missed alerts function
 async function checkMissedAlerts() {
   if (emergencyStop) {
@@ -3837,7 +3870,7 @@ app.listen(ENV.PORT, () => {
       }
     }, 30000);
     
-    // Then every 5 minutes
+    // Then every 5 minutes - более надежная система
     syncInterval = setInterval(async () => {
       try {
         console.log('🔄 Running scheduled sync...');
@@ -3851,6 +3884,71 @@ app.listen(ENV.PORT, () => {
         console.error('❌ Scheduled sync failed:', error.message);
       }
     }, alertConfig.syncInterval * 60 * 1000); // Configurable sync interval
+    
+    // Дополнительная система проверки каждую минуту (fallback)
+    const syncCheckInterval = setInterval(async () => {
+      const now = Date.now();
+      const lastSync = global.lastSyncTime || 0;
+      const timeSinceLastSync = now - lastSync;
+      const syncIntervalMs = alertConfig.syncInterval * 60 * 1000;
+      
+      // Если прошло больше времени чем интервал синхронизации + 1 минута
+      if (timeSinceLastSync > syncIntervalMs + 60000) {
+        console.log('🔄 Fallback sync triggered - too much time since last sync');
+        try {
+          const result = await runSync();
+          if (result.success) {
+            console.log(`✅ Fallback sync completed: ${result.total_payments || 0} payments processed`);
+          }
+        } catch (error) {
+          console.error('❌ Fallback sync failed:', error.message);
+        }
+      }
+    }, 60000); // Проверяем каждую минуту
+    
+    // Автоматическая очистка дубликатов каждые 30 минут
+    const duplicateCleanupInterval = setInterval(async () => {
+      try {
+        console.log('🧹 Running automatic duplicate cleanup...');
+        // Используем прямой вызов функции вместо HTTP запроса
+        const rows = await googleSheets.getAllRows();
+        const customerMap = new Map();
+        let duplicatesRemoved = 0;
+        
+        // Group rows by Customer ID
+        for (const row of rows) {
+          const customerId = row.get('Customer ID');
+          if (!customerId || customerId === 'N/A') continue;
+          
+          if (!customerMap.has(customerId)) {
+            customerMap.set(customerId, []);
+          }
+          customerMap.get(customerId).push(row);
+        }
+        
+        // Remove duplicates
+        for (const [customerId, customerRows] of customerMap) {
+          if (customerRows.length > 1) {
+            console.log(`Found ${customerRows.length} duplicates for customer ${customerId}`);
+            for (let i = 1; i < customerRows.length; i++) {
+              await googleSheets.deleteRow(customerRows[i].rowNumber);
+              duplicatesRemoved++;
+            }
+          }
+        }
+        
+        if (duplicatesRemoved > 0) {
+          console.log(`✅ Automatic cleanup completed: removed ${duplicatesRemoved} duplicate rows`);
+          // Refresh caches
+          await Promise.all([
+            duplicateChecker.refreshCache(),
+            purchaseCache.reload()
+          ]);
+        }
+      } catch (error) {
+        console.error('❌ Automatic duplicate cleanup failed:', error.message);
+      }
+    }, 30 * 60 * 1000); // Каждые 30 минут
     
     // GEO Alert every hour (scheduled only, no initial run)
     const scheduleGeoAlert = () => {
