@@ -3791,16 +3791,16 @@ app.listen(ENV.PORT, () => {
   if (!ENV.AUTO_SYNC_DISABLED) {
     console.log('🔄 Starting automatic sync every 5 minutes...');
     
-    // First sync after 30 seconds
+    // First sync after 30 seconds - use direct function call instead of HTTP
     setTimeout(async () => {
       try {
         console.log('🚀 Running initial sync...');
-        const response = await fetch(`http://localhost:${ENV.PORT}/api/sync-payments`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        });
-        const result = await response.json();
-        console.log(`✅ Initial sync completed: ${result.total_payments || 0} payments processed`);
+        const result = await runSync();
+        if (result.success) {
+          console.log(`✅ Initial sync completed: ${result.processed || 0} payments processed`);
+        } else {
+          console.log(`⚠️ Initial sync skipped: ${result.message}`);
+        }
       } catch (error) {
         console.error('❌ Initial sync failed:', error.message);
       }
