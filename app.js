@@ -511,6 +511,7 @@ app.get('/', (_req, res) => res.json({
     '/api/duplicates/cache-stats',
     '/api/duplicates/refresh-cache',
     '/api/duplicates/find',
+    '/api/duplicates/find-by-customer',
     '/api/sync-locks',
     '/api/metrics',
     '/api/metrics/summary',
@@ -1786,6 +1787,65 @@ app.get('/api/duplicates/find', async (req, res) => {
     });
   } catch (error) {
     logger.error('Error finding duplicates', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Find duplicates by Customer ID (more comprehensive check)
+app.get('/api/duplicates/find-by-customer', async (req, res) => {
+  try {
+    logger.info('🔍 Starting comprehensive duplicate check by Customer ID...');
+    
+    const rows = await googleSheets.getAllRows();
+    logger.info(`📋 Checking ${rows.length} rows for duplicates by Customer ID...`);
+    
+    // Group rows by Customer ID
+    const customerMap = new Map();
+    for (const row of rows) {
+      const customerId = row.get('Customer ID');
+      if (!customerId || customerId === 'N/A') continue;
+      
+      if (!customerMap.has(customerId)) {
+        customerMap.set(customerId, []);
+      }
+      customerMap.get(customerId).push(row);
+    }
+    
+    // Find customers with multiple rows
+    const duplicates = [];
+    for (const [customerId, customerRows] of customerMap.entries()) {
+      if (customerRows.length > 1) {
+        duplicates.push({
+          customerId,
+          rowCount: customerRows.length,
+          rows: customerRows.map((row, index) => ({
+            rowNumber: row.rowNumber,
+            purchaseId: row.get('Purchase ID'),
+            email: row.get('Email'),
+            amount: row.get('Total Amount'),
+            paymentIntentIds: row.get('Payment Intent IDs'),
+            created: row.get('Created Local (UTC+1)')
+          }))
+        });
+      }
+    }
+    
+    logger.info(`🔍 Found ${duplicates.length} customers with duplicate rows`);
+    
+    res.json({
+      success: true,
+      message: `Found ${duplicates.length} customers with duplicate rows`,
+      totalCustomers: customerMap.size,
+      totalRows: rows.length,
+      duplicatesFound: duplicates.length,
+      duplicates: duplicates.slice(0, 10) // Show first 10
+    });
+    
+  } catch (error) {
+    logger.error('Error finding duplicates by customer', error);
     res.status(500).json({
       success: false,
       error: error.message
