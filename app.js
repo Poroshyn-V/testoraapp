@@ -3069,9 +3069,6 @@ app.get('/api/geo-alert', async (req, res) => {
       await sendTextNotifications(alert);
       
       // Отмечаем, что GEO алерт был отправлен
-      if (!sentAlerts.geoAlert) {
-        sentAlerts.geoAlert = new Set();
-      }
       sentAlerts.geoAlert.add(geoAlertKey);
       
       res.json({
@@ -3173,9 +3170,6 @@ app.get('/api/creative-alert', async (req, res) => {
       await sendTextNotifications(alert);
       
       // Отмечаем, что Creative алерт был отправлен
-      if (!sentAlerts.creativeAlert) {
-        sentAlerts.creativeAlert = new Set();
-      }
       sentAlerts.creativeAlert.add(creativeAlertKey);
       
       res.json({
@@ -4180,7 +4174,6 @@ app.listen(ENV.PORT, () => {
             const alert = await analytics.generateGeoAlert();
             if (alert) {
               await sendTextNotifications(alert);
-              if (!sentAlerts.geoAlert) sentAlerts.geoAlert = new Set();
               sentAlerts.geoAlert.add(geoAlertKey);
               console.log('✅ GEO alert completed');
             }
