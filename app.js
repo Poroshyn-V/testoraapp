@@ -542,6 +542,8 @@ app.get('/', (_req, res) => res.json({
     '/api/force-unlock-sync',
     '/api/force-sync',
     '/api/intervals-status',
+    '/api/test-notification',
+    '/api/check-recent-payments',
     '/auto-sync',
     '/ping',
     '/health'
@@ -3717,6 +3719,98 @@ app.get('/api/intervals-status', (req, res) => {
       emergencyStop: emergencyStop
     });
   } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Test notification endpoint
+app.post('/api/test-notification', async (req, res) => {
+  try {
+    logger.info('🧪 Testing notification system...');
+    
+    // Create a test notification
+    const testMessage = `🧪 TEST NOTIFICATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💰 Amount: $9.99
+👤 Customer: test@example.com
+🆔 ID: cus_test123
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ Notification system is working!`;
+    
+    // Add to notification queue
+    await notificationQueue.add({
+      type: 'test',
+      channel: 'telegram',
+      message: testMessage,
+      metadata: { 
+        test: true,
+        timestamp: new Date().toISOString()
+      }
+    });
+    
+    res.json({
+      success: true,
+      message: 'Test notification added to queue',
+      queueSize: notificationQueue.getStats().queueSize
+    });
+  } catch (error) {
+    logger.error('Error testing notification', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Check recent Stripe payments endpoint
+app.get('/api/check-recent-payments', async (req, res) => {
+  try {
+    logger.info('🔍 Checking recent Stripe payments...');
+    
+    // Get recent payments from Stripe
+    const payments = await getRecentPayments(50);
+    
+    // Filter successful payments
+    const successfulPayments = payments.filter(p => {
+      if (p.status !== 'succeeded' || !p.customer) return false;
+      if (p.description && p.description.toLowerCase().includes('subscription update')) {
+        return false;
+      }
+      return true;
+    });
+    
+    // Check which ones are in cache
+    const paymentsWithStatus = successfulPayments.map(payment => {
+      const inCache = purchaseCache.has(payment.id);
+      const inDuplicateChecker = duplicateChecker.paymentIntentExists(payment.id).exists;
+      
+      return {
+        id: payment.id,
+        amount: payment.amount,
+        customer: payment.customer,
+        created: new Date(payment.created * 1000).toISOString(),
+        inPurchaseCache: inCache,
+        inDuplicateChecker: inDuplicateChecker,
+        shouldBeProcessed: !inCache && !inDuplicateChecker
+      };
+    });
+    
+    const shouldBeProcessed = paymentsWithStatus.filter(p => p.shouldBeProcessed);
+    
+    res.json({
+      success: true,
+      message: `Found ${successfulPayments.length} successful payments`,
+      totalPayments: successfulPayments.length,
+      shouldBeProcessed: shouldBeProcessed.length,
+      payments: paymentsWithStatus.slice(0, 10), // Show first 10
+      shouldBeProcessedList: shouldBeProcessed.slice(0, 5) // Show first 5 that should be processed
+    });
+    
+  } catch (error) {
+    logger.error('Error checking recent payments', error);
     res.status(500).json({
       success: false,
       error: error.message
