@@ -541,6 +541,7 @@ app.get('/', (_req, res) => res.json({
     '/api/sync-diagnostics',
     '/api/force-unlock-sync',
     '/api/force-sync',
+    '/api/intervals-status',
     '/auto-sync',
     '/ping',
     '/health'
@@ -3680,6 +3681,42 @@ app.post('/api/force-sync', async (req, res) => {
     });
   } catch (error) {
     logger.error('Error in force sync', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Check intervals status endpoint
+app.get('/api/intervals-status', (req, res) => {
+  try {
+    const now = Date.now();
+    const lastSync = global.lastSyncTime || 0;
+    const timeSinceLastSync = now - lastSync;
+    
+    res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      intervals: {
+        sync: !!syncInterval,
+        geoAlert: !!geoAlertInterval,
+        dailyStats: !!dailyStatsInterval,
+        creativeAlert: !!creativeAlertInterval,
+        weeklyReport: !!weeklyReportInterval,
+        campaignAnalysis: !!campaignAnalysisInterval
+      },
+      syncStatus: {
+        isSyncing: isSyncing,
+        lastSyncTime: lastSync ? new Date(lastSync).toISOString() : null,
+        timeSinceLastSync: timeSinceLastSync,
+        timeSinceLastSyncMinutes: Math.round(timeSinceLastSync / 60000),
+        syncIntervalMinutes: alertConfig.syncInterval,
+        shouldHaveRun: timeSinceLastSync > (alertConfig.syncInterval * 60 * 1000)
+      },
+      emergencyStop: emergencyStop
+    });
+  } catch (error) {
     res.status(500).json({
       success: false,
       error: error.message
