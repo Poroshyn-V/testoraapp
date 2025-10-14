@@ -1,8 +1,8 @@
 // Refactored Stripe Ops API - Modular Architecture
 import express from 'express';
 import cors from 'cors';
-import { ENV } from './src/config/env.js';
-import { logger } from './src/utils/logging.js';
+import { ENV } from './src/lib/env.js';
+import { logger } from './src/lib/logger.js';
 
 // Import route modules
 import healthRoutes from './src/routes/health.js';

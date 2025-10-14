@@ -1,8 +1,8 @@
 // Refactored Stripe Ops API - Modular Architecture
 import express from 'express';
 import cors from 'cors';
-import { ENV } from './src/config/env.js';
-import { logger } from './src/utils/logging.js';
+import { ENV } from './src/lib/env.js';
+import { logger } from './src/lib/logger.js';
 
 // Import route modules
 import healthRoutes from './src/routes/health.js';
@@ -13,7 +13,6 @@ import campaignRoutes from './src/routes/campaigns.js';
 import lockRoutes from './src/routes/locks.js';
 import alertRoutes from './src/routes/alerts.js';
 import syncRoutes from './src/routes/sync.js';
-import miscRoutes from './src/routes/misc.js';
 
 const app = express();
 
@@ -73,33 +72,7 @@ app.get('/', (_req, res) => res.json({
     '/api/alerts/cooldown-stats',
     '/api/performance-stats',
     '/api/load-existing',
-    '/api/sync-payments',
-    '/api/weekly-report',
-    '/api/geo-alert',
-    '/api/daily-stats',
-    '/api/anomaly-check',
-    '/api/force-notifications',
-    '/api/debug/utm-campaigns',
-    '/api/memory-status',
-    '/api/cache-stats',
-    '/api/sync-status',
-    '/api/clean-alerts',
-    '/api/metrics',
-    '/auto-sync',
-    '/ping',
-    '/api/test',
-    '/api/full-resync',
-    '/api/clean-duplicates',
-    '/api/test-telegram',
-    '/api/remove-test-data',
-    '/api/test-notifications',
-    '/api/metrics/summary',
-    '/api/metrics/reset',
-    '/api/test-batch-operations',
-    '/api/last-purchases',
-    '/api/fix-sheets-data',
-    '/api/debug-customer/:customerId',
-    '/api/debug-geo'
+    '/api/sync-payments'
   ]
 }));
 
@@ -112,7 +85,6 @@ app.use('/', campaignRoutes);
 app.use('/', lockRoutes);
 app.use('/', alertRoutes);
 app.use('/', syncRoutes);
-app.use('/', miscRoutes);
 
 // Error handling middleware
 app.use((error, req, res, next) => {

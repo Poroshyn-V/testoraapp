@@ -175,3 +175,37 @@ async function sendSlackText(message) {
     throw error;
   }
 }
+
+// Send purchase notification (wrapper function)
+export async function sendPurchaseNotification(payment, customer, sheetData, type) {
+  try {
+    logInfo('Sending purchase notification', {
+      paymentId: payment.id,
+      customerId: customer.id,
+      type,
+      amount: payment.amount
+    });
+
+    // Format notification message
+    const message = await formatTelegramNotification(payment, customer, sheetData);
+    
+    // Send to both Telegram and Slack
+    await Promise.all([
+      sendTelegram(message),
+      sendSlack(payment, customer, sheetData)
+    ]);
+
+    logInfo('Successfully sent purchase notification', {
+      paymentId: payment.id,
+      customerId: customer.id,
+      type
+    });
+  } catch (error) {
+    logError('Error sending purchase notification', error, {
+      paymentId: payment.id,
+      customerId: customer.id,
+      type
+    });
+    throw error;
+  }
+}
