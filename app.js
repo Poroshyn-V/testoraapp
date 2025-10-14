@@ -502,6 +502,8 @@ app.get('/', (_req, res) => res.json({
     '/api/emergency-stop',
     '/api/emergency-resume',
     '/api/force-notifications',
+    '/api/export-all-purchases',
+    '/api/export-today-purchases',
     '/api/notification-queue/stats',
     '/api/notification-queue/clear',
     '/api/notification-queue/pause',
@@ -877,6 +879,330 @@ app.post('/api/force-notifications', async (req, res) => {
     
   } catch (error) {
     logger.error('Error in force notifications', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Export all purchases from Google Sheets to Telegram and Slack
+app.post('/api/export-all-purchases', async (req, res) => {
+  try {
+    logger.info('Starting manual export of all purchases from Google Sheets');
+    
+    // Get all rows from Google Sheets
+    const allRows = await googleSheets.getAllRows();
+    logger.info(`Found ${allRows.length} rows in Google Sheets`);
+    
+    const results = {
+      total: allRows.length,
+      processed: 0,
+      failed: 0,
+      errors: [],
+      notifications: []
+    };
+    
+    // Process each row
+    for (const row of allRows) {
+      try {
+        const customerId = row.get('Customer ID');
+        if (!customerId) {
+          results.failed++;
+          results.errors.push({
+            row: row.rowNumber,
+            error: 'No Customer ID found'
+          });
+          continue;
+        }
+        
+        // Get customer data from Stripe
+        const customer = await fetchWithRetry(() => getCustomer(customerId));
+        if (!customer) {
+          results.failed++;
+          results.errors.push({
+            customerId,
+            row: row.rowNumber,
+            error: 'Customer not found in Stripe'
+          });
+          continue;
+        }
+        
+        // Get customer payments
+        const payments = await fetchWithRetry(() => getCustomerPayments(customerId));
+        const successfulPayments = payments.filter(p => {
+          if (p.status !== 'succeeded' || !p.customer) return false;
+          if (p.description && p.description.toLowerCase().includes('subscription update')) {
+            return false;
+          }
+          return true;
+        });
+        
+        if (successfulPayments.length === 0) {
+          results.failed++;
+          results.errors.push({
+            customerId,
+            row: row.rowNumber,
+            error: 'No successful payments found'
+          });
+          continue;
+        }
+        
+        const latestPayment = successfulPayments[successfulPayments.length - 1];
+        
+        // Prepare sheet data
+        const sheetData = {
+          'Ad Name': row.get('Ad Name') || 'N/A',
+          'Adset Name': row.get('Adset Name') || 'N/A',
+          'Campaign Name': row.get('Campaign Name') || 'N/A',
+          'Creative Link': row.get('Creative Link') || 'N/A',
+          'Total Amount': row.get('Total Amount') || '0',
+          'Payment Count': row.get('Payment Count') || '1',
+          'Payment Intent IDs': row.get('Payment Intent IDs') || latestPayment.id
+        };
+        
+        const amount = parseFloat(sheetData['Total Amount'] || 0);
+        
+        // Send VIP alert if applicable
+        if (amount >= alertConfig.vipPurchaseThreshold) {
+          await sendVipPurchaseAlert(latestPayment, customer, sheetData);
+        }
+        
+        // Send regular notification
+        const notificationMessage = await formatTelegramNotification(latestPayment, customer, sheetData);
+        
+        await notificationQueue.add({
+          type: 'export_purchase',
+          channel: 'telegram',
+          message: notificationMessage,
+          metadata: {
+            paymentId: latestPayment.id,
+            customerId: customer.id,
+            amount: amount,
+            source: 'manual_export'
+          }
+        });
+        
+        results.notifications.push({
+          customerId,
+          email: customer.email,
+          amount: amount,
+          paymentId: latestPayment.id,
+          row: row.rowNumber
+        });
+        
+        results.processed++;
+        
+        // Small delay to avoid overwhelming the system
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+      } catch (error) {
+        results.failed++;
+        results.errors.push({
+          customerId: row.get('Customer ID'),
+          row: row.rowNumber,
+          error: error.message
+        });
+        logger.error('Error processing row for export', {
+          row: row.rowNumber,
+          customerId: row.get('Customer ID'),
+          error: error.message
+        });
+      }
+    }
+    
+    logger.info('Manual export completed', {
+      total: results.total,
+      processed: results.processed,
+      failed: results.failed
+    });
+    
+    res.json({
+      success: true,
+      message: `Export completed! Processed ${results.processed}/${results.total} purchases`,
+      results
+    });
+    
+  } catch (error) {
+    logger.error('Error in export all purchases', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Export today's purchases from Google Sheets to Telegram and Slack
+app.post('/api/export-today-purchases', async (req, res) => {
+  try {
+    logger.info('Starting manual export of today\'s purchases from Google Sheets');
+    
+    // Get today's date in UTC+1
+    const today = new Date();
+    const utcPlus1 = new Date(today.getTime() + 60 * 60 * 1000);
+    const todayStr = utcPlus1.toISOString().split('T')[0]; // YYYY-MM-DD
+    
+    logger.info(`Looking for purchases on ${todayStr} (UTC+1)`);
+    
+    // Get all rows from Google Sheets
+    const allRows = await googleSheets.getAllRows();
+    
+    // Filter today's purchases
+    const todayPurchases = allRows.filter(row => {
+      const createdLocal = row.get('Created Local (UTC+1)') || '';
+      return createdLocal.includes(todayStr);
+    });
+    
+    logger.info(`Found ${todayPurchases.length} purchases for today`);
+    
+    if (todayPurchases.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No purchases found for today',
+        results: {
+          total: 0,
+          processed: 0,
+          failed: 0,
+          errors: [],
+          notifications: []
+        }
+      });
+    }
+    
+    const results = {
+      total: todayPurchases.length,
+      processed: 0,
+      failed: 0,
+      errors: [],
+      notifications: []
+    };
+    
+    // Process each today's purchase
+    for (const row of todayPurchases) {
+      try {
+        const customerId = row.get('Customer ID');
+        if (!customerId) {
+          results.failed++;
+          results.errors.push({
+            row: row.rowNumber,
+            error: 'No Customer ID found'
+          });
+          continue;
+        }
+        
+        // Get customer data from Stripe
+        const customer = await fetchWithRetry(() => getCustomer(customerId));
+        if (!customer) {
+          results.failed++;
+          results.errors.push({
+            customerId,
+            row: row.rowNumber,
+            error: 'Customer not found in Stripe'
+          });
+          continue;
+        }
+        
+        // Get customer payments
+        const payments = await fetchWithRetry(() => getCustomerPayments(customerId));
+        const successfulPayments = payments.filter(p => {
+          if (p.status !== 'succeeded' || !p.customer) return false;
+          if (p.description && p.description.toLowerCase().includes('subscription update')) {
+            return false;
+          }
+          return true;
+        });
+        
+        if (successfulPayments.length === 0) {
+          results.failed++;
+          results.errors.push({
+            customerId,
+            row: row.rowNumber,
+            error: 'No successful payments found'
+          });
+          continue;
+        }
+        
+        const latestPayment = successfulPayments[successfulPayments.length - 1];
+        
+        // Prepare sheet data
+        const sheetData = {
+          'Ad Name': row.get('Ad Name') || 'N/A',
+          'Adset Name': row.get('Adset Name') || 'N/A',
+          'Campaign Name': row.get('Campaign Name') || 'N/A',
+          'Creative Link': row.get('Creative Link') || 'N/A',
+          'Total Amount': row.get('Total Amount') || '0',
+          'Payment Count': row.get('Payment Count') || '1',
+          'Payment Intent IDs': row.get('Payment Intent IDs') || latestPayment.id
+        };
+        
+        const amount = parseFloat(sheetData['Total Amount'] || 0);
+        
+        // Send VIP alert if applicable
+        if (amount >= alertConfig.vipPurchaseThreshold) {
+          await sendVipPurchaseAlert(latestPayment, customer, sheetData);
+        }
+        
+        // Send regular notification
+        const notificationMessage = await formatTelegramNotification(latestPayment, customer, sheetData);
+        
+        await notificationQueue.add({
+          type: 'today_export',
+          channel: 'telegram',
+          message: notificationMessage,
+          metadata: {
+            paymentId: latestPayment.id,
+            customerId: customer.id,
+            amount: amount,
+            source: 'today_export',
+            date: todayStr
+          }
+        });
+        
+        results.notifications.push({
+          customerId,
+          email: customer.email,
+          amount: amount,
+          paymentId: latestPayment.id,
+          row: row.rowNumber,
+          createdLocal: row.get('Created Local (UTC+1)')
+        });
+        
+        results.processed++;
+        
+        // Small delay to avoid overwhelming the system
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+      } catch (error) {
+        results.failed++;
+        results.errors.push({
+          customerId: row.get('Customer ID'),
+          row: row.rowNumber,
+          error: error.message
+        });
+        logger.error('Error processing today\'s purchase for export', {
+          row: row.rowNumber,
+          customerId: row.get('Customer ID'),
+          error: error.message
+        });
+      }
+    }
+    
+    logger.info('Today\'s purchases export completed', {
+      date: todayStr,
+      total: results.total,
+      processed: results.processed,
+      failed: results.failed
+    });
+    
+    res.json({
+      success: true,
+      message: `Today's export completed! Processed ${results.processed}/${results.total} purchases for ${todayStr}`,
+      date: todayStr,
+      results
+    });
+    
+  } catch (error) {
+    logger.error('Error in export today purchases', error);
     res.status(500).json({
       success: false,
       error: error.message
