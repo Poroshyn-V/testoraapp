@@ -954,7 +954,8 @@ app.post('/api/export-all-purchases', async (req, res) => {
         const sheetData = {
           'Ad Name': row.get('Ad Name') || 'N/A',
           'Adset Name': row.get('Adset Name') || 'N/A',
-          'Campaign Name': row.get('Campaign Name') || 'N/A',
+          'Campaign Name': row.get('UTM Campaign') || 'N/A', // Use UTM Campaign field
+          'UTM Campaign': row.get('UTM Campaign') || 'N/A', // Also include UTM Campaign directly
           'Creative Link': row.get('Creative Link') || 'N/A',
           'Total Amount': row.get('Total Amount') || '0',
           'Payment Count': row.get('Payment Count') || '1',
@@ -1128,7 +1129,8 @@ app.post('/api/export-today-purchases', async (req, res) => {
         const sheetData = {
           'Ad Name': row.get('Ad Name') || 'N/A',
           'Adset Name': row.get('Adset Name') || 'N/A',
-          'Campaign Name': row.get('Campaign Name') || 'N/A',
+          'Campaign Name': row.get('UTM Campaign') || 'N/A', // Use UTM Campaign field
+          'UTM Campaign': row.get('UTM Campaign') || 'N/A', // Also include UTM Campaign directly
           'Creative Link': row.get('Creative Link') || 'N/A',
           'Total Amount': row.get('Total Amount') || '0',
           'Payment Count': row.get('Payment Count') || '1',
