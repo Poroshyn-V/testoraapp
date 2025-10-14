@@ -115,7 +115,17 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
   // Get data from metadata or passed sheet data and format it nicely
   const rawAdName = (metadata['Ad Name'] && metadata['Ad Name'] !== 'N/A') || (m.ad_name && m.ad_name !== 'N/A') ? (metadata['Ad Name'] || m.ad_name) : null;
   const rawAdsetName = (metadata['Adset Name'] && metadata['Adset Name'] !== 'N/A') || (m.adset_name && m.adset_name !== 'N/A') ? (metadata['Adset Name'] || m.adset_name) : null;
-  const rawCampaignName = (metadata['Campaign Name'] && metadata['Campaign Name'] !== 'N/A') || (m.campaign_name && m.campaign_name !== 'N/A') ? (metadata['Campaign Name'] || m.campaign_name) : null;
+  // Campaign name with fallback to UTM Campaign
+  let rawCampaignName = null;
+  if (metadata['Campaign Name'] && metadata['Campaign Name'] !== 'N/A') {
+    rawCampaignName = metadata['Campaign Name'];
+  } else if (metadata['UTM Campaign'] && metadata['UTM Campaign'] !== 'N/A') {
+    rawCampaignName = metadata['UTM Campaign'];
+  } else if (m.campaign_name && m.campaign_name !== 'N/A') {
+    rawCampaignName = m.campaign_name;
+  } else if (m.utm_campaign && m.utm_campaign !== 'N/A') {
+    rawCampaignName = m.utm_campaign;
+  }
   const creativeLink = (metadata['Creative Link'] && metadata['Creative Link'] !== 'N/A') || (m.creative_link && m.creative_link !== 'N/A') ? (metadata['Creative Link'] || m.creative_link) : null;
   
   // Format names with proper separators
@@ -225,7 +235,17 @@ export function formatSlackNotification(payment, customer, metadata = {}) {
   // Get data from metadata or passed sheet data and format it nicely
   const rawAdName = (metadata['Ad Name'] && metadata['Ad Name'] !== 'N/A') || (m.ad_name && m.ad_name !== 'N/A') ? (metadata['Ad Name'] || m.ad_name) : null;
   const rawAdsetName = (metadata['Adset Name'] && metadata['Adset Name'] !== 'N/A') || (m.adset_name && m.adset_name !== 'N/A') ? (metadata['Adset Name'] || m.adset_name) : null;
-  const rawCampaignName = (metadata['Campaign Name'] && metadata['Campaign Name'] !== 'N/A') || (m.campaign_name && m.campaign_name !== 'N/A') ? (metadata['Campaign Name'] || m.campaign_name) : null;
+  // Campaign name with fallback to UTM Campaign
+  let rawCampaignName = null;
+  if (metadata['Campaign Name'] && metadata['Campaign Name'] !== 'N/A') {
+    rawCampaignName = metadata['Campaign Name'];
+  } else if (metadata['UTM Campaign'] && metadata['UTM Campaign'] !== 'N/A') {
+    rawCampaignName = metadata['UTM Campaign'];
+  } else if (m.campaign_name && m.campaign_name !== 'N/A') {
+    rawCampaignName = m.campaign_name;
+  } else if (m.utm_campaign && m.utm_campaign !== 'N/A') {
+    rawCampaignName = m.utm_campaign;
+  }
   const creativeLink = (metadata['Creative Link'] && metadata['Creative Link'] !== 'N/A') || (m.creative_link && m.creative_link !== 'N/A') ? (metadata['Creative Link'] || m.creative_link) : null;
   
   // Format names with proper separators
