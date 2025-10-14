@@ -512,6 +512,7 @@ app.get('/', (_req, res) => res.json({
     '/api/duplicates/refresh-cache',
     '/api/duplicates/find',
     '/api/duplicates/find-by-customer',
+    '/api/duplicates/fix-customer/:customerId',
     '/api/sync-locks',
     '/api/metrics',
     '/api/metrics/summary',
@@ -1846,6 +1847,63 @@ app.get('/api/duplicates/find-by-customer', async (req, res) => {
     
   } catch (error) {
     logger.error('Error finding duplicates by customer', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Fix specific duplicate by Customer ID
+app.post('/api/duplicates/fix-customer/:customerId', async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    logger.info(`🔧 Fixing duplicates for customer ${customerId}...`);
+    
+    // Get all rows for this customer
+    const rows = await googleSheets.findRows({ 'Customer ID': customerId });
+    
+    if (rows.length <= 1) {
+      return res.json({
+        success: true,
+        message: `No duplicates found for customer ${customerId}`,
+        rowsFound: rows.length
+      });
+    }
+    
+    logger.info(`Found ${rows.length} rows for customer ${customerId}, keeping first one...`);
+    
+    // Keep the first row, delete the rest
+    const rowsToDelete = rows.slice(1);
+    let deletedCount = 0;
+    
+    for (const row of rowsToDelete) {
+      try {
+        await googleSheets.deleteRow(row.rowNumber);
+        deletedCount++;
+        logger.info(`Deleted duplicate row ${row.rowNumber} for customer ${customerId}`);
+      } catch (error) {
+        logger.error(`Error deleting row ${row.rowNumber}:`, error);
+      }
+    }
+    
+    // Refresh caches
+    await Promise.all([
+      duplicateChecker.refreshCache(),
+      purchaseCache.reload()
+    ]);
+    
+    res.json({
+      success: true,
+      message: `Fixed duplicates for customer ${customerId}`,
+      customerId,
+      totalRows: rows.length,
+      deletedRows: deletedCount,
+      keptRow: rows[0].rowNumber
+    });
+    
+  } catch (error) {
+    logger.error('Error fixing customer duplicates', error);
     res.status(500).json({
       success: false,
       error: error.message
