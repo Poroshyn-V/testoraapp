@@ -2558,22 +2558,11 @@ app.post('/api/sync-payments', async (req, res) => {
     });
   }
 });
-  
+
+// Weekly report endpoint
+app.get('/api/weekly-report', async (req, res) => {
   try {
-    logger.info('🔄 Starting payment sync with MAXIMUM duplicate protection...', { 
-      timestamp: new Date().toISOString()
-    });
-    
-    // 🔒 ГЛОБАЛЬНАЯ БЛОКИРОВКА SYNC (только один sync за раз) - используем ту же блокировку что и runSync
-    const syncLockId = await distributedLock.acquire('sync_operation', 100, 200);
-    
-    try {
-      // 🔄 КРИТИЧЕСКИ ВАЖНО: Обновляем ВСЕ кэши ПЕРЕД началом
-      logger.info('📦 Refreshing ALL caches before sync...');
-      await Promise.all([
-        duplicateChecker.refreshCache(),
-        purchaseCache.reload()
-      ]);
+    const report = await analytics.generateWeeklyReport();
     
       // Get recent payments from Stripe
       const payments = await fetchWithRetry(() => getRecentPayments(100));
