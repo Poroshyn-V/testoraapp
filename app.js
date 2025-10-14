@@ -2686,8 +2686,8 @@ async function performSyncLogic() {
       timestamp: new Date().toISOString()
     });
     
-    // 🔒 ГЛОБАЛЬНАЯ БЛОКИРОВКА SYNC (только один sync за раз) - используем ту же блокировку что и runSync
-    const syncLockId = await distributedLock.acquire('sync_operation', 100, 200);
+    // ✅ БЛОКИРОВКА УЖЕ ПОЛУЧЕНА В runSync() - не получаем повторно
+    // const syncLockId = await distributedLock.acquire('sync_operation', 100, 200);
     
     try {
       // 🔄 КРИТИЧЕСКИ ВАЖНО: Обновляем ВСЕ кэши ПЕРЕД началом
@@ -2954,8 +2954,8 @@ async function performSyncLogic() {
       ]);
       
     } finally {
-      // 🔓 Освобождаем sync operation lock
-      distributedLock.release('sync_operation', syncLockId);
+      // ✅ БЛОКИРОВКА ОСВОБОЖДАЕТСЯ В runSync() - не освобождаем здесь
+      // distributedLock.release('sync_operation', syncLockId);
     }
     
     const duration = Date.now() - startTime;
