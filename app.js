@@ -361,10 +361,31 @@ async function runSync() {
   }
   
   // 🔒 Используем распределенную блокировку для sync
+  const SYNC_TIMEOUT = 5 * 60 * 1000; // 5 минут максимум
+  const syncTimeoutPromise = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error('Sync timeout exceeded')), SYNC_TIMEOUT);
+  });
+
+  logger.info('🔒 Attempting to acquire sync lock...', {
+    timestamp: new Date().toISOString(),
+    isSyncing: isSyncing,
+    emergencyStop: emergencyStop
+  });
+
   try {
-    lockId = await distributedLock.acquire('sync_operation', 10, 200);
-    logger.info('🔒 Sync lock acquired', { lockId });
+    lockId = await Promise.race([
+      distributedLock.acquire('sync_operation', 10, 200),
+      syncTimeoutPromise
+    ]);
+    logger.info('✅ Sync lock acquired successfully', {
+      lockId: lockId,
+      timestamp: new Date().toISOString()
+    });
   } catch (error) {
+    if (error.message === 'Sync timeout exceeded') {
+      logger.error('⏰ Sync acquisition timeout - forcing cleanup');
+      distributedLock.forceRelease('sync_operation');
+    }
     metrics.increment('sync_skipped', 1, { reason: 'lock_failed' });
     logger.warn('⚠️ Failed to acquire sync lock, skipping this cycle...', {
       error: error.message,
@@ -512,6 +533,8 @@ app.get('/', (_req, res) => res.json({
     '/api/distributed-locks/cleanup',
     '/api/distributed-locks/active',
     '/api/distributed-locks/release/:lockKey',
+    '/api/sync-diagnostics',
+    '/api/force-unlock-sync',
     '/auto-sync',
     '/ping',
     '/health'
@@ -2867,194 +2890,7 @@ app.post('/api/sync-payments', async (req, res) => {
   }
 });
 
-// Weekly report endpoint
-app.get('/api/weekly-report', async (req, res) => {
-  try {
-    const report = await analytics.generateWeeklyReport();
-    
-    if (report) {
-      await sendTextNotifications(report);
-      res.json({
-        success: true,
-        message: 'Weekly report sent successfully'
-      });
-    } else {
-      res.json({
-        success: false,
-        message: 'No weekly report generated'
-      });
-    }
-  } catch (error) {
-    logger.error('Weekly report error', error);
-    res.status(500).json({
-      success: false,
-      message: 'Weekly report failed',
-      error: error.message
-    });
-  }
-});
-
-// Weekly report endpoint
-app.get('/api/weekly-report', async (req, res) => {
-  try {
-    const report = await analytics.generateWeeklyReport();
-    
-    if (report) {
-      await sendTextNotifications(report);
-      res.json({
-        success: true,
-        message: 'Weekly report sent successfully'
-      });
-    } else {
-      res.json({
-        success: false,
-        message: 'No weekly report generated'
-      });
-    }
-  } catch (error) {
-    logger.error('Weekly report error', error);
-    res.status(500).json({
-      success: false,
-      message: 'Weekly report failed',
-      error: error.message
-    });
-  }
-});
-
-// Weekly report endpoint
-app.get('/api/weekly-report', async (req, res) => {
-  try {
-    const report = await analytics.generateWeeklyReport();
-    
-    if (report) {
-      await sendTextNotifications(report);
-      res.json({
-        success: true,
-        message: 'Weekly report sent successfully'
-      });
-    } else {
-      res.json({
-        success: false,
-        message: 'No weekly report generated'
-      });
-    }
-  } catch (error) {
-    logger.error('Weekly report error', error);
-    res.status(500).json({
-      success: false,
-      message: 'Weekly report failed',
-      error: error.message
-    });
-  }
-});
-
-// Weekly report endpoint
-app.get('/api/weekly-report', async (req, res) => {
-  try {
-    const report = await analytics.generateWeeklyReport();
-    
-    if (report) {
-      await sendTextNotifications(report);
-      res.json({
-        success: true,
-        message: 'Weekly report sent successfully'
-      });
-    } else {
-      res.json({
-        success: false,
-        message: 'No weekly report generated'
-      });
-    }
-  } catch (error) {
-    logger.error('Weekly report error', error);
-    res.status(500).json({
-      success: false,
-      message: 'Weekly report failed',
-      error: error.message
-    });
-  }
-});
-
-// Weekly report endpoint
-app.get('/api/weekly-report', async (req, res) => {
-  try {
-    const report = await analytics.generateWeeklyReport();
-    
-    if (report) {
-      await sendTextNotifications(report);
-      res.json({
-        success: true,
-        message: 'Weekly report sent successfully'
-      });
-    } else {
-      res.json({
-        success: false,
-        message: 'No weekly report generated'
-      });
-    }
-  } catch (error) {
-    logger.error('Weekly report error', error);
-    res.status(500).json({
-      success: false,
-      message: 'Weekly report failed',
-      error: error.message
-    });
-  }
-});
-// Sync payments endpoint - MAXIMUM DUPLICATE PROTECTION
-app.post('/api/sync-payments', async (req, res) => {
-  try {
-    const result = await performSyncLogic();
-    
-    if (result.success) {
-      res.json(result);
-    } else {
-      res.status(500).json(result);
-    }
-  } catch (error) {
-    logger.error('Sync endpoint error', error);
-    res.status(500).json({
-      success: false,
-      message: 'Sync endpoint error',
-      error: error.message
-    });
-  }
-});
-
 // Weekly report endpoint - ТОЛЬКО ОДИН РАЗ!
-app.get('/api/weekly-report', async (req, res) => {
-  try {
-    const report = await analytics.generateWeeklyReport();
-    
-    if (report) {
-      await sendTextNotifications(report);
-      res.json({
-        success: true,
-        message: 'Weekly report sent successfully'
-      });
-    } else {
-      res.json({
-        success: true,
-        message: 'No data for weekly report'
-      });
-    }
-  } catch (error) {
-    logger.error('Error generating weekly report', error);
-    res.status(500).json({
-      success: false,
-      message: 'Weekly report failed',
-      error: error.message
-    });
-  }
-});
-
-// GEO alert endpoint - СРАЗУ ПОСЛЕ weekly-report
-app.get('/api/geo-alert', async (req, res) => {
-  // ... ваш код для geo-alert
-});
-
-
-// Weekly report endpoint
 app.get('/api/weekly-report', async (req, res) => {
   try {
     const report = await analytics.generateWeeklyReport();
@@ -3623,6 +3459,83 @@ app.get('/api/debug-geo', async (req, res) => {
   }
 });
 
+// Sync diagnostics endpoint
+app.get('/api/sync-diagnostics', async (req, res) => {
+  try {
+    const now = Date.now();
+    const lockStats = distributedLock.getStats();
+    const activeSyncLock = distributedLock.getActiveLocks()
+      .find(lock => lock.key === 'sync_operation');
+    
+    res.json({
+      success: true,
+      timestamp: new Date().toISOString(),
+      sync: {
+        isSyncing: isSyncing,
+        syncInterval: syncInterval ? 'active' : 'inactive',
+        emergencyStop: emergencyStop
+      },
+      locks: {
+        activeLocks: lockStats.activeLocks,
+        syncLockActive: !!activeSyncLock,
+        syncLockDetails: activeSyncLock || null
+      },
+      intervals: {
+        sync: !!syncInterval,
+        geoAlert: !!geoAlertInterval,
+        dailyStats: !!dailyStatsInterval,
+        creativeAlert: !!creativeAlertInterval,
+        weeklyReport: !!weeklyReportInterval,
+        campaignAnalysis: !!campaignAnalysisInterval
+      },
+      cache: {
+        purchases: purchaseCache.size(),
+        duplicateChecker: duplicateChecker.getStats()
+      }
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Force unlock sync endpoint
+app.post('/api/force-unlock-sync', async (req, res) => {
+  try {
+    // Очистка всех sync locks
+    const released = distributedLock.forceRelease('sync_operation');
+    
+    // Сброс флага isSyncing
+    isSyncing = false;
+    
+    // Очистка customer locks
+    syncLock.clear();
+    
+    logger.info('🔓 Force unlocked all sync operations', {
+      syncOperationReleased: released,
+      timestamp: new Date().toISOString()
+    });
+    
+    res.json({
+      success: true,
+      message: 'All sync locks forcefully released',
+      released: {
+        syncOperation: released,
+        customerLocks: 'cleared',
+        isSyncing: false
+      }
+    });
+  } catch (error) {
+    logger.error('Error force unlocking', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 // Check for missed alerts function
 async function checkMissedAlerts() {
   if (emergencyStop) {
@@ -3823,21 +3736,33 @@ app.listen(ENV.PORT, () => {
     
     // GEO Alert every hour (scheduled only, no initial run)
     const scheduleGeoAlert = () => {
-      console.log('🌍 Starting hourly GEO alerts (scheduled only)...');
+      console.log('🌍 Starting hourly GEO alerts...');
       
-      // Run on scheduled intervals (every hour) - NO initial run to prevent spam on deploy
       geoAlertInterval = setInterval(async () => {
         try {
-          console.log('🌍 Running scheduled GEO alert...');
-          const response = await fetch(`http://localhost:${ENV.PORT}/api/geo-alert`, {
-            method: 'GET'
-          });
-          const result = await response.json();
-          console.log(`✅ Scheduled GEO alert completed: ${result.message}`);
+          const now = new Date();
+          const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
+          const today = utcPlus1.toISOString().split('T')[0];
+          const currentHour = utcPlus1.getUTCHours();
+          const currentMinute = utcPlus1.getUTCMinutes();
+          
+          const geoAlertKey = `geo_${today}_${currentHour}_${Math.floor(currentMinute / 30)}`;
+          
+          if (!sentAlerts.geoAlert || !sentAlerts.geoAlert.has(geoAlertKey)) {
+            console.log('🌍 Running scheduled GEO alert...');
+            // ✅ ПРЯМОЙ ВЫЗОВ
+            const alert = await analytics.generateGeoAlert();
+            if (alert) {
+              await sendTextNotifications(alert);
+              if (!sentAlerts.geoAlert) sentAlerts.geoAlert = new Set();
+              sentAlerts.geoAlert.add(geoAlertKey);
+              console.log('✅ GEO alert completed');
+            }
+          }
         } catch (error) {
-          console.error('❌ Scheduled GEO alert failed:', error.message);
+          console.error('❌ GEO alert failed:', error.message);
         }
-      }, alertConfig.geoAlertInterval * 60 * 60 * 1000); // Configurable GEO alert interval
+      }, alertConfig.geoAlertInterval * 60 * 60 * 1000);
     };
     
     // Weekly Report every Monday at 9 AM UTC+1 (8 AM UTC)
@@ -3910,45 +3835,42 @@ app.listen(ENV.PORT, () => {
     const scheduleDailyStats = () => {
       console.log('📊 Starting daily stats alerts...');
       
-      // Check every 2 minutes for 7:00 UTC+1
       dailyStatsInterval = setInterval(async () => {
         const now = new Date();
         const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
         const hour = utcPlus1.getUTCHours();
         const minute = utcPlus1.getUTCMinutes();
         
-        // Check for exactly 7:00 UTC+1 (with ±1 minute tolerance)
         if (hour === alertConfig.dailyStatsHour && minute >= 0 && minute <= 1) {
           const today = utcPlus1.toISOString().split('T')[0];
           if (!sentAlerts.dailyStats.has(today)) {
             try {
               console.log('📊 Running daily stats alert...');
-              const response = await fetch(`http://localhost:${ENV.PORT}/api/daily-stats`, {
-                method: 'GET'
-              });
-              const result = await response.json();
-              console.log(`✅ Daily stats completed: ${result.message}`);
-              sentAlerts.dailyStats.add(today);
+              // ✅ ПРЯМОЙ ВЫЗОВ ВМЕСТО FETCH
+              const stats = await analytics.generateDailyStats();
+              if (stats) {
+                await sendTextNotifications(stats);
+                sentAlerts.dailyStats.add(today);
+                console.log('✅ Daily stats completed');
+              }
             } catch (error) {
               console.error('❌ Daily stats failed:', error.message);
             }
           }
         }
-      }, 60 * 1000); // Check every minute for more precision
+      }, 60 * 1000);
     };
     
     // Creative Alert at 10:00 and 22:00 UTC+1
     const scheduleCreativeAlert = () => {
       console.log('🎨 Starting creative alerts...');
       
-      // Check every 2 minutes for 10:00 and 22:00 UTC+1
       creativeAlertInterval = setInterval(async () => {
         const now = new Date();
         const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
         const hour = utcPlus1.getUTCHours();
         const minute = utcPlus1.getUTCMinutes();
         
-        // Check for 10:00 and 22:00 UTC+1 (with ±2 minutes tolerance)
         if ((hour === 10 && minute >= 0 && minute <= 2) || 
             (hour === 22 && minute >= 0 && minute <= 2)) {
           const today = utcPlus1.toISOString().split('T')[0];
@@ -3956,18 +3878,19 @@ app.listen(ENV.PORT, () => {
           if (!sentAlerts.creativeAlert.has(alertKey)) {
             try {
               console.log('🎨 Running creative alert...');
-              const response = await fetch(`http://localhost:${ENV.PORT}/api/creative-alert`, {
-                method: 'GET'
-              });
-              const result = await response.json();
-              console.log(`✅ Creative alert completed: ${result.message}`);
-              sentAlerts.creativeAlert.add(alertKey);
+              // ✅ ПРЯМОЙ ВЫЗОВ
+              const alert = await analytics.generateCreativeAlert();
+              if (alert) {
+                await sendTextNotifications(alert);
+                sentAlerts.creativeAlert.add(alertKey);
+                console.log('✅ Creative alert completed');
+              }
             } catch (error) {
               console.error('❌ Creative alert failed:', error.message);
             }
           }
         }
-      }, 2 * 60 * 1000); // 2 minutes
+      }, 2 * 60 * 1000);
     };
     
     // Campaign Analysis at 11:00 UTC+1 (after creative alert)
