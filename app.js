@@ -18,6 +18,7 @@ import { notificationQueue } from './src/services/notificationQueue.js';
 import { campaignAnalyzer } from './src/services/campaignAnalyzer.js';
 import { duplicateChecker } from './src/services/duplicateChecker.js';
 import { formatPaymentForSheets, formatTelegramNotification } from './src/utils/formatting.js';
+import healthRoutes from './src/routes/health.js';
 
 // Глобальные переменные для locks
 const syncLock = new Map(); // customerId -> timestamp
@@ -452,6 +453,9 @@ async function runSync() {
 app.use(express.json());
 app.use(cors());
 app.use('/api', rateLimit);
+
+// Use route modules
+app.use('/', healthRoutes);
 
 // Root endpoint
 app.get('/', (_req, res) => res.json({ 
