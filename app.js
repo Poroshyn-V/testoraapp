@@ -3685,6 +3685,114 @@ app.get('/api/check-last-rows', async (req, res) => {
   }
 });
 
+// Fix all today's purchases
+app.post('/api/fix-today-purchases', async (req, res) => {
+  try {
+    logger.info('🔧 Fixing all today\'s purchases with missing data...');
+    
+    // Get today's date in UTC+1
+    const today = new Date();
+    const utcPlus1 = new Date(today.getTime() + 60 * 60 * 1000);
+    const todayStr = utcPlus1.toISOString().split('T')[0]; // YYYY-MM-DD
+    
+    logger.info(`Looking for purchases on ${todayStr} (UTC+1)`);
+    
+    const allRows = await googleSheets.getAllRows();
+    
+    // Filter today's purchases
+    const todayPurchases = allRows.filter(row => {
+      const createdLocal = row.get('Created Local (UTC+1)') || '';
+      return createdLocal.includes(todayStr);
+    });
+    
+    logger.info(`Found ${todayPurchases.length} purchases for today`);
+    
+    if (todayPurchases.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No purchases found for today',
+        fixedCount: 0,
+        errorCount: 0
+      });
+    }
+    
+    let fixedCount = 0;
+    let errorCount = 0;
+    
+    for (const row of todayPurchases) {
+      try {
+        const customerId = row.get('Customer ID');
+        if (!customerId || customerId === 'N/A') continue;
+        
+        // Get customer data from Stripe
+        const customer = await getCustomer(customerId);
+        if (!customer) continue;
+        
+        // Get customer payments
+        const payments = await getCustomerPayments(customerId);
+        const successfulPayments = payments.filter(p => {
+          if (p.status !== 'succeeded' || !p.customer) return false;
+          if (p.description && p.description.toLowerCase().includes('subscription update')) {
+            return false;
+          }
+          return true;
+        });
+        
+        if (successfulPayments.length === 0) continue;
+        
+        const latestPayment = successfulPayments[successfulPayments.length - 1];
+        
+        // Update row with missing data
+        const updateData = {
+          'Currency': latestPayment.currency?.toUpperCase() || 'USD',
+          'Status': latestPayment.status || 'succeeded',
+          'UTM Source': customer.metadata?.utm_source || 'N/A',
+          'UTM Medium': customer.metadata?.utm_medium || 'N/A',
+          'UTM Campaign': customer.metadata?.utm_campaign || 'N/A',
+          'UTM Content': customer.metadata?.utm_content || 'N/A',
+          'UTM Term': customer.metadata?.utm_term || 'N/A'
+        };
+        
+        // Update the row
+        Object.keys(updateData).forEach(key => {
+          row.set(key, updateData[key]);
+        });
+        
+        await row.save();
+        fixedCount++;
+        
+        logger.info(`Fixed today's purchase row ${row.rowNumber} for customer ${customerId}`);
+        
+        // Small delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+      } catch (error) {
+        errorCount++;
+        logger.error(`Error fixing today's purchase row ${row.rowNumber}:`, error);
+      }
+    }
+    
+    logger.info(`✅ Fixed ${fixedCount} today's purchases, ${errorCount} errors`);
+    
+    res.json({
+      success: true,
+      message: `Fixed ${fixedCount} today's purchases with missing data`,
+      date: todayStr,
+      totalTodayPurchases: todayPurchases.length,
+      fixedCount,
+      errorCount
+    });
+    
+  } catch (error) {
+    logger.error('Error fixing today\'s purchases', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fix today\'s purchases',
+      error: error.message
+    });
+  }
+});
+
 // Debug endpoint to check specific customer
 // Fix Google Sheets data endpoint
 app.post('/api/fix-sheets-data', async (req, res) => {
