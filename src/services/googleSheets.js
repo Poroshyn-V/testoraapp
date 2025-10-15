@@ -412,6 +412,33 @@ class GoogleSheetsService {
       }
     }
   }
+
+  // Delete a row by row number
+  async deleteRow(rowNumber) {
+    try {
+      await this.initialize();
+      
+      logInfo('Deleting row from Google Sheets', { rowNumber });
+      
+      // Get the row by row number
+      const rows = await this.sheet.getRows();
+      const rowToDelete = rows.find(row => row.rowNumber === rowNumber);
+      
+      if (!rowToDelete) {
+        throw new Error(`Row ${rowNumber} not found`);
+      }
+      
+      // Delete the row
+      await rowToDelete.delete();
+      
+      logInfo('Successfully deleted row from Google Sheets', { rowNumber });
+      
+      return true;
+    } catch (error) {
+      logError('Failed to delete row from Google Sheets', error, { rowNumber });
+      throw error;
+    }
+  }
 }
 
 // Export singleton instance
