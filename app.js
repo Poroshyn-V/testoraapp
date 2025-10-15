@@ -3568,6 +3568,89 @@ app.post('/api/add-missing-columns', async (req, res) => {
   }
 });
 
+// Fix existing rows with missing data
+app.post('/api/fix-existing-rows', async (req, res) => {
+  try {
+    logger.info('🔧 Fixing existing rows with missing Currency and Status data...');
+    
+    const allRows = await googleSheets.getAllRows();
+    let fixedCount = 0;
+    let errorCount = 0;
+    
+    // Process last 10 rows to add missing data
+    const rowsToFix = allRows.slice(-10);
+    
+    for (const row of rowsToFix) {
+      try {
+        const customerId = row.get('Customer ID');
+        if (!customerId || customerId === 'N/A') continue;
+        
+        // Get customer data from Stripe
+        const customer = await getCustomer(customerId);
+        if (!customer) continue;
+        
+        // Get customer payments
+        const payments = await getCustomerPayments(customerId);
+        const successfulPayments = payments.filter(p => {
+          if (p.status !== 'succeeded' || !p.customer) return false;
+          if (p.description && p.description.toLowerCase().includes('subscription update')) {
+            return false;
+          }
+          return true;
+        });
+        
+        if (successfulPayments.length === 0) continue;
+        
+        const latestPayment = successfulPayments[successfulPayments.length - 1];
+        
+        // Update row with missing data
+        const updateData = {
+          'Currency': latestPayment.currency?.toUpperCase() || 'USD',
+          'Status': latestPayment.status || 'succeeded',
+          'UTM Source': customer.metadata?.utm_source || 'N/A',
+          'UTM Medium': customer.metadata?.utm_medium || 'N/A',
+          'UTM Campaign': customer.metadata?.utm_campaign || 'N/A'
+        };
+        
+        // Update the row
+        Object.keys(updateData).forEach(key => {
+          row.set(key, updateData[key]);
+        });
+        
+        await row.save();
+        fixedCount++;
+        
+        logger.info(`Fixed row ${row.rowNumber} for customer ${customerId}`);
+        
+        // Small delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+      } catch (error) {
+        errorCount++;
+        logger.error(`Error fixing row ${row.rowNumber}:`, error);
+      }
+    }
+    
+    logger.info(`✅ Fixed ${fixedCount} rows, ${errorCount} errors`);
+    
+    res.json({
+      success: true,
+      message: `Fixed ${fixedCount} rows with missing data`,
+      fixedCount,
+      errorCount,
+      totalProcessed: rowsToFix.length
+    });
+    
+  } catch (error) {
+    logger.error('Error fixing existing rows', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fix existing rows',
+      error: error.message
+    });
+  }
+});
+
 // Debug endpoint to check specific customer
 // Fix Google Sheets data endpoint
 app.post('/api/fix-sheets-data', async (req, res) => {
