@@ -3493,6 +3493,81 @@ app.get('/api/test-format', async (req, res) => {
   }
 });
 
+// Add missing columns to Google Sheets
+app.post('/api/add-missing-columns', async (req, res) => {
+  try {
+    logger.info('🔧 Adding missing columns to Google Sheets...');
+    
+    // Get the sheet
+    await googleSheets.initialize();
+    const sheet = googleSheets.sheet;
+    
+    // Define the missing columns we need to add
+    const missingColumns = [
+      'Currency',
+      'Status', 
+      'UTM Source',
+      'UTM Medium',
+      'UTM Campaign',
+      'UTM Content',
+      'UTM Term',
+      'Payment Status'
+    ];
+    
+    // Get current header row
+    const headerRow = await sheet.getRows({ limit: 1 });
+    const currentHeaders = headerRow.length > 0 ? Object.keys(headerRow[0]._rawData) : [];
+    
+    logger.info('Current headers:', currentHeaders);
+    
+    // Find missing columns
+    const columnsToAdd = missingColumns.filter(col => !currentHeaders.includes(col));
+    
+    if (columnsToAdd.length === 0) {
+      return res.json({
+        success: true,
+        message: 'All required columns already exist',
+        existingColumns: currentHeaders,
+        missingColumns: []
+      });
+    }
+    
+    logger.info('Adding missing columns:', columnsToAdd);
+    
+    // Add missing columns by updating the header row
+    const headerData = {};
+    columnsToAdd.forEach(col => {
+      headerData[col] = col; // Set header name as initial value
+    });
+    
+    // Update the first row (header row) with new columns
+    if (headerRow.length > 0) {
+      const firstRow = headerRow[0];
+      Object.keys(headerData).forEach(key => {
+        firstRow.set(key, headerData[key]);
+      });
+      await firstRow.save();
+    }
+    
+    logger.info('✅ Successfully added missing columns to Google Sheets');
+    
+    res.json({
+      success: true,
+      message: `Added ${columnsToAdd.length} missing columns`,
+      addedColumns: columnsToAdd,
+      allColumns: [...currentHeaders, ...columnsToAdd]
+    });
+    
+  } catch (error) {
+    logger.error('Error adding missing columns', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to add missing columns',
+      error: error.message
+    });
+  }
+});
+
 // Debug endpoint to check specific customer
 // Fix Google Sheets data endpoint
 app.post('/api/fix-sheets-data', async (req, res) => {
