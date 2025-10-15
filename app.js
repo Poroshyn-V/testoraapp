@@ -2857,8 +2857,19 @@ async function performSyncLogic() {
             // Send VIP alert if applicable
             await sendVipPurchaseAlert(latestPayment, customer, sheetData);
             
-            // Send regular notification
-            await sendPurchaseNotification(latestPayment, customer, sheetData, 'upsell');
+            // Send regular notification via queue (to avoid duplicates)
+            const notificationMessage = await formatTelegramNotification(latestPayment, customer, sheetData);
+            await notificationQueue.add({
+              type: 'upsell_purchase',
+              channel: 'telegram',
+              message: notificationMessage,
+              metadata: {
+                paymentId: latestPayment.id,
+                customerId: customer.id,
+                amount: sheetData['Total Amount'],
+                type: 'upsell'
+              }
+            });
             
             results.updatedPurchases++;
             results.processed++;
@@ -2929,8 +2940,19 @@ async function performSyncLogic() {
             // Send VIP alert if applicable
             await sendVipPurchaseAlert(firstPayment, customer, sheetData);
             
-            // Send regular notification
-            await sendPurchaseNotification(firstPayment, customer, sheetData, 'new_purchase');
+            // Send regular notification via queue (to avoid duplicates)
+            const notificationMessage = await formatTelegramNotification(firstPayment, customer, sheetData);
+            await notificationQueue.add({
+              type: 'new_purchase',
+              channel: 'telegram',
+              message: notificationMessage,
+              metadata: {
+                paymentId: firstPayment.id,
+                customerId: customer.id,
+                amount: sheetData['Total Amount'],
+                type: 'new_purchase'
+              }
+            });
             
             results.processed++;
           }
