@@ -72,7 +72,6 @@ export function formatPaymentForSheets(payment, customer, metadata = {}) {
     'Created UTC': createdUTC,
     'Created Local (UTC+1)': createdLocal,
     'Payment Intent IDs': payment.id,
-    'Payment Status': status,
     'Total Amount': amount,
     'Currency': currency,
     'Email': customerEmail,
