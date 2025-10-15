@@ -1890,11 +1890,11 @@ app.post('/api/duplicates/fix-customer/:customerId', async (req, res) => {
     const rowsToDelete = rows.slice(1);
     let deletedCount = 0;
     
-    // Delete duplicate rows (in reverse order to avoid row number shifts)
+    // Delete duplicate rows using direct row.delete() method
     rowsToDelete.sort((a, b) => b.rowNumber - a.rowNumber);
     for (const row of rowsToDelete) {
       try {
-        await googleSheets.deleteRow(row.rowNumber);
+        await row.delete();
         deletedCount++;
         logger.info(`Deleted duplicate row ${row.rowNumber} for customer ${customerId}`);
         // Small delay to avoid rate limiting
