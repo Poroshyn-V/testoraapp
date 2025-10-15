@@ -1868,8 +1868,11 @@ app.post('/api/duplicates/fix-customer/:customerId', async (req, res) => {
     const { customerId } = req.params;
     logger.info(`🔧 Fixing duplicates for customer ${customerId}...`);
     
-    // Get all rows for this customer
-    const rows = await googleSheets.findRows({ 'Customer ID': customerId });
+    // Get all rows from Google Sheets
+    const allRows = await googleSheets.getAllRows();
+    
+    // Find rows for this customer
+    const rows = allRows.filter(row => row.get('Customer ID') === customerId);
     
     if (rows.length <= 1) {
       return res.json({
@@ -1881,15 +1884,21 @@ app.post('/api/duplicates/fix-customer/:customerId', async (req, res) => {
     
     logger.info(`Found ${rows.length} rows for customer ${customerId}, keeping first one...`);
     
-    // Keep the first row, delete the rest
+    // Sort by row number to keep the first one
+    rows.sort((a, b) => a.rowNumber - b.rowNumber);
+    const keepRow = rows[0];
     const rowsToDelete = rows.slice(1);
     let deletedCount = 0;
     
+    // Delete duplicate rows (in reverse order to avoid row number shifts)
+    rowsToDelete.sort((a, b) => b.rowNumber - a.rowNumber);
     for (const row of rowsToDelete) {
       try {
         await googleSheets.deleteRow(row.rowNumber);
         deletedCount++;
         logger.info(`Deleted duplicate row ${row.rowNumber} for customer ${customerId}`);
+        // Small delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 100));
       } catch (error) {
         logger.error(`Error deleting row ${row.rowNumber}:`, error);
       }
@@ -1907,7 +1916,7 @@ app.post('/api/duplicates/fix-customer/:customerId', async (req, res) => {
       customerId,
       totalRows: rows.length,
       deletedRows: deletedCount,
-      keptRow: rows[0].rowNumber
+      keptRow: keepRow.rowNumber
     });
     
   } catch (error) {
