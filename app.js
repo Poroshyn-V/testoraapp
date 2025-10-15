@@ -3448,6 +3448,51 @@ app.get('/api/sheets-structure', async (req, res) => {
   }
 });
 
+// Test formatPaymentForSheets function
+app.get('/api/test-format', async (req, res) => {
+  try {
+    // Get a recent payment from Stripe
+    const payments = await getRecentPayments(1);
+    if (payments.length === 0) {
+      return res.json({
+        success: false,
+        message: 'No payments found in Stripe'
+      });
+    }
+    
+    const payment = payments[0];
+    const customer = await getCustomer(payment.customer);
+    
+    // Test the formatPaymentForSheets function
+    const formattedData = formatPaymentForSheets(payment, customer);
+    
+    res.json({
+      success: true,
+      message: 'formatPaymentForSheets test completed',
+      payment: {
+        id: payment.id,
+        amount: payment.amount,
+        currency: payment.currency,
+        status: payment.status,
+        customer: payment.customer
+      },
+      customer: {
+        id: customer?.id,
+        email: customer?.email
+      },
+      formattedData: formattedData
+    });
+    
+  } catch (error) {
+    logger.error('Error testing formatPaymentForSheets', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to test formatPaymentForSheets',
+      error: error.message
+    });
+  }
+});
+
 // Debug endpoint to check specific customer
 // Fix Google Sheets data endpoint
 app.post('/api/fix-sheets-data', async (req, res) => {
