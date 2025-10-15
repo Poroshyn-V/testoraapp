@@ -3651,6 +3651,40 @@ app.post('/api/fix-existing-rows', async (req, res) => {
   }
 });
 
+// Check last rows data
+app.get('/api/check-last-rows', async (req, res) => {
+  try {
+    const allRows = await googleSheets.getAllRows();
+    const lastRows = allRows.slice(-5);
+    
+    const formattedRows = lastRows.map(row => ({
+      rowNumber: row.rowNumber,
+      customerId: row.get('Customer ID'),
+      currency: row.get('Currency'),
+      status: row.get('Status'),
+      utmSource: row.get('UTM Source'),
+      utmCampaign: row.get('UTM Campaign'),
+      totalAmount: row.get('Total Amount'),
+      email: row.get('Email'),
+      createdLocal: row.get('Created Local (UTC+1)')
+    }));
+    
+    res.json({
+      success: true,
+      message: `Found ${formattedRows.length} last rows`,
+      rows: formattedRows
+    });
+    
+  } catch (error) {
+    logger.error('Error checking last rows', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to check last rows',
+      error: error.message
+    });
+  }
+});
+
 // Debug endpoint to check specific customer
 // Fix Google Sheets data endpoint
 app.post('/api/fix-sheets-data', async (req, res) => {
