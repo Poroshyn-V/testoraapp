@@ -3366,6 +3366,43 @@ app.get('/api/last-purchases', async (req, res) => {
   }
 });
 
+// Check last Google Sheets entries
+app.get('/api/last-sheets-entries', async (req, res) => {
+  try {
+    const allRows = await googleSheets.getAllRows();
+    
+    // Get last 5 rows
+    const lastRows = allRows.slice(-5);
+    
+    const formattedRows = lastRows.map(row => ({
+      rowNumber: row.rowNumber,
+      customerId: row.get('Customer ID'),
+      currency: row.get('Currency'),
+      status: row.get('Status'),
+      paymentStatus: row.get('Payment Status'),
+      totalAmount: row.get('Total Amount'),
+      email: row.get('Email'),
+      createdUTC: row.get('Created UTC'),
+      createdLocal: row.get('Created Local (UTC+1)')
+    }));
+    
+    res.json({
+      success: true,
+      message: `Found ${formattedRows.length} last Google Sheets entries`,
+      count: formattedRows.length,
+      entries: formattedRows
+    });
+    
+  } catch (error) {
+    logger.error('Error fetching last Google Sheets entries', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch last Google Sheets entries',
+      error: error.message
+    });
+  }
+});
+
 // Debug endpoint to check specific customer
 // Fix Google Sheets data endpoint
 app.post('/api/fix-sheets-data', async (req, res) => {
