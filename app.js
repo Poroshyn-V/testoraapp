@@ -3403,6 +3403,51 @@ app.get('/api/last-sheets-entries', async (req, res) => {
   }
 });
 
+// Check Google Sheets structure
+app.get('/api/sheets-structure', async (req, res) => {
+  try {
+    const allRows = await googleSheets.getAllRows();
+    
+    if (allRows.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No rows found in Google Sheets',
+        columns: []
+      });
+    }
+    
+    // Get the first row to see all available columns
+    const firstRow = allRows[0];
+    const columns = [];
+    
+    // Get all properties from the row object
+    for (const key in firstRow._rawData) {
+      if (firstRow._rawData.hasOwnProperty(key)) {
+        columns.push({
+          name: key,
+          value: firstRow._rawData[key],
+          sampleValue: firstRow.get(key)
+        });
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Found ${columns.length} columns in Google Sheets`,
+      totalRows: allRows.length,
+      columns: columns
+    });
+    
+  } catch (error) {
+    logger.error('Error fetching Google Sheets structure', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch Google Sheets structure',
+      error: error.message
+    });
+  }
+});
+
 // Debug endpoint to check specific customer
 // Fix Google Sheets data endpoint
 app.post('/api/fix-sheets-data', async (req, res) => {
