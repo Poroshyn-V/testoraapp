@@ -8,14 +8,31 @@ class NotificationQueue {
     this.processing = false;
     this.maxRetries = 3;
     this.retryDelay = 2000; // Base delay in milliseconds
+    this.sentNotifications = new Set(); // Track sent notifications to prevent duplicates
+    this.maxSentHistory = 1000; // Maximum number of sent notifications to keep in memory
   }
   
   async add(notification) {
+    // Create unique key for duplicate detection
+    const duplicateKey = this.createDuplicateKey(notification);
+    
+    // Check if we already have this notification in queue or sent recently
+    if (this.sentNotifications.has(duplicateKey)) {
+      logWarn('🚫 Duplicate notification prevented', {
+        type: notification.type,
+        duplicateKey,
+        queueSize: this.queue.length
+      });
+      metrics.increment('notification_duplicate_prevented', 1, { type: notification.type });
+      return;
+    }
+    
     const queuedNotification = {
       ...notification,
       attempts: 0,
       addedAt: Date.now(),
-      id: this.generateId()
+      id: this.generateId(),
+      duplicateKey
     };
     
     this.queue.push(queuedNotification);
@@ -49,6 +66,22 @@ class NotificationQueue {
         try {
           await this.send(notification);
           this.queue.shift(); // Remove from queue on success
+          
+          // Mark as sent to prevent duplicates
+          this.sentNotifications.add(notification.duplicateKey);
+          
+          // Clean up old entries if we have too many
+          if (this.sentNotifications.size > this.maxSentHistory) {
+            const entriesToRemove = this.sentNotifications.size - this.maxSentHistory;
+            const entriesArray = Array.from(this.sentNotifications);
+            for (let i = 0; i < entriesToRemove; i++) {
+              this.sentNotifications.delete(entriesArray[i]);
+            }
+            logInfo('🧹 Cleaned up old sent notification history', { 
+              removed: entriesToRemove,
+              remaining: this.sentNotifications.size 
+            });
+          }
           
           logInfo('✅ Notification sent successfully', {
             type: notification.type,
@@ -144,11 +177,18 @@ class NotificationQueue {
     return `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
   }
   
+  createDuplicateKey(notification) {
+    // Create a unique key based on notification content to prevent duplicates
+    const key = `${notification.type}_${notification.metadata?.paymentId || notification.metadata?.customerId || 'unknown'}`;
+    return key;
+  }
+  
   getStats() {
     return {
       queueSize: this.queue.length,
       processing: this.processing,
       maxRetries: this.maxRetries,
+      sentNotificationsCount: this.sentNotifications.size,
       oldestInQueue: this.queue.length > 0 
         ? new Date(this.queue[0].addedAt).toISOString() 
         : null,
@@ -166,6 +206,7 @@ class NotificationQueue {
   clear() {
     const clearedCount = this.queue.length;
     this.queue = [];
+    this.sentNotifications.clear(); // Also clear sent notifications history
     logInfo('🧹 Notification queue cleared', { clearedCount });
     metrics.increment('notification_queue_cleared', 1, { count: clearedCount });
   }
