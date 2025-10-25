@@ -178,9 +178,19 @@ class NotificationQueue {
   }
   
   createDuplicateKey(notification) {
-    // Create a unique key based on notification content to prevent duplicates
-    const key = `${notification.type}_${notification.metadata?.paymentId || notification.metadata?.customerId || 'unknown'}`;
-    return key;
+    // Create a unique key based on payment/customer ID to prevent duplicates across all notification types
+    // This ensures that the same purchase doesn't get multiple notifications regardless of type
+    const paymentId = notification.metadata?.paymentId;
+    const customerId = notification.metadata?.customerId;
+    
+    if (paymentId) {
+      return `payment_${paymentId}`;
+    } else if (customerId) {
+      return `customer_${customerId}`;
+    } else {
+      // For non-purchase notifications (alerts, reports), use type + timestamp
+      return `${notification.type}_${Date.now()}`;
+    }
   }
   
   getStats() {

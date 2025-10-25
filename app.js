@@ -122,7 +122,8 @@ async function sendVipPurchaseAlert(payment, customer, sheetData) {
         metadata: { 
           amount, 
           customerId: customer.id,
-          customerEmail: customer.email 
+          customerEmail: customer.email,
+          paymentId: payment.id  // Add paymentId to use same duplicate key as regular notifications
         }
       });
       
@@ -2854,20 +2855,21 @@ async function performSyncLogic() {
             
             const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
             
-            // Send VIP alert if applicable
-            await sendVipPurchaseAlert(latestPayment, customer, sheetData);
-            
-            // Send regular notification via queue (to avoid duplicates)
+            // Send notification via queue (VIP alert will be included if applicable)
             const notificationMessage = await formatTelegramNotification(latestPayment, customer, sheetData);
+            const amount = parseFloat(sheetData['Total Amount'] || 0);
+            const isVip = amount >= alertConfig.vipPurchaseThreshold;
+            
             await notificationQueue.add({
-              type: 'upsell_purchase',
+              type: isVip ? 'vip_upsell_purchase' : 'upsell_purchase',
               channel: 'telegram',
               message: notificationMessage,
               metadata: {
                 paymentId: latestPayment.id,
                 customerId: customer.id,
                 amount: sheetData['Total Amount'],
-                type: 'upsell'
+                type: 'upsell',
+                isVip: isVip
               }
             });
             
@@ -2937,20 +2939,21 @@ async function performSyncLogic() {
               'Payment Intent IDs': rowData['Payment Intent IDs']
             };
             
-            // Send VIP alert if applicable
-            await sendVipPurchaseAlert(firstPayment, customer, sheetData);
-            
-            // Send regular notification via queue (to avoid duplicates)
+            // Send notification via queue (VIP alert will be included if applicable)
             const notificationMessage = await formatTelegramNotification(firstPayment, customer, sheetData);
+            const amount = parseFloat(sheetData['Total Amount'] || 0);
+            const isVip = amount >= alertConfig.vipPurchaseThreshold;
+            
             await notificationQueue.add({
-              type: 'new_purchase',
+              type: isVip ? 'vip_new_purchase' : 'new_purchase',
               channel: 'telegram',
               message: notificationMessage,
               metadata: {
                 paymentId: firstPayment.id,
                 customerId: customer.id,
                 amount: sheetData['Total Amount'],
-                type: 'new_purchase'
+                type: 'new_purchase',
+                isVip: isVip
               }
             });
             

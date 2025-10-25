@@ -132,11 +132,14 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
   const adsetName = rawAdsetName ? formatCampaignName(rawAdsetName) : null;
   const campaignName = rawCampaignName ? formatCampaignName(rawCampaignName) : null;
   
+  // Check if this is a VIP purchase
+  const isVip = metadata.isVip || parseFloat(amount) >= 100; // VIP threshold
+  
   // Create STRUCTURED notification message
-  let message = `🟢 Purchase purchase_${customer?.id || 'unknown'} was processed!
+  let message = `${isVip ? '💎 VIP ' : ''}🟢 Purchase purchase_${customer?.id || 'unknown'} was processed!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 💳 Payment Method: Card
-💰 Amount: ${amount} ${currency}
+💰 Amount: ${amount} ${currency}${isVip ? ' 💎' : ''}
 🏷️ Payments: ${paymentCount}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📧 Email: ${email}
