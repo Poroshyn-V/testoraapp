@@ -20,6 +20,7 @@ import { campaignAnalyzer } from './src/services/campaignAnalyzer.js';
 import { duplicateChecker } from './src/services/duplicateChecker.js';
 import { formatPaymentForSheets, formatPaymentForSheetsLowPrice, formatTelegramNotification } from './src/utils/formatting.js';
 import healthRoutes from './src/routes/health.js';
+import { google } from 'googleapis';
 
 // Глобальные переменные для locks
 const syncLock = new Map(); // customerId -> timestamp
@@ -3248,6 +3249,59 @@ async function performSyncLogic() {
   }
 }
 
+// Helper function to add LA time formula to column G in LowPrice sheet
+async function addLaTimeFormulaToLowPriceSheet(rowNumber, utcColumnIndex = null) {
+  try {
+    const LOW_PRICE_SHEET_NAME = ENV.STRIPE_LOW_PRICE_SHEET_NAME || 'LowPrice';
+    const sheet = await googleSheets.getSheetByName(LOW_PRICE_SHEET_NAME);
+    await sheet.loadHeaderRow();
+    
+    // Find UTC column dynamically
+    if (utcColumnIndex === null) {
+      utcColumnIndex = sheet.headerValues.indexOf('Created UTC');
+      if (utcColumnIndex === -1) {
+        logger.warn('UTC column not found in LowPrice sheet headers');
+        return false;
+      }
+    }
+    
+    const utcColumnLetter = String.fromCharCode(65 + utcColumnIndex);
+    const columnGIndex = 6; // G column (A=0, B=1, C=2, D=3, E=4, F=5, G=6)
+    const columnGLetter = 'G';
+    
+    // Formula to convert UTC to LA time (UTC-8)
+    const formula = `=IF(${utcColumnLetter}${rowNumber}="","",TEXT(DATEVALUE(LEFT(${utcColumnLetter}${rowNumber},10))+TIMEVALUE(MID(${utcColumnLetter}${rowNumber},12,8))-TIME(8,0,0),"YYYY-MM-DD HH:MM:SS.000")&" LA Time")`;
+    
+    // Use googleapis to add formula
+    const { JWT } = await import('google-auth-library');
+    const serviceAccountAuth = new JWT({
+      email: ENV.GOOGLE_SERVICE_EMAIL,
+      key: ENV.GOOGLE_SERVICE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    
+    const sheets = google.sheets({ version: 'v4', auth: serviceAccountAuth });
+    
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: ENV.GOOGLE_SHEETS_DOC_ID,
+      range: `${LOW_PRICE_SHEET_NAME}!${columnGLetter}${rowNumber}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [[formula]]
+      }
+    });
+    
+    logger.debug(`Added LA time formula to ${LOW_PRICE_SHEET_NAME} row ${rowNumber}, column ${columnGLetter}`);
+    return true;
+  } catch (error) {
+    logger.warn(`Failed to add LA time formula to row ${rowNumber}`, {
+      error: error.message,
+      stack: error.stack
+    });
+    return false;
+  }
+}
+
 // Sync logic for Low Price Stripe account
 async function performSyncLogicLowPrice() {
   // Skip if not configured
@@ -3451,6 +3505,9 @@ async function performSyncLogicLowPrice() {
             'Created Local (LA Time)': updatedRowData['Created Local (LA Time)']  // Время по LA
           });
           
+          // Add LA time formula to column G
+          await addLaTimeFormulaToLowPriceSheet(existingCustomerRow.rowNumber);
+          
           results.updatedPurchases++;
           results.processed++;
           
@@ -3473,7 +3530,10 @@ async function performSyncLogicLowPrice() {
           rowData['Payment Intent IDs'] = paymentIds.join(', ');
           
           // Add row to LowPrice sheet
-          await lowPriceSheet.addRow(rowData);
+          const newRow = await lowPriceSheet.addRow(rowData);
+          
+          // Add LA time formula to column G
+          await addLaTimeFormulaToLowPriceSheet(newRow.rowNumber);
           
           results.newPurchases++;
           results.processed++;
@@ -3571,6 +3631,59 @@ app.post('/api/sync-payments-low-price', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Low Price sync endpoint error',
+      error: error.message
+    });
+  }
+});
+
+// Add LA time formula to all existing rows in LowPrice sheet
+app.post('/api/add-la-formula-all-lowprice', async (req, res) => {
+  try {
+    logger.info('Adding LA time formula to all rows in LowPrice sheet...');
+    
+    const LOW_PRICE_SHEET_NAME = ENV.STRIPE_LOW_PRICE_SHEET_NAME || 'LowPrice';
+    const lowPriceSheet = await googleSheets.getSheetByName(LOW_PRICE_SHEET_NAME);
+    await lowPriceSheet.loadHeaderRow();
+    
+    const rows = await lowPriceSheet.getRows();
+    logger.info(`Found ${rows.length} rows in LowPrice sheet`);
+    
+    let updated = 0;
+    let failed = 0;
+    
+    for (const row of rows) {
+      try {
+        const success = await addLaTimeFormulaToLowPriceSheet(row.rowNumber);
+        if (success) {
+          updated++;
+          if (updated % 10 === 0) {
+            logger.info(`Added formula to ${updated} rows...`);
+          }
+        } else {
+          failed++;
+        }
+      } catch (error) {
+        logger.error(`Failed to add formula to row ${row.rowNumber}`, error);
+        failed++;
+      }
+    }
+    
+    const result = {
+      success: true,
+      message: `LA time formula added to LowPrice sheet`,
+      totalRows: rows.length,
+      updated,
+      failed
+    };
+    
+    logger.info('LA time formula update completed', result);
+    res.json(result);
+    
+  } catch (error) {
+    logger.error('Error adding LA time formula to LowPrice sheet', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error adding LA time formula',
       error: error.message
     });
   }
