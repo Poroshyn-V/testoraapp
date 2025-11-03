@@ -181,8 +181,8 @@ export function formatPaymentForSheetsLowPrice(payment, customer, metadata = {})
   
   return {
     'Purchase ID': `purchase_${customerId}`,
-    'Created UTC': createdUTC,
-    'Created Local (LA Time)': createdLocal,
+    'Created UTC': createdUTC,  // Время из Stripe
+    'Created Local (LA Time)': createdLocal,  // Время по LA
     'Payment Intent IDs': payment.id,
     'Total Amount': amount,
     'Currency': currency,

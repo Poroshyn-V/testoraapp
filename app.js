@@ -3276,10 +3276,39 @@ async function performSyncLogicLowPrice() {
     try {
       await lowPriceSheet.loadHeaderRow();
     } catch (error) {
-      // Headers don't exist, create them - use same format as main sheet
+      // Headers don't exist, create them for LowPrice (UTC and LA time only)
       logger.info(`Creating headers for LowPrice sheet...`);
-      // Headers will be created automatically when first row is added
-      logger.info('Headers will be created from first row');
+      const headers = [
+        'Purchase ID',
+        'Created UTC',
+        'Created Local (LA Time)',
+        'Payment Intent IDs',
+        'Total Amount',
+        'Currency',
+        'Status',
+        'Customer ID',
+        'Email',
+        'GEO',
+        'Gender',
+        'Age',
+        'Product Tag',
+        'Creative Link',
+        'UTM Source',
+        'UTM Medium',
+        'UTM Campaign',
+        'UTM Content',
+        'UTM Term',
+        'Platform Placement',
+        'Ad Name',
+        'Adset Name',
+        'Campaign Name',
+        'Web Campaign',
+        'Client Reference ID',
+        'Mode',
+        'Raw Metadata JSON'
+      ];
+      await lowPriceSheet.setHeaderRow(headers);
+      logger.info('Headers created for LowPrice sheet (UTC and LA time only)');
     }
     
     // Load existing Payment Intent IDs from LowPrice sheet
@@ -3409,14 +3438,14 @@ async function performSyncLogicLowPrice() {
           const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
           const updatedRowData = formatPaymentForSheetsLowPrice(latestPayment, customer);
           
-          // Update existing row with all payments data
+          // Update existing row with all payments data (only UTC and LA time, no UTC+1)
           await existingCustomerRow.save({
             'Purchase ID': `purchase_${customerId}`,
             'Total Amount': (totalAmountAll / 100).toFixed(2),
             'Payment Count': paymentCountAll.toString(),
             'Payment Intent IDs': paymentIdsAll.join(', '),
-            'Created Local (LA Time)': updatedRowData['Created Local (LA Time)'],
-            'Created UTC': updatedRowData['Created UTC']
+            'Created UTC': updatedRowData['Created UTC'],  // Время из Stripe
+            'Created Local (LA Time)': updatedRowData['Created Local (LA Time)']  // Время по LA
           });
           
           results.updatedPurchases++;
