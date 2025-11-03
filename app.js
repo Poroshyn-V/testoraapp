@@ -3485,34 +3485,53 @@ async function performSyncLogicLowPrice(exportAll = false) {
             return true;
           });
           
+          // ✅ Суммируем ВСЕ платежи (основная покупка + все апселлы)
           let totalAmountAll = 0;
-          let paymentCountAll = 0;
           const paymentIdsAll = [];
           
           for (const p of allSuccessfulPayments) {
             totalAmountAll += p.amount;
-            paymentCountAll++;
             paymentIdsAll.push(p.id);
           }
           
-          // Get latest payment for updated timestamp
-          const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
-          const updatedRowData = formatPaymentForSheetsLowPrice(latestPayment, customer);
+          // Получаем текущие значения из таблицы для сравнения
+          const currentPaymentIds = (existingCustomerRow.get('Payment Intent IDs') || '').split(',').map(id => id.trim()).filter(Boolean);
+          const currentPaymentIdsSorted = currentPaymentIds.sort().join(', ');
+          const newPaymentIdsSorted = paymentIdsAll.sort().join(', ');
+          const currentTotalAmount = parseFloat(existingCustomerRow.get('Total Amount') || 0);
+          const newTotalAmount = (totalAmountAll / 100).toFixed(2);
           
-          // Update existing row with all payments data (only UTC and LA time, no UTC+1)
-          await existingCustomerRow.save({
-            'Purchase ID': `purchase_${customerId}`,
-            'Total Amount': (totalAmountAll / 100).toFixed(2),
-            'Payment Count': paymentCountAll.toString(),
-            'Payment Intent IDs': paymentIdsAll.join(', '),
-            'Created UTC': updatedRowData['Created UTC'],  // Время из Stripe
-            'Created Local (LA Time)': updatedRowData['Created Local (LA Time)']  // Время по LA
-          });
+          // Проверяем, нужно ли обновление (если количество или ID платежей изменились, или сумма)
+          const needsUpdate = 
+            currentPaymentIds.length !== paymentIdsAll.length ||
+            currentPaymentIdsSorted !== newPaymentIdsSorted ||
+            Math.abs(currentTotalAmount - parseFloat(newTotalAmount)) >= 0.01;
           
-          // Add LA time formula to column G
-          await addLaTimeFormulaToLowPriceSheet(existingCustomerRow.rowNumber);
+          if (needsUpdate) {
+            // Get latest payment for updated timestamp
+            const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
+            const updatedRowData = formatPaymentForSheetsLowPrice(latestPayment, customer);
+            
+            // Update existing row with all payments data (only UTC and LA time, no UTC+1)
+            await existingCustomerRow.save({
+              'Purchase ID': `purchase_${customerId}`,
+              'Total Amount': newTotalAmount,
+              'Payment Count': paymentIdsAll.length.toString(),
+              'Payment Intent IDs': newPaymentIdsSorted,
+              'Created UTC': updatedRowData['Created UTC'],  // Время из Stripe
+              'Created Local (LA Time)': updatedRowData['Created Local (LA Time)']  // Время по LA
+            });
+            
+            // Add LA time formula to column G
+            await addLaTimeFormulaToLowPriceSheet(existingCustomerRow.rowNumber);
+            
+            logger.info(`✅ Updated Low Price customer ${customerId}: ${currentPaymentIds.length} → ${paymentIdsAll.length} payments, $${currentTotalAmount.toFixed(2)} → $${newTotalAmount}`);
+            results.updatedPurchases++;
+          } else {
+            logger.debug(`Low Price customer ${customerId} already up to date (${paymentIdsAll.length} payments)`);
+            results.duplicatesAvoided++;
+          }
           
-          results.updatedPurchases++;
           results.processed++;
           
         } else {
