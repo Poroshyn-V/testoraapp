@@ -3095,21 +3095,37 @@ async function performSyncLogic() {
             results.processed++;
             
           } else {
-            // ADD NEW customer (используем атомарную операцию)
-            logger.info(`Adding new customer ${customerId} (with lock and atomic operation)`);
+            // ADD NEW customer - load ALL payments from Stripe (including all upsells)
+            logger.info(`Adding new customer ${customerId} (loading ALL payments from Stripe)`);
+            
+            // ✅ КРИТИЧЕСКИ ВАЖНО: Загружаем ВСЕ платежи клиента из Stripe (не только новые из группы)
+            // Это гарантирует, что основная покупка + все апселлы будут суммированы вместе
+            const allPayments = await fetchWithRetry(() => getCustomerPayments(customerId));
+            const allSuccessfulPayments = allPayments.filter(p => {
+              if (p.status !== 'succeeded' || !p.customer) return false;
+              if (p.description && p.description.toLowerCase().includes('subscription update')) {
+                return false;
+              }
+              return true;
+            });
+            
+            // Сортируем по дате создания (первая покупка)
+            allSuccessfulPayments.sort((a, b) => a.created - b.created);
+            const firstPayment = allSuccessfulPayments[0];
             
             const rowData = formatPaymentForSheets(firstPayment, customer);
             
+            // ✅ Суммируем ВСЕ платежи клиента (основная покупка + все апселлы)
             let totalAmount = 0;
             const paymentIds = [];
-            for (const p of payments) {
+            for (const p of allSuccessfulPayments) {
               totalAmount += p.amount;
               paymentIds.push(p.id);
             }
             
             rowData['Purchase ID'] = `purchase_${customerId}_${firstPayment.created}`;
             rowData['Total Amount'] = (totalAmount / 100).toFixed(2);
-            rowData['Payment Count'] = payments.length.toString();
+            rowData['Payment Count'] = allSuccessfulPayments.length.toString();
             rowData['Payment Intent IDs'] = paymentIds.join(', ');
             
             // 🔒 АТОМАРНОЕ добавление с внутренней блокировкой
@@ -3138,7 +3154,7 @@ async function performSyncLogic() {
               results.newPurchases++;
             }
             
-            // ✅ Обновляем ОБЕ системы кэширования СРАЗУ
+            // ✅ Обновляем ОБЕ системы кэширования СРАЗУ (все платежи клиента)
             for (const paymentId of paymentIds) {
               purchaseCache.add(paymentId);
             }
@@ -3148,6 +3164,8 @@ async function performSyncLogic() {
               totalAmount: rowData['Total Amount'],
               paymentCount: rowData['Payment Count']
             });
+            
+            logger.info(`✅ Added customer ${customerId} with ALL payments: ${allSuccessfulPayments.length} payments (${payments.length} new + ${allSuccessfulPayments.length - payments.length} existing), total $${rowData['Total Amount']}`);
             
             // Send notification
             const sheetData = {
