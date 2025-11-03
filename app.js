@@ -3028,12 +3028,18 @@ async function performSyncLogic() {
               paymentIdsAll.push(p.id);
             }
             
+            // Get latest payment for updated timestamp
+            const latestPaymentForUpdate = allSuccessfulPayments[allSuccessfulPayments.length - 1];
+            const updatedRowData = formatPaymentForSheets(latestPaymentForUpdate, customer);
+            
             await fetchWithRetry(() => 
               googleSheets.updateRow(existingCustomers[0], {
                 'Purchase ID': `purchase_${customerId}`,
                 'Total Amount': (totalAmountAll / 100).toFixed(2),
                 'Payment Count': paymentCountAll.toString(),
-                'Payment Intent IDs': paymentIdsAll.join(', ')
+                'Payment Intent IDs': paymentIdsAll.join(', '),
+                'Created Local (UTC+1)': updatedRowData['Created Local (UTC+1)'],
+                'Created UTC': updatedRowData['Created UTC']
               })
             );
             
@@ -3063,10 +3069,8 @@ async function performSyncLogic() {
               'Payment Intent IDs': paymentIdsAll.join(', ')
             };
             
-            const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
-            
             // Send notification via queue (VIP alert will be included if applicable)
-            const notificationMessage = await formatTelegramNotification(latestPayment, customer, sheetData);
+            const notificationMessage = await formatTelegramNotification(latestPaymentForUpdate, customer, sheetData);
             const amount = parseFloat(sheetData['Total Amount'] || 0);
             const isVip = amount >= alertConfig.vipPurchaseThreshold;
             
