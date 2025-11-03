@@ -11,8 +11,8 @@ const GOOGLE_SHEETS_DOC_ID = process.env.GOOGLE_SHEETS_DOC_ID;
 const GOOGLE_SERVICE_EMAIL = process.env.GOOGLE_SERVICE_EMAIL;
 const GOOGLE_SERVICE_PRIVATE_KEY = (process.env.GOOGLE_SERVICE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
 
-// Format UTC+1 time from payment
-function formatUtcPlus1Time(payment) {
+// Format UTC+1 and LA time from payment
+function formatTimes(payment) {
   const createdDate = new Date(payment.created * 1000);
   const createdUTC = createdDate.toISOString();
   
@@ -26,9 +26,31 @@ function formatUtcPlus1Time(payment) {
   const seconds = String(utcPlus1Date.getSeconds()).padStart(2, '0');
   const createdLocal = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.000 UTC+1`;
   
+  // Format LA time (Pacific Time)
+  const laFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+  
+  const laParts = laFormatter.formatToParts(createdDate);
+  const laYear = laParts.find(p => p.type === 'year').value;
+  const laMonth = laParts.find(p => p.type === 'month').value;
+  const laDay = laParts.find(p => p.type === 'day').value;
+  const laHours = laParts.find(p => p.type === 'hour').value;
+  const laMinutes = laParts.find(p => p.type === 'minute').value;
+  const laSeconds = laParts.find(p => p.type === 'second').value;
+  const createdLATime = `${laYear}-${laMonth.padStart(2, '0')}-${laDay.padStart(2, '0')} ${laHours.padStart(2, '0')}:${laMinutes.padStart(2, '0')}:${laSeconds.padStart(2, '0')}.000 LA Time`;
+  
   return {
+    'Created UTC': createdUTC,
     'Created Local (UTC+1)': createdLocal,
-    'Created UTC': createdUTC
+    'Created Local (LA Time)': createdLATime
   };
 }
 
@@ -65,9 +87,11 @@ async function updateExistingUtcTime() {
       try {
         const paymentIntentIds = row.get('Payment Intent IDs') || '';
         const existingLocalTime = row.get('Created Local (UTC+1)') || row.get('Created Local (UTC+10)') || '';
+        const existingLATime = row.get('Created Local (LA Time)') || '';
         
-        // Пропускаем, если время уже заполнено
-        if (existingLocalTime && existingLocalTime !== '' && existingLocalTime !== 'N/A') {
+        // Пропускаем, если время уже заполнено (проверяем UTC+1 и LA)
+        if (existingLocalTime && existingLocalTime !== '' && existingLocalTime !== 'N/A' &&
+            existingLATime && existingLATime !== '' && existingLATime !== 'N/A') {
           skipped++;
           continue;
         }
@@ -83,21 +107,25 @@ async function updateExistingUtcTime() {
         // Получаем данные платежа из Stripe
         const payment = await stripe.paymentIntents.retrieve(firstPaymentId);
 
-        // Форматируем время UTC+1
-        const timeData = formatUtcPlus1Time(payment);
+        // Форматируем время UTC+1 и LA
+        const timeData = formatTimes(payment);
 
-        // Обновляем время (проверяем разные возможные названия колонок)
+        // Обновляем все колонки времени
         const updateData = {};
         
-        // Проверяем какое название колонки используется
+        // Проверяем какие колонки есть и обновляем их
+        if (sheet.headerValues.includes('Created UTC')) {
+          updateData['Created UTC'] = timeData['Created UTC'];
+        }
+        
         if (sheet.headerValues.includes('Created Local (UTC+1)')) {
           updateData['Created Local (UTC+1)'] = timeData['Created Local (UTC+1)'];
         } else if (sheet.headerValues.includes('Created Local (UTC+10)')) {
           updateData['Created Local (UTC+10)'] = timeData['Created Local (UTC+1)'];
         }
         
-        if (sheet.headerValues.includes('Created UTC')) {
-          updateData['Created UTC'] = timeData['Created UTC'];
+        if (sheet.headerValues.includes('Created Local (LA Time)')) {
+          updateData['Created Local (LA Time)'] = timeData['Created Local (LA Time)'];
         }
         
         if (Object.keys(updateData).length > 0) {
