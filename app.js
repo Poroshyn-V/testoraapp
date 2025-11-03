@@ -434,6 +434,7 @@ async function runSync() {
     global.lastSyncTime = Date.now();
     
     // Also sync Low Price account (async, don't wait for it)
+    // ✅ КРИТИЧЕСКИ ВАЖНО: Синхронизируем LowPrice с проверкой ВСЕХ существующих клиентов
     performSyncLogicLowPrice().catch(error => {
       logger.error('Low Price sync failed', {
         error: error.message,
@@ -5568,6 +5569,41 @@ app.listen(ENV.PORT, () => {
         console.error('❌ Scheduled sync failed:', error.message);
       }
     }, alertConfig.syncInterval * 60 * 1000); // Configurable sync interval
+    
+    // ✅ Автоматическая синхронизация LowPrice каждые 5 минут
+    if (!ENV.AUTO_SYNC_DISABLED && ENV.STRIPE_SECRET_KEY_LOW_PRICE) {
+      console.log('🔄 Starting LowPrice automatic sync every 5 minutes...');
+      
+      // Первая синхронизация через 30 секунд после основного sync
+      setTimeout(async () => {
+        try {
+          console.log('🚀 Running initial LowPrice sync...');
+          const result = await performSyncLogicLowPrice();
+          if (result.success) {
+            console.log(`✅ Initial LowPrice sync completed: ${result.processed || 0} customers processed`);
+          } else {
+            console.log(`⚠️ Initial LowPrice sync failed: ${result.message}`);
+          }
+        } catch (error) {
+          console.error('❌ Initial LowPrice sync failed:', error.message);
+        }
+      }, 60000); // Через 1 минуту после старта (чтобы не конфликтовать с основным sync)
+      
+      // Затем каждые 5 минут
+      setInterval(async () => {
+        try {
+          console.log('🔄 Running scheduled LowPrice sync...');
+          const result = await performSyncLogicLowPrice();
+          if (result.success) {
+            console.log(`✅ LowPrice sync completed: ${result.processed || 0} customers processed, ${result.updatedPurchases || 0} updated`);
+          } else {
+            console.log(`⚠️ LowPrice sync failed: ${result.message}`);
+          }
+        } catch (error) {
+          console.error('❌ LowPrice sync failed:', error.message);
+        }
+      }, alertConfig.syncInterval * 60 * 1000); // Те же 5 минут что и основной sync
+    }
     
     // Дополнительная система проверки каждую минуту (fallback)
     const syncCheckInterval = setInterval(async () => {
