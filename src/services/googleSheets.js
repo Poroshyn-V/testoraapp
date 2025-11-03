@@ -52,6 +52,20 @@ class GoogleSheetsService {
     }
   }
 
+  // Get sheet by name (creates if doesn't exist)
+  async getSheetByName(sheetName) {
+    await this.initialize();
+    
+    let targetSheet = this.doc.sheetsByTitle[sheetName];
+    if (!targetSheet) {
+      logInfo(`Creating new sheet: ${sheetName}`);
+      targetSheet = await this.doc.addSheet({ title: sheetName });
+      logInfo(`Sheet "${sheetName}" created successfully`);
+    }
+    
+    return targetSheet;
+  }
+
   // Get all rows from the sheet
   async getAllRows() {
     await this.initialize();

@@ -2,10 +2,17 @@ import Stripe from 'stripe';
 import { ENV, STRIPE_CONFIG } from '../config/env.js';
 import { logInfo, logError } from '../utils/logging.js';
 
-// Initialize Stripe
+// Initialize Stripe (main account)
 export const stripe = new Stripe(ENV.STRIPE_SECRET_KEY, { 
   apiVersion: STRIPE_CONFIG.API_VERSION 
 });
+
+// Initialize Stripe (low-price account)
+export const stripeLowPrice = ENV.STRIPE_SECRET_KEY_LOW_PRICE 
+  ? new Stripe(ENV.STRIPE_SECRET_KEY_LOW_PRICE, { 
+      apiVersion: STRIPE_CONFIG.API_VERSION 
+    })
+  : null;
 
 // Stripe service functions
 export async function getRecentPayments(limit = 100) {
@@ -62,6 +69,77 @@ export async function getCustomer(customerId) {
     return customer;
   } catch (error) {
     logError('Error fetching customer from Stripe', error, { customerId });
+    throw error;
+  }
+}
+
+// Functions for Low Price Stripe account
+export async function getRecentPaymentsLowPrice(limit = 100) {
+  if (!stripeLowPrice) {
+    throw new Error('Low Price Stripe account not configured');
+  }
+  
+  try {
+    logInfo('Fetching recent payments from Low Price Stripe', { limit });
+    
+    const payments = await stripeLowPrice.paymentIntents.list({
+      limit,
+      created: {
+        gte: Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000) // Last 7 days
+      }
+    });
+    
+    logInfo('Successfully fetched payments from Low Price Stripe', { 
+      count: payments.data.length 
+    });
+    
+    return payments.data;
+  } catch (error) {
+    logError('Error fetching payments from Low Price Stripe', error);
+    throw error;
+  }
+}
+
+export async function getCustomerPaymentsLowPrice(customerId, limit = 100) {
+  if (!stripeLowPrice) {
+    throw new Error('Low Price Stripe account not configured');
+  }
+  
+  try {
+    logInfo('Fetching customer payments from Low Price Stripe', { customerId, limit });
+    
+    const payments = await stripeLowPrice.paymentIntents.list({
+      customer: customerId,
+      limit
+    });
+    
+    logInfo('Successfully fetched customer payments from Low Price Stripe', { 
+      customerId, 
+      count: payments.data.length 
+    });
+    
+    return payments.data;
+  } catch (error) {
+    logError('Error fetching customer payments from Low Price Stripe', error, { customerId });
+    throw error;
+  }
+}
+
+export async function getCustomerLowPrice(customerId) {
+  if (!stripeLowPrice) {
+    throw new Error('Low Price Stripe account not configured');
+  }
+  
+  try {
+    logInfo('Fetching customer from Low Price Stripe', { customerId });
+    
+    const customer = await stripeLowPrice.customers.retrieve(customerId);
+    
+    logInfo('Successfully fetched customer from Low Price Stripe', { customerId });
+    
+    return customer;
+  } catch (error) {
+    logError('Error fetching customer from Low Price Stripe', error, { customerId });
     throw error;
   }
 }

@@ -1,12 +1,13 @@
 // Refactored Stripe Ops API - Modular Architecture
 import express from 'express';
 import cors from 'cors';
+import crypto from 'crypto';
 import { ENV } from './src/config/env.js';
 import { logger } from './src/utils/logging.js';
 import { rateLimit, getRateLimitStats } from './src/middleware/rateLimit.js';
 import { errorHandler, notFoundHandler } from './src/middleware/errorHandler.js';
 import { getCacheStats } from './src/utils/cache.js';
-import { stripe, getRecentPayments, getCustomerPayments, getCustomer } from './src/services/stripe.js';
+import { stripe, getRecentPayments, getCustomerPayments, getCustomer, stripeLowPrice, getRecentPaymentsLowPrice, getCustomerPaymentsLowPrice, getCustomerLowPrice } from './src/services/stripe.js';
 import { sendNotifications, sendTextNotifications, sendPurchaseNotification } from './src/services/notifications.js';
 import googleSheets from './src/services/googleSheets.js';
 import { analytics } from './src/services/analytics.js';
@@ -430,6 +431,14 @@ async function runSync() {
     
     // Записываем время последней синхронизации
     global.lastSyncTime = Date.now();
+    
+    // Also sync Low Price account (async, don't wait for it)
+    performSyncLogicLowPrice().catch(error => {
+      logger.error('Low Price sync failed', {
+        error: error.message,
+        stack: error.stack
+      });
+    });
     
     // Record performance metrics
     const syncDuration = Date.now() - startTime;
@@ -1239,6 +1248,207 @@ app.post('/api/export-today-purchases', async (req, res) => {
     
   } catch (error) {
     logger.error('Error in export today purchases', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// Force export all payments from Stripe to Google Sheets
+app.get('/api/force-export-all', async (req, res) => {
+  try {
+    logger.info('🚀 Starting force export of all payments to Google Sheets');
+    
+    // Get all payments from Stripe
+    const allPayments = [];
+    let hasMore = true;
+    let startingAfter = null;
+    
+    while (hasMore) {
+      const params = { limit: 100 };
+      if (startingAfter) {
+        params.starting_after = startingAfter;
+      }
+      
+      const payments = await stripe.paymentIntents.list(params);
+      allPayments.push(...payments.data);
+      
+      hasMore = payments.has_more;
+      if (hasMore && payments.data.length > 0) {
+        startingAfter = payments.data[payments.data.length - 1].id;
+      }
+    }
+    
+    logger.info(`📊 Found ${allPayments.length} total payments`);
+    
+    const successfulPayments = allPayments.filter(p => p.status === 'succeeded' && p.customer);
+    logger.info(`✅ Found ${successfulPayments.length} successful payments with customers`);
+    
+    // Group purchases by customer and date
+    const groupedPurchases = new Map();
+    
+    for (const payment of successfulPayments) {
+      const customer = await getCustomer(payment.customer);
+      if (!customer) continue;
+      
+      const customerId = customer.id;
+      const purchaseDate = new Date(payment.created * 1000);
+      const dateKey = `${customerId}_${purchaseDate.toISOString().split('T')[0]}`;
+      
+      if (!groupedPurchases.has(dateKey)) {
+        groupedPurchases.set(dateKey, {
+          customer,
+          payments: [],
+          totalAmount: 0,
+          firstPayment: payment
+        });
+      }
+      
+      const group = groupedPurchases.get(dateKey);
+      group.payments.push(payment);
+      group.totalAmount += payment.amount;
+    }
+    
+    logger.info(`📊 Grouped into ${groupedPurchases.size} purchases`);
+    
+    // Sort by date (oldest first)
+    const sortedGroups = Array.from(groupedPurchases.entries()).sort((a, b) => {
+      const dateA = new Date(a[1].firstPayment.created * 1000);
+      const dateB = new Date(b[1].firstPayment.created * 1000);
+      return dateA - dateB;
+    });
+    
+    // Prepare data for export
+    const exportData = [
+      ['Purchase ID', 'Total Amount', 'Currency', 'Status', 'Created UTC', 'Created Local (UTC+1)', 'Customer ID', 'Customer Email', 'GEO', 'UTM Source', 'UTM Medium', 'UTM Campaign', 'UTM Content', 'UTM Term', 'Ad Name', 'Adset Name', 'Payment Count']
+    ];
+    
+    for (const [dateKey, group] of sortedGroups) {
+      const customer = group.customer;
+      const firstPayment = group.firstPayment;
+      
+      // Format GEO data
+      let geoData = 'N/A';
+      if (customer?.metadata?.geo_country && customer?.metadata?.geo_city) {
+        geoData = `${customer.metadata.geo_country}, ${customer.metadata.geo_city}`;
+      } else if (customer?.metadata?.geo_country) {
+        geoData = customer.metadata.geo_country;
+      }
+      
+      const utcTime = new Date(firstPayment.created * 1000).toISOString();
+      const localTime = new Date(firstPayment.created * 1000 + 3600000).toISOString().replace('T', ' ').replace('Z', ' UTC+1');
+      
+      const purchaseId = `purchase_${customer.id}_${dateKey.split('_')[1]}`;
+      
+      const row = [
+        purchaseId,
+        (group.totalAmount / 100).toFixed(2),
+        firstPayment.currency.toUpperCase(),
+        'succeeded',
+        utcTime,
+        localTime,
+        customer.id || 'N/A',
+        customer.email || 'N/A',
+        geoData,
+        customer.metadata?.utm_source || 'N/A',
+        customer.metadata?.utm_medium || 'N/A',
+        customer.metadata?.utm_campaign || 'N/A',
+        customer.metadata?.utm_content || 'N/A',
+        customer.metadata?.utm_term || 'N/A',
+        customer.metadata?.ad_name || 'N/A',
+        customer.metadata?.adset_name || 'N/A',
+        group.payments.length
+      ];
+      
+      exportData.push(row);
+    }
+    
+    // Use direct Google Sheets API
+    // Create JWT token
+    const header = { "alg": "RS256", "typ": "JWT" };
+    const now = Math.floor(Date.now() / 1000);
+    const payload = {
+      iss: ENV.GOOGLE_SERVICE_EMAIL,
+      scope: 'https://www.googleapis.com/auth/spreadsheets',
+      aud: 'https://oauth2.googleapis.com/token',
+      iat: now,
+      exp: now + 3600
+    };
+    
+    const encodedHeader = Buffer.from(JSON.stringify(header)).toString('base64url');
+    const encodedPayload = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    
+    const privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY
+      .replace(/\\n/g, '\n')
+      .replace(/"/g, '');
+    
+    const signature = crypto.createSign('RSA-SHA256')
+      .update(`${encodedHeader}.${encodedPayload}`)
+      .sign(privateKey, 'base64url');
+    
+    const jwt = `${encodedHeader}.${encodedPayload}.${signature}`;
+    
+    // Get access token
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`
+    });
+    
+    if (!tokenResponse.ok) {
+      const errorText = await tokenResponse.text();
+      throw new Error(`Failed to get Google OAuth token: ${errorText}`);
+    }
+    
+    const tokenData = await tokenResponse.json();
+    
+    // Clear the sheet
+    const clearResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${ENV.GOOGLE_SHEETS_DOC_ID}/values/A:Z:clear`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${tokenData.access_token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    if (clearResponse.ok) {
+      logger.info('🧹 Google Sheets cleared');
+    }
+    
+    // Write all data
+    const range = `A1:Q${exportData.length}`;
+    const sheetsResponse = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${ENV.GOOGLE_SHEETS_DOC_ID}/values/${range}?valueInputOption=RAW`, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${tokenData.access_token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ values: exportData })
+    });
+    
+    if (sheetsResponse.ok) {
+      logger.info(`✅ Successfully exported ${exportData.length - 1} purchases to Google Sheets`);
+      res.json({
+        success: true,
+        message: `Exported ${exportData.length - 1} purchases to Google Sheets`,
+        totalPayments: allPayments.length,
+        successfulPayments: successfulPayments.length,
+        groupedPurchases: groupedPurchases.size,
+        exportedPurchases: exportData.length - 1,
+        sheet_url: `https://docs.google.com/spreadsheets/d/${ENV.GOOGLE_SHEETS_DOC_ID}`
+      });
+    } else {
+      const errorText = await sheetsResponse.text();
+      logger.error(`Failed to write to Google Sheets: ${errorText}`);
+      res.status(500).json({
+        success: false,
+        error: 'Failed to write to Google Sheets',
+        details: errorText
+      });
+    }
+  } catch (error) {
+    logger.error('Error in force export all', error);
     res.status(500).json({
       success: false,
       error: error.message
@@ -3030,6 +3240,148 @@ async function performSyncLogic() {
   }
 }
 
+// Sync logic for Low Price Stripe account
+async function performSyncLogicLowPrice() {
+  // Skip if not configured
+  if (!stripeLowPrice || !ENV.STRIPE_SECRET_KEY_LOW_PRICE) {
+    logger.info('Low Price Stripe account not configured, skipping sync');
+    return { success: true, message: 'Low Price account not configured', processed: 0 };
+  }
+
+  const startTime = Date.now();
+  const results = {
+    processed: 0,
+    failed: 0,
+    errors: [],
+    newPurchases: 0,
+    updatedPurchases: 0,
+    skipped: 0,
+    duplicatesAvoided: 0
+  };
+
+  const LOW_PRICE_SHEET_NAME = ENV.STRIPE_LOW_PRICE_SHEET_NAME || 'LowPrice';
+  
+  try {
+    logger.info(`🔄 Starting Low Price payment sync to sheet "${LOW_PRICE_SHEET_NAME}"...`);
+    
+    // Get the LowPrice sheet
+    const lowPriceSheet = await googleSheets.getSheetByName(LOW_PRICE_SHEET_NAME);
+    
+    // Try to load headers, if they don't exist, create them
+    try {
+      await lowPriceSheet.loadHeaderRow();
+    } catch (error) {
+      // Headers don't exist, create them - use same format as main sheet
+      logger.info(`Creating headers for LowPrice sheet...`);
+      // Headers will be created automatically when first row is added
+      logger.info('Headers will be created from first row');
+    }
+    
+    // Load existing Payment Intent IDs from LowPrice sheet
+    const existingRows = await lowPriceSheet.getRows();
+    const existingPaymentIds = new Set();
+    
+    for (const row of existingRows) {
+      const paymentIdsField = row.get('Payment Intent IDs') || row.get('Payment Intent ID') || '';
+      if (paymentIdsField) {
+        // Payment Intent IDs can contain multiple IDs separated by comma
+        const ids = paymentIdsField.split(',').map(id => id.trim()).filter(Boolean);
+        ids.forEach(id => existingPaymentIds.add(id));
+      }
+    }
+    
+    logger.info(`📋 Found ${existingPaymentIds.size} existing payments in LowPrice sheet`);
+    
+    // Get recent payments from Low Price Stripe account
+    const payments = await fetchWithRetry(() => getRecentPaymentsLowPrice(100));
+    
+    // Filter successful payments
+    const successfulPayments = payments.filter(p => {
+      if (p.status !== 'succeeded' || !p.customer) return false;
+      if (p.description && p.description.toLowerCase().includes('subscription update')) {
+        return false;
+      }
+      return true;
+    });
+    
+    logger.info(`📊 Found ${successfulPayments.length} successful payments from Low Price account`);
+    
+    // Filter out existing payments
+    const newPayments = successfulPayments.filter(p => {
+      // Check if this payment ID exists in the sheet
+      if (existingPaymentIds.has(p.id)) {
+        results.duplicatesAvoided++;
+        return false;
+      }
+      return true;
+    });
+    
+    logger.info(`🆕 Processing ${newPayments.length} new Low Price payments, avoided ${results.duplicatesAvoided} duplicates`);
+    
+    // Process payments
+    for (const payment of newPayments) {
+      try {
+        let customer = null;
+        if (payment.customer) {
+          customer = await fetchWithRetry(() => getCustomerLowPrice(payment.customer));
+        }
+        
+        const rowData = formatPaymentForSheets(payment, customer);
+        
+        await lowPriceSheet.addRow(rowData);
+        existingPaymentIds.add(payment.id); // Track added payment
+        results.newPurchases++;
+        results.processed++;
+        
+        logger.info(`✅ Added Low Price payment: ${payment.id} (${rowData['Total Amount'] || rowData.Amount || 'N/A'})`);
+        
+      } catch (error) {
+        results.failed++;
+        results.errors.push({
+          paymentId: payment.id,
+          error: error.message
+        });
+        logger.error('Failed to process Low Price payment', {
+          paymentId: payment.id,
+          error: error.message
+        });
+      }
+    }
+    
+    const duration = Date.now() - startTime;
+    logger.info(`✅ Low Price sync completed: ${results.processed} processed, ${results.duplicatesAvoided} duplicates avoided`, {
+      processed: results.processed,
+      newPurchases: results.newPurchases,
+      duplicatesAvoided: results.duplicatesAvoided,
+      duration: `${duration}ms`
+    });
+    
+    return {
+      success: true,
+      message: `Low Price sync completed! Processed ${results.processed}, avoided ${results.duplicatesAvoided} duplicates`,
+      ...results,
+      duration: `${duration}ms`,
+      sheetName: LOW_PRICE_SHEET_NAME
+    };
+    
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    logger.error('Critical Low Price sync error', {
+      error: error.message,
+      stack: error.stack,
+      duration: `${duration}ms`
+    });
+    
+    return {
+      success: false,
+      message: 'Critical Low Price sync error occurred',
+      error: error.message,
+      partialResults: results,
+      duration: `${duration}ms`
+    };
+  }
+}
+
 // Sync payments endpoint - MAXIMUM DUPLICATE PROTECTION
 app.post('/api/sync-payments', async (req, res) => {
   try {
@@ -3045,6 +3397,26 @@ app.post('/api/sync-payments', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Sync endpoint error',
+      error: error.message
+    });
+  }
+});
+
+// Sync Low Price payments endpoint
+app.post('/api/sync-payments-low-price', async (req, res) => {
+  try {
+    const result = await performSyncLogicLowPrice();
+    
+    if (result.success) {
+      res.json(result);
+    } else {
+      res.status(500).json(result);
+    }
+  } catch (error) {
+    logger.error('Low Price sync endpoint error', error);
+    res.status(500).json({
+      success: false,
+      message: 'Low Price sync endpoint error',
       error: error.message
     });
   }

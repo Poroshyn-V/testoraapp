@@ -2,6 +2,9 @@
 export const ENV = {
   PORT: process.env.PORT || 3000,
   STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
+  // Second Stripe account for low-price purchases
+  STRIPE_SECRET_KEY_LOW_PRICE: process.env.STRIPE_SECRET_KEY_LOW_PRICE || null,
+  STRIPE_LOW_PRICE_SHEET_NAME: process.env.STRIPE_LOW_PRICE_SHEET_NAME || 'LowPrice',
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID,
   SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN,
