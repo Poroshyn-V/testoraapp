@@ -57,6 +57,7 @@ export function formatPaymentForSheets(payment, customer, metadata = {}) {
   // Format dates
   const createdDate = new Date(payment.created * 1000);
   const createdUTC = createdDate.toISOString();
+  
   // Format UTC+1 properly: YYYY-MM-DD HH:MM:SS.000 UTC+1
   const utcPlus1Date = new Date(createdDate.getTime() + 60 * 60 * 1000);
   const year = utcPlus1Date.getFullYear();
@@ -67,10 +68,32 @@ export function formatPaymentForSheets(payment, customer, metadata = {}) {
   const seconds = String(utcPlus1Date.getSeconds()).padStart(2, '0');
   const createdLocal = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.000 UTC+1`;
   
+  // Format LA time (Pacific Time)
+  const laFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+  
+  const laParts = laFormatter.formatToParts(createdDate);
+  const laYear = laParts.find(p => p.type === 'year').value;
+  const laMonth = laParts.find(p => p.type === 'month').value;
+  const laDay = laParts.find(p => p.type === 'day').value;
+  const laHours = laParts.find(p => p.type === 'hour').value;
+  const laMinutes = laParts.find(p => p.type === 'minute').value;
+  const laSeconds = laParts.find(p => p.type === 'second').value;
+  const createdLATime = `${laYear}-${laMonth.padStart(2, '0')}-${laDay.padStart(2, '0')} ${laHours.padStart(2, '0')}:${laMinutes.padStart(2, '0')}:${laSeconds.padStart(2, '0')}.000 LA Time`;
+  
   return {
     'Purchase ID': `purchase_${customerId}`,
     'Created UTC': createdUTC,
     'Created Local (UTC+1)': createdLocal,
+    'Created Local (LA Time)': createdLATime,
     'Payment Intent IDs': payment.id,
     'Total Amount': amount,
     'Currency': currency,

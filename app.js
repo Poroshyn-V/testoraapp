@@ -3038,8 +3038,9 @@ async function performSyncLogic() {
                 'Total Amount': (totalAmountAll / 100).toFixed(2),
                 'Payment Count': paymentCountAll.toString(),
                 'Payment Intent IDs': paymentIdsAll.join(', '),
+                'Created UTC': updatedRowData['Created UTC'],
                 'Created Local (UTC+1)': updatedRowData['Created Local (UTC+1)'],
-                'Created UTC': updatedRowData['Created UTC']
+                'Created Local (LA Time)': updatedRowData['Created Local (LA Time)']
               })
             );
             
