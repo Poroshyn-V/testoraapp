@@ -3312,7 +3312,7 @@ async function performSyncLogicLowPrice() {
     
     logger.info(`📊 Found ${successfulPayments.length} successful payments from Low Price account (excluded ${results.skipped} test payments of $0.60)`);
     
-    // Filter out existing payments
+    // Filter out existing payments by payment ID
     const newPayments = successfulPayments.filter(p => {
       // Check if this payment ID exists in the sheet
       if (existingPaymentIds.has(p.id)) {
@@ -3324,33 +3324,144 @@ async function performSyncLogicLowPrice() {
     
     logger.info(`🆕 Processing ${newPayments.length} new Low Price payments, avoided ${results.duplicatesAvoided} duplicates`);
     
-    // Process payments
+    // Group payments by customer (like main sync)
+    const customerGroups = new Map();
     for (const payment of newPayments) {
+      const customerId = payment.customer;
+      if (!customerId) {
+        results.skipped++;
+        continue;
+      }
+      if (!customerGroups.has(customerId)) {
+        customerGroups.set(customerId, []);
+      }
+      customerGroups.get(customerId).push(payment);
+    }
+    
+    // Process each customer group
+    for (const [customerId, payments] of customerGroups.entries()) {
+      // 🔒 Получаем блокировку для этого клиента
+      const customerLockKey = `customer_lowprice_${customerId}`;
+      let customerLockId = null;
       try {
-        let customer = null;
-        if (payment.customer) {
-          customer = await fetchWithRetry(() => getCustomerLowPrice(payment.customer));
+        customerLockId = await distributedLock.acquire(customerLockKey, 5, 100);
+        logger.debug(`🔒 Low Price customer lock acquired for ${customerId}`, { customerLockId });
+      } catch (error) {
+        logger.warn(`⚠️ Failed to acquire customer lock for ${customerId}, skipping payment group`, {
+          error: error.message,
+          customerId,
+          paymentCount: payments.length
+        });
+        results.duplicatesAvoided += payments.length;
+        continue;
+      }
+      
+      try {
+        const customer = await fetchWithRetry(() => getCustomerLowPrice(customerId));
+        if (!customer) {
+          logger.warn(`Low Price customer ${customerId} not found in Stripe`);
+          results.skipped += payments.length;
+          continue;
         }
         
-        const rowData = formatPaymentForSheetsLowPrice(payment, customer);
+        // Sort payments by creation date
+        payments.sort((a, b) => a.created - b.created);
+        const firstPayment = payments[0];
         
-        await lowPriceSheet.addRow(rowData);
-        existingPaymentIds.add(payment.id); // Track added payment
-        results.newPurchases++;
-        results.processed++;
+        // Check if customer exists in LowPrice sheet
+        const existingRows = await lowPriceSheet.getRows();
+        const existingCustomerRow = existingRows.find(row => {
+          const rowCustomerId = row.get('Customer ID');
+          return rowCustomerId === customerId;
+        });
         
-        logger.info(`✅ Added Low Price payment: ${payment.id} (${rowData['Total Amount'] || rowData.Amount || 'N/A'})`);
+        if (existingCustomerRow) {
+          // Customer exists - UPDATE (get all payments and sum them)
+          logger.info(`Updating existing Low Price customer ${customerId}`);
+          
+          const allPayments = await fetchWithRetry(() => getCustomerPaymentsLowPrice(customerId));
+          const allSuccessfulPayments = allPayments.filter(p => {
+            if (p.status !== 'succeeded' || !p.customer) return false;
+            if (p.description && p.description.toLowerCase().includes('subscription update')) {
+              return false;
+            }
+            // Exclude test payments of $0.60
+            if (p.amount === 60) return false;
+            return true;
+          });
+          
+          let totalAmountAll = 0;
+          let paymentCountAll = 0;
+          const paymentIdsAll = [];
+          
+          for (const p of allSuccessfulPayments) {
+            totalAmountAll += p.amount;
+            paymentCountAll++;
+            paymentIdsAll.push(p.id);
+          }
+          
+          // Get latest payment for updated timestamp
+          const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
+          const updatedRowData = formatPaymentForSheetsLowPrice(latestPayment, customer);
+          
+          // Update existing row with all payments data
+          await existingCustomerRow.save({
+            'Purchase ID': `purchase_${customerId}`,
+            'Total Amount': (totalAmountAll / 100).toFixed(2),
+            'Payment Count': paymentCountAll.toString(),
+            'Payment Intent IDs': paymentIdsAll.join(', '),
+            'Created Local (LA Time)': updatedRowData['Created Local (LA Time)'],
+            'Created UTC': updatedRowData['Created UTC']
+          });
+          
+          results.updatedPurchases++;
+          results.processed++;
+          
+        } else {
+          // ADD NEW customer - group all payments together
+          logger.info(`Adding new Low Price customer ${customerId} with ${payments.length} payments`);
+          
+          const rowData = formatPaymentForSheetsLowPrice(firstPayment, customer);
+          
+          let totalAmount = 0;
+          const paymentIds = [];
+          for (const p of payments) {
+            totalAmount += p.amount;
+            paymentIds.push(p.id);
+          }
+          
+          rowData['Purchase ID'] = `purchase_${customerId}_${firstPayment.created}`;
+          rowData['Total Amount'] = (totalAmount / 100).toFixed(2);
+          rowData['Payment Count'] = payments.length.toString();
+          rowData['Payment Intent IDs'] = paymentIds.join(', ');
+          
+          // Add row to LowPrice sheet
+          await lowPriceSheet.addRow(rowData);
+          
+          results.newPurchases++;
+          results.processed++;
+          
+          logger.info(`✅ Added Low Price customer: ${customerId} (${rowData['Total Amount']} ${rowData['Currency']}, ${payments.length} payments)`);
+        }
         
       } catch (error) {
         results.failed++;
         results.errors.push({
-          paymentId: payment.id,
-          error: error.message
+          customerId,
+          error: error.message,
+          errorType: error.name || 'UnknownError'
         });
-        logger.error('Failed to process Low Price payment', {
-          paymentId: payment.id,
-          error: error.message
+        logger.error('Failed to process Low Price customer group', {
+          customerId,
+          error: error.message,
+          stack: error.stack
         });
+      } finally {
+        // 🔓 Освобождаем блокировку клиента
+        if (customerLockId) {
+          distributedLock.release(customerLockKey, customerLockId);
+          logger.debug(`🔓 Low Price customer lock released for ${customerId}`, { customerLockId });
+        }
       }
     }
     
