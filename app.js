@@ -3303,7 +3303,7 @@ async function addLaTimeFormulaToLowPriceSheet(rowNumber, utcColumnIndex = null)
 }
 
 // Sync logic for Low Price Stripe account
-async function performSyncLogicLowPrice() {
+async function performSyncLogicLowPrice(exportAll = false) {
   // Skip if not configured
   if (!stripeLowPrice || !ENV.STRIPE_SECRET_KEY_LOW_PRICE) {
     logger.info('Low Price Stripe account not configured, skipping sync');
@@ -3383,8 +3383,10 @@ async function performSyncLogicLowPrice() {
     
     logger.info(`📋 Found ${existingPaymentIds.size} existing payments in LowPrice sheet`);
     
-    // Get recent payments from Low Price Stripe account
-    const payments = await fetchWithRetry(() => getRecentPaymentsLowPrice(100));
+    // Get payments from Low Price Stripe account (all or recent)
+    const payments = exportAll 
+      ? await fetchWithRetry(() => getAllPaymentsLowPrice())
+      : await fetchWithRetry(() => getRecentPaymentsLowPrice(100));
     
     // Filter successful payments
     const successfulPayments = payments.filter(p => {
@@ -5348,6 +5350,58 @@ app.listen(ENV.PORT, () => {
       console.error('❌ Failed to initialize duplicate checker:', error.message);
     }
   }, 7000); // После загрузки existing purchases
+
+  // Автоматическая массовая выгрузка для LowPrice при старте (если мало записей)
+  setTimeout(async () => {
+    try {
+      if (!stripeLowPrice || !ENV.STRIPE_SECRET_KEY_LOW_PRICE) {
+        return; // Skip if Low Price account not configured
+      }
+
+      const LOW_PRICE_SHEET_NAME = ENV.STRIPE_LOW_PRICE_SHEET_NAME || 'LowPrice';
+      const lowPriceSheet = await googleSheets.getSheetByName(LOW_PRICE_SHEET_NAME);
+      
+      try {
+        await lowPriceSheet.loadHeaderRow();
+        const rows = await lowPriceSheet.getRows();
+        
+        // Если в листе меньше 10 записей, запускаем массовую выгрузку
+        if (rows.length < 10) {
+          logger.info(`LowPrice sheet has only ${rows.length} records, starting mass export...`);
+          console.log(`🚀 Запускаем массовую выгрузку всех платежей для LowPrice (найдено только ${rows.length} записей)...`);
+          
+          // Запускаем массовую выгрузку в фоне (все платежи)
+          performSyncLogicLowPrice(true).then(result => {
+            if (result.success) {
+              logger.info('Mass export for LowPrice completed on startup', result);
+              console.log(`✅ Массовая выгрузка завершена: ${result.processed} обработано, ${result.newPurchases} новых покупок`);
+            } else {
+              logger.error('Mass export for LowPrice failed on startup', result);
+            }
+          }).catch(error => {
+            logger.error('Error in mass export for LowPrice on startup', error);
+          });
+        } else {
+          logger.info(`LowPrice sheet has ${rows.length} records, skipping automatic mass export`);
+        }
+      } catch (error) {
+        // Если лист не существует или пустой, запускаем массовую выгрузку
+        logger.info('LowPrice sheet appears empty or missing, starting mass export...');
+        console.log(`🚀 Запускаем массовую выгрузку всех платежей для LowPrice (лист пустой или не найден)...`);
+        
+        performSyncLogicLowPrice(true).then(result => {
+          if (result.success) {
+            logger.info('Mass export for LowPrice completed on startup', result);
+            console.log(`✅ Массовая выгрузка завершена: ${result.processed} обработано, ${result.newPurchases} новых покупок`);
+          }
+        }).catch(error => {
+          logger.error('Error in mass export for LowPrice on startup', error);
+        });
+      }
+    } catch (error) {
+      logger.error('Failed to check LowPrice sheet on startup', error);
+    }
+  }, 15000); // Через 15 секунд после старта
 
   // Автоматическое обновление кэша каждые 5 минут
   setInterval(async () => {
