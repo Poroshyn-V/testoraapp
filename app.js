@@ -3117,12 +3117,15 @@ async function performSyncLogic() {
               logger.warn(`⚠️ Row appeared during atomic add for ${customerId} - converting to update`);
               results.duplicatesAvoided++;
               
-              // Обновляем существующую строку
+              // Обновляем существующую строку (включая время)
               await fetchWithRetry(() => 
                 googleSheets.updateRow(addResult.row, {
                   'Total Amount': rowData['Total Amount'],
                   'Payment Count': rowData['Payment Count'],
-                  'Payment Intent IDs': rowData['Payment Intent IDs']
+                  'Payment Intent IDs': rowData['Payment Intent IDs'],
+                  'Created UTC': rowData['Created UTC'],
+                  'Created Local (UTC+1)': rowData['Created Local (UTC+1)'],
+                  'Created Local (LA Time)': rowData['Created Local (LA Time)']
                 })
               );
               
@@ -3568,6 +3571,119 @@ app.post('/api/sync-payments-low-price', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Low Price sync endpoint error',
+      error: error.message
+    });
+  }
+});
+
+// Add LA Time column and update all records endpoint
+app.post('/api/add-la-time-column', async (req, res) => {
+  try {
+    logger.info('Adding LA Time column and updating all records...');
+    
+    await googleSheets.initialize();
+    const sheet = googleSheets.sheet;
+    await sheet.loadHeaderRow();
+    
+    // Check if LA Time column exists
+    let hasLaTimeColumn = sheet.headerValues.includes('Created Local (LA Time)');
+    
+    if (!hasLaTimeColumn) {
+      logger.info('LA Time column not found, adding it...');
+      
+      // Add new column to headers
+      const currentHeaders = sheet.headerValues;
+      const utcPlus1Index = currentHeaders.indexOf('Created Local (UTC+1)');
+      if (utcPlus1Index >= 0) {
+        currentHeaders.splice(utcPlus1Index + 1, 0, 'Created Local (LA Time)');
+      } else {
+        const utcIndex = currentHeaders.indexOf('Created UTC');
+        if (utcIndex >= 0) {
+          currentHeaders.splice(utcIndex + 1, 0, 'Created Local (LA Time)');
+        } else {
+          currentHeaders.push('Created Local (LA Time)');
+        }
+      }
+      
+      await sheet.setHeaderRow(currentHeaders);
+      await sheet.loadHeaderRow();
+      hasLaTimeColumn = true;
+      logger.info('LA Time column added successfully');
+    }
+    
+    // Get all rows and update them
+    const rows = await sheet.getRows();
+    logger.info(`Found ${rows.length} rows to update`);
+    
+    let updated = 0;
+    let skipped = 0;
+    const errors = [];
+    
+    for (const row of rows) {
+      try {
+        const paymentIntentIds = row.get('Payment Intent IDs') || '';
+        const existingLATime = row.get('Created Local (LA Time)') || '';
+        
+        // Skip if LA time already filled
+        if (existingLATime && existingLATime !== '' && existingLATime !== 'N/A') {
+          skipped++;
+          continue;
+        }
+        
+        if (!paymentIntentIds || paymentIntentIds === 'N/A') {
+          skipped++;
+          continue;
+        }
+        
+        // Get first payment intent ID
+        const firstPaymentId = paymentIntentIds.split(',')[0].trim();
+        
+        // Get payment from Stripe
+        const payment = await fetchWithRetry(() => stripe.paymentIntents.retrieve(firstPaymentId));
+        const customer = payment.customer ? await fetchWithRetry(() => getCustomer(payment.customer)) : null;
+        
+        // Format with LA time
+        const formattedData = formatPaymentForSheets(payment, customer);
+        
+        // Update row with LA time
+        await row.save({
+          'Created Local (LA Time)': formattedData['Created Local (LA Time)']
+        });
+        
+        updated++;
+        
+        if (updated % 10 === 0) {
+          logger.info(`Updated ${updated} rows...`);
+        }
+        
+      } catch (error) {
+        errors.push({
+          rowNumber: row.rowNumber,
+          error: error.message
+        });
+        logger.error(`Error updating row ${row.rowNumber}`, error);
+        skipped++;
+      }
+    }
+    
+    const result = {
+      success: true,
+      message: `LA Time column added and records updated`,
+      columnAdded: !hasLaTimeColumn,
+      totalRows: rows.length,
+      updated,
+      skipped,
+      errors: errors.length > 0 ? errors.slice(0, 10) : [] // Limit errors
+    };
+    
+    logger.info('LA Time column update completed', result);
+    res.json(result);
+    
+  } catch (error) {
+    logger.error('Error adding LA Time column', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error adding LA Time column',
       error: error.message
     });
   }
