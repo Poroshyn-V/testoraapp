@@ -18,7 +18,7 @@ import { performanceMonitor } from './src/services/performanceMonitor.js';
 import { notificationQueue } from './src/services/notificationQueue.js';
 import { campaignAnalyzer } from './src/services/campaignAnalyzer.js';
 import { duplicateChecker } from './src/services/duplicateChecker.js';
-import { formatPaymentForSheets, formatTelegramNotification } from './src/utils/formatting.js';
+import { formatPaymentForSheets, formatPaymentForSheetsLowPrice, formatTelegramNotification } from './src/utils/formatting.js';
 import healthRoutes from './src/routes/health.js';
 
 // Глобальные переменные для locks
@@ -3326,7 +3326,7 @@ async function performSyncLogicLowPrice() {
           customer = await fetchWithRetry(() => getCustomerLowPrice(payment.customer));
         }
         
-        const rowData = formatPaymentForSheets(payment, customer);
+        const rowData = formatPaymentForSheetsLowPrice(payment, customer);
         
         await lowPriceSheet.addRow(rowData);
         existingPaymentIds.add(payment.id); // Track added payment

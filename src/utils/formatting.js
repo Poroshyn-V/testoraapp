@@ -98,6 +98,95 @@ export function formatPaymentForSheets(payment, customer, metadata = {}) {
   };
 }
 
+// Format payment data for Low Price sheet (with LA time instead of UTC+1)
+export function formatPaymentForSheetsLowPrice(payment, customer, metadata = {}) {
+  const m = { ...payment.metadata, ...(customer?.metadata || {}), ...metadata };
+  
+  // Extract GEO data
+  const geoCountry = m.geo_country || customer?.address?.country || 'Unknown';
+  const geoCity = m.geo_city || customer?.address?.city || 'Unknown';
+  const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
+  
+  // Format UTM data
+  const utmSource = m.utm_source || 'N/A';
+  const utmMedium = m.utm_medium || 'N/A';
+  const utmCampaign = m.utm_campaign || 'N/A';
+  const utmContent = m.utm_content || 'N/A';
+  const utmTerm = m.utm_term || 'N/A';
+  
+  // Format ad data
+  const adName = m.ad_name || m['Ad Name'] || 'N/A';
+  const adsetName = m.adset_name || m['Adset Name'] || 'N/A';
+  const campaignName = m.campaign_name || m['Campaign Name'] || m.utm_campaign || 'N/A';
+  
+  // Format customer data
+  const customerEmail = customer?.email || 'N/A';
+  const customerId = customer?.id || 'N/A';
+  
+  // Format payment data
+  const amount = (payment.amount / 100).toFixed(2);
+  const currency = payment.currency?.toUpperCase() || 'USD';
+  const status = payment.status || 'N/A';
+  
+  // Format dates - LA time (Pacific Time)
+  const createdDate = new Date(payment.created * 1000);
+  const createdUTC = createdDate.toISOString();
+  
+  // Convert to LA time (America/Los_Angeles timezone)
+  // Using Intl.DateTimeFormat for reliable timezone conversion
+  const laFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+  
+  const laParts = laFormatter.formatToParts(createdDate);
+  const year = laParts.find(p => p.type === 'year').value;
+  const month = laParts.find(p => p.type === 'month').value;
+  const day = laParts.find(p => p.type === 'day').value;
+  const hours = laParts.find(p => p.type === 'hour').value;
+  const minutes = laParts.find(p => p.type === 'minute').value;
+  const seconds = laParts.find(p => p.type === 'second').value;
+  
+  // Format as YYYY-MM-DD HH:MM:SS.000 LA Time
+  const createdLocal = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')} ${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}:${seconds.padStart(2, '0')}.000 LA Time`;
+  
+  return {
+    'Purchase ID': `purchase_${customerId}`,
+    'Created UTC': createdUTC,
+    'Created Local (LA Time)': createdLocal,
+    'Payment Intent IDs': payment.id,
+    'Total Amount': amount,
+    'Currency': currency,
+    'Email': customerEmail,
+    'GEO': geo,
+    'Gender': m.gender || 'N/A',
+    'Age': m.age || 'N/A',
+    'Product Tag': m.product_tag || 'N/A',
+    'Creative Link': m.creative_link || m['Creative Link'] || 'N/A',
+    'UTM Source': utmSource,
+    'UTM Medium': utmMedium,
+    'UTM Campaign': utmCampaign,
+    'UTM Content': utmContent,
+    'UTM Term': utmTerm,
+    'Platform Placement': m.platform_placement || 'N/A',
+    'Ad Name': adName,
+    'Adset Name': adsetName,
+    'Campaign Name': campaignName,
+    'Web Campaign': m.web_campaign || 'N/A',
+    'Customer ID': customerId,
+    'Client Reference ID': m.client_reference_id || 'N/A',
+    'Mode': payment.mode || 'N/A',
+    'Status': status,
+    'Raw Metadata JSON': JSON.stringify(m)
+  };
+}
+
 // Format notification message for Telegram (STRUCTURED FORMAT)
 export function formatTelegramNotification(payment, customer, metadata = {}) {
   const m = { ...payment.metadata, ...(customer?.metadata || {}), ...metadata };
