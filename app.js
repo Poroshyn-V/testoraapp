@@ -3301,10 +3301,16 @@ async function performSyncLogicLowPrice() {
       if (p.description && p.description.toLowerCase().includes('subscription update')) {
         return false;
       }
+      // Exclude test payments of $0.60 (60 cents) - these are refunded test payments
+      if (p.amount === 60) {
+        logger.info(`⏭️ Skipping test payment $0.60 (${p.id})`);
+        results.skipped++;
+        return false;
+      }
       return true;
     });
     
-    logger.info(`📊 Found ${successfulPayments.length} successful payments from Low Price account`);
+    logger.info(`📊 Found ${successfulPayments.length} successful payments from Low Price account (excluded ${results.skipped} test payments of $0.60)`);
     
     // Filter out existing payments
     const newPayments = successfulPayments.filter(p => {
