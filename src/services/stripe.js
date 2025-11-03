@@ -100,6 +100,51 @@ export async function getRecentPaymentsLowPrice(limit = 100) {
   }
 }
 
+// Get all payments from Low Price Stripe account (with pagination)
+export async function getAllPaymentsLowPrice() {
+  if (!stripeLowPrice) {
+    throw new Error('Low Price Stripe account not configured');
+  }
+  
+  try {
+    logInfo('Fetching ALL payments from Low Price Stripe (this may take a while)...');
+    
+    const allPayments = [];
+    let hasMore = true;
+    let startingAfter = null;
+    
+    while (hasMore) {
+      const params = {
+        limit: 100, // Maximum per request
+      };
+      
+      if (startingAfter) {
+        params.starting_after = startingAfter;
+      }
+      
+      const payments = await stripeLowPrice.paymentIntents.list(params);
+      
+      allPayments.push(...payments.data);
+      
+      logInfo(`Fetched ${allPayments.length} payments so far...`);
+      
+      hasMore = payments.has_more;
+      if (hasMore && payments.data.length > 0) {
+        startingAfter = payments.data[payments.data.length - 1].id;
+      }
+    }
+    
+    logInfo('Successfully fetched all payments from Low Price Stripe', { 
+      totalCount: allPayments.length 
+    });
+    
+    return allPayments;
+  } catch (error) {
+    logError('Error fetching all payments from Low Price Stripe', error);
+    throw error;
+  }
+}
+
 export async function getCustomerPaymentsLowPrice(customerId, limit = 100) {
   if (!stripeLowPrice) {
     throw new Error('Low Price Stripe account not configured');

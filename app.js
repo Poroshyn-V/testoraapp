@@ -7,7 +7,7 @@ import { logger } from './src/utils/logging.js';
 import { rateLimit, getRateLimitStats } from './src/middleware/rateLimit.js';
 import { errorHandler, notFoundHandler } from './src/middleware/errorHandler.js';
 import { getCacheStats } from './src/utils/cache.js';
-import { stripe, getRecentPayments, getCustomerPayments, getCustomer, stripeLowPrice, getRecentPaymentsLowPrice, getCustomerPaymentsLowPrice, getCustomerLowPrice } from './src/services/stripe.js';
+import { stripe, getRecentPayments, getCustomerPayments, getCustomer, stripeLowPrice, getRecentPaymentsLowPrice, getAllPaymentsLowPrice, getCustomerPaymentsLowPrice, getCustomerLowPrice } from './src/services/stripe.js';
 import { sendNotifications, sendTextNotifications, sendPurchaseNotification } from './src/services/notifications.js';
 import googleSheets from './src/services/googleSheets.js';
 import { analytics } from './src/services/analytics.js';
@@ -3631,6 +3631,202 @@ app.post('/api/sync-payments-low-price', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Low Price sync endpoint error',
+      error: error.message
+    });
+  }
+});
+
+// Export ALL historical payments from Low Price Stripe account
+app.post('/api/export-all-lowprice-payments', async (req, res) => {
+  try {
+    logger.info('Starting mass export of ALL payments from Low Price Stripe account...');
+    
+    if (!stripeLowPrice || !ENV.STRIPE_SECRET_KEY_LOW_PRICE) {
+      return res.status(400).json({
+        success: false,
+        message: 'Low Price Stripe account not configured'
+      });
+    }
+    
+    const LOW_PRICE_SHEET_NAME = ENV.STRIPE_LOW_PRICE_SHEET_NAME || 'LowPrice';
+    const lowPriceSheet = await googleSheets.getSheetByName(LOW_PRICE_SHEET_NAME);
+    
+    // Load existing payment IDs to avoid duplicates
+    const existingRows = await lowPriceSheet.getRows();
+    const existingPaymentIds = new Set();
+    
+    for (const row of existingRows) {
+      const paymentIdsField = row.get('Payment Intent IDs') || '';
+      if (paymentIdsField) {
+        const ids = paymentIdsField.split(',').map(id => id.trim()).filter(Boolean);
+        ids.forEach(id => existingPaymentIds.add(id));
+      }
+    }
+    
+    logger.info(`Found ${existingPaymentIds.size} existing payments in LowPrice sheet`);
+    
+    // Get ALL payments from Stripe
+    const allPayments = await fetchWithRetry(() => getAllPaymentsLowPrice());
+    logger.info(`Fetched ${allPayments.length} total payments from Low Price Stripe account`);
+    
+    // Filter successful payments (exclude test $0.60)
+    const successfulPayments = allPayments.filter(p => {
+      if (p.status !== 'succeeded' || !p.customer) return false;
+      if (p.description && p.description.toLowerCase().includes('subscription update')) {
+        return false;
+      }
+      // Exclude test payments of $0.60
+      if (p.amount === 60) return false;
+      return true;
+    });
+    
+    logger.info(`Found ${successfulPayments.length} successful payments (excluding test payments)`);
+    
+    // Filter out existing payments
+    const newPayments = successfulPayments.filter(p => {
+      if (existingPaymentIds.has(p.id)) {
+        return false;
+      }
+      return true;
+    });
+    
+    logger.info(`Processing ${newPayments.length} new payments (avoided ${successfulPayments.length - newPayments.length} duplicates)`);
+    
+    // Group payments by customer
+    const customerGroups = new Map();
+    for (const payment of newPayments) {
+      const customerId = payment.customer;
+      if (!customerId) continue;
+      if (!customerGroups.has(customerId)) {
+        customerGroups.set(customerId, []);
+      }
+      customerGroups.get(customerId).push(payment);
+    }
+    
+    let processed = 0;
+    let newPurchases = 0;
+    let updatedPurchases = 0;
+    let failed = 0;
+    const errors = [];
+    
+    // Process each customer group
+    for (const [customerId, payments] of customerGroups.entries()) {
+      try {
+        const customer = await fetchWithRetry(() => getCustomerLowPrice(customerId));
+        if (!customer) {
+          logger.warn(`Low Price customer ${customerId} not found in Stripe`);
+          failed += payments.length;
+          continue;
+        }
+        
+        // Sort payments by creation date
+        payments.sort((a, b) => a.created - b.created);
+        const firstPayment = payments[0];
+        
+        // Check if customer exists
+        const existingRows = await lowPriceSheet.getRows();
+        const existingCustomerRow = existingRows.find(row => {
+          const rowCustomerId = row.get('Customer ID');
+          return rowCustomerId === customerId;
+        });
+        
+        if (existingCustomerRow) {
+          // Update existing customer
+          const allPayments = await fetchWithRetry(() => getCustomerPaymentsLowPrice(customerId));
+          const allSuccessfulPayments = allPayments.filter(p => {
+            if (p.status !== 'succeeded' || !p.customer) return false;
+            if (p.description && p.description.toLowerCase().includes('subscription update')) {
+              return false;
+            }
+            if (p.amount === 60) return false;
+            return true;
+          });
+          
+          let totalAmountAll = 0;
+          let paymentCountAll = 0;
+          const paymentIdsAll = [];
+          
+          for (const p of allSuccessfulPayments) {
+            totalAmountAll += p.amount;
+            paymentCountAll++;
+            paymentIdsAll.push(p.id);
+          }
+          
+          const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
+          const updatedRowData = formatPaymentForSheetsLowPrice(latestPayment, customer);
+          
+          await existingCustomerRow.save({
+            'Purchase ID': `purchase_${customerId}`,
+            'Total Amount': (totalAmountAll / 100).toFixed(2),
+            'Payment Count': paymentCountAll.toString(),
+            'Payment Intent IDs': paymentIdsAll.join(', '),
+            'Created UTC': updatedRowData['Created UTC'],
+            'Created Local (LA Time)': updatedRowData['Created Local (LA Time)']
+          });
+          
+          await addLaTimeFormulaToLowPriceSheet(existingCustomerRow.rowNumber);
+          updatedPurchases++;
+          processed++;
+          
+        } else {
+          // Add new customer
+          const rowData = formatPaymentForSheetsLowPrice(firstPayment, customer);
+          
+          let totalAmount = 0;
+          const paymentIds = [];
+          for (const p of payments) {
+            totalAmount += p.amount;
+            paymentIds.push(p.id);
+          }
+          
+          rowData['Purchase ID'] = `purchase_${customerId}_${firstPayment.created}`;
+          rowData['Total Amount'] = (totalAmount / 100).toFixed(2);
+          rowData['Payment Count'] = payments.length.toString();
+          rowData['Payment Intent IDs'] = paymentIds.join(', ');
+          
+          const newRow = await lowPriceSheet.addRow(rowData);
+          await addLaTimeFormulaToLowPriceSheet(newRow.rowNumber);
+          
+          newPurchases++;
+          processed++;
+        }
+        
+        if (processed % 10 === 0) {
+          logger.info(`Processed ${processed} customers...`);
+        }
+        
+      } catch (error) {
+        failed++;
+        errors.push({
+          customerId,
+          error: error.message
+        });
+        logger.error(`Failed to process customer ${customerId}`, error);
+      }
+    }
+    
+    const result = {
+      success: true,
+      message: `Mass export completed!`,
+      totalPayments: allPayments.length,
+      successfulPayments: successfulPayments.length,
+      newPayments: newPayments.length,
+      duplicatesAvoided: successfulPayments.length - newPayments.length,
+      customersProcessed: processed,
+      newPurchases,
+      updatedPurchases,
+      failed,
+      errors: errors.slice(0, 10) // Limit errors
+    };
+    
+    logger.info('Mass export completed', result);
+    res.json(result);
+    
+  } catch (error) {
+    logger.error('Error in mass export', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error exporting all payments',
       error: error.message
     });
   }
