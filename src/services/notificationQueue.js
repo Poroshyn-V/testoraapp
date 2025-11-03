@@ -18,12 +18,28 @@ class NotificationQueue {
     
     // Check if we already have this notification in queue or sent recently
     if (this.sentNotifications.has(duplicateKey)) {
-      logWarn('🚫 Duplicate notification prevented', {
+      logWarn('🚫 Duplicate notification prevented (already sent)', {
         type: notification.type,
         duplicateKey,
+        paymentId: notification.metadata?.paymentId,
+        customerId: notification.metadata?.customerId,
         queueSize: this.queue.length
       });
-      metrics.increment('notification_duplicate_prevented', 1, { type: notification.type });
+      metrics.increment('notification_duplicate_prevented', 1, { type: notification.type, reason: 'already_sent' });
+      return;
+    }
+    
+    // ✅ Also check if this notification is already in the queue (prevent race conditions)
+    const alreadyInQueue = this.queue.some(n => n.duplicateKey === duplicateKey);
+    if (alreadyInQueue) {
+      logWarn('🚫 Duplicate notification prevented (already in queue)', {
+        type: notification.type,
+        duplicateKey,
+        paymentId: notification.metadata?.paymentId,
+        customerId: notification.metadata?.customerId,
+        queueSize: this.queue.length
+      });
+      metrics.increment('notification_duplicate_prevented', 1, { type: notification.type, reason: 'already_in_queue' });
       return;
     }
     
