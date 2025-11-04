@@ -119,11 +119,10 @@ async function exportAllLowPricePayments() {
           console.log(`🔄 Обновляем клиента ${customerId}...`);
           
           const allPayments = await fetchWithRetry(() => getCustomerPaymentsLowPrice(customerId));
+          // ✅ ВКЛЮЧАЕМ ВСЕ успешные платежи (включая subscription update - это могут быть апселлы!)
           const allSuccessfulPayments = allPayments.filter(p => {
             if (p.status !== 'succeeded' || !p.customer) return false;
-            if (p.description && p.description.toLowerCase().includes('subscription update')) {
-              return false;
-            }
+            // ✅ УБРАЛИ исключение subscription update - это могут быть реальные апселлы!
             if (p.amount === 60) return false;
             return true;
           });
