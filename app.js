@@ -4350,7 +4350,7 @@ app.get('/api/creative-alert', async (req, res) => {
     const today = utcPlus1.toISOString().split('T')[0];
     const currentHour = utcPlus1.getUTCHours();
     
-    // Защита от спама: не отправляем Creative алерт чаще чем раз в час
+    // ✅ УНИФИЦИРОВАННЫЙ формат ключа
     const creativeAlertKey = `creative_${today}_${currentHour}`;
     
     if (sentAlerts.creativeAlert && sentAlerts.creativeAlert.has(creativeAlertKey)) {
@@ -4364,10 +4364,23 @@ app.get('/api/creative-alert', async (req, res) => {
     const alert = await analytics.generateCreativeAlert();
     
     if (alert) {
+      // ✅ ДОПОЛНИТЕЛЬНАЯ ЗАЩИТА от дубликатов по содержимому
+      const alertHash = Buffer.from(alert).toString('base64').slice(0, 50);
+      const duplicateKey = `creative_content_${today}_${alertHash}`;
+      
+      if (sentAlerts.creativeAlert && sentAlerts.creativeAlert.has(duplicateKey)) {
+        logger.info('🎨 Creative alert with same content already sent, skipping');
+        return res.json({
+          success: true,
+          message: 'Creative alert with same content already sent'
+        });
+      }
+      
       await sendTextNotifications(alert);
       
       // Отмечаем, что Creative алерт был отправлен
       sentAlerts.creativeAlert.add(creativeAlertKey);
+      sentAlerts.creativeAlert.add(duplicateKey);
       
       res.json({
         success: true,
@@ -5511,16 +5524,26 @@ async function checkMissedAlerts() {
   
   // Проверяем Creative Alert (должен отправиться в настроенное время)
   if (currentHour >= alertConfig.creativeAlertHours[0] && currentHour < alertConfig.creativeAlertHours[1]) {
-    const morning = `${today}_${alertConfig.creativeAlertHours[0]}`;
+    // ✅ УНИФИЦИРОВАННЫЙ формат ключа
+    const morning = `creative_${today}_${alertConfig.creativeAlertHours[0]}`;
     if (!sentAlerts.creativeAlert.has(morning)) {
       logger.info('🎨 Sending missed morning creative alert...');
       try {
         // ✅ ПРЯМОЙ ВЫЗОВ ВМЕСТО FETCH
         const alert = await analytics.generateCreativeAlert();
         if (alert) {
-          await sendTextNotifications(alert);
-          sentAlerts.creativeAlert.add(morning);
-          logger.info('✅ Missed morning creative alert sent');
+          // ✅ ДОПОЛНИТЕЛЬНАЯ ЗАЩИТА от дубликатов по содержимому
+          const alertHash = Buffer.from(alert).toString('base64').slice(0, 50);
+          const duplicateKey = `creative_content_${today}_${alertHash}`;
+          
+          if (!sentAlerts.creativeAlert.has(duplicateKey)) {
+            await sendTextNotifications(alert);
+            sentAlerts.creativeAlert.add(morning);
+            sentAlerts.creativeAlert.add(duplicateKey);
+            logger.info('✅ Missed morning creative alert sent');
+          } else {
+            logger.info('⚠️ Missed morning creative alert duplicate detected, skipping');
+          }
         }
       } catch (error) {
         logger.error('❌ Failed to send missed creative alert:', error.message);
@@ -5997,32 +6020,56 @@ app.listen(ENV.PORT, () => {
     const scheduleCreativeAlert = () => {
       console.log('🎨 Starting creative alerts...');
       
+      // ✅ УНИФИЦИРОВАННЫЙ формат ключа: creative_YYYY-MM-DD_HH
+      let lastSentHour = null;
+      let lastSentDay = null;
+      
       creativeAlertInterval = setInterval(async () => {
         const now = new Date();
         const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
         const hour = utcPlus1.getUTCHours();
         const minute = utcPlus1.getUTCMinutes();
+        const today = utcPlus1.toISOString().split('T')[0];
         
-        if ((hour === 10 && minute >= 0 && minute <= 2) || 
-            (hour === 22 && minute >= 0 && minute <= 2)) {
-          const today = utcPlus1.toISOString().split('T')[0];
-          const alertKey = `${today}_${hour}`;
-          if (!sentAlerts.creativeAlert.has(alertKey)) {
+        // ✅ УНИФИЦИРОВАННЫЙ формат ключа
+        const alertKey = `creative_${today}_${hour}`;
+        
+        // ✅ СТРОГАЯ ЗАЩИТА: проверяем и по ключу, и по времени
+        // Отправляем только если:
+        // 1. Это нужный час (10:00 или 22:00)
+        // 2. В пределах первой минуты (0-1) для избежания повторных срабатываний
+        // 3. Ключ еще не был отправлен
+        // 4. Это новый час или новый день
+        if ((hour === 10 || hour === 22) && minute >= 0 && minute <= 1) {
+          const isNewHour = lastSentHour !== hour || lastSentDay !== today;
+          
+          if (isNewHour && !sentAlerts.creativeAlert.has(alertKey)) {
             try {
-              console.log('🎨 Running creative alert...');
+              console.log(`🎨 Running creative alert for ${today} at ${hour}:00...`);
               // ✅ ПРЯМОЙ ВЫЗОВ
               const alert = await analytics.generateCreativeAlert();
               if (alert) {
-                await sendTextNotifications(alert);
-                sentAlerts.creativeAlert.add(alertKey);
-                console.log('✅ Creative alert completed');
+                // ✅ ДОПОЛНИТЕЛЬНАЯ ЗАЩИТА: проверяем, не было ли уже отправлено такое же сообщение
+                const alertHash = Buffer.from(alert).toString('base64').slice(0, 50);
+                const duplicateKey = `creative_content_${today}_${alertHash}`;
+                
+                if (!sentAlerts.creativeAlert.has(duplicateKey)) {
+                  await sendTextNotifications(alert);
+                  sentAlerts.creativeAlert.add(alertKey);
+                  sentAlerts.creativeAlert.add(duplicateKey);
+                  lastSentHour = hour;
+                  lastSentDay = today;
+                  console.log('✅ Creative alert completed');
+                } else {
+                  console.log('⚠️ Creative alert duplicate detected, skipping');
+                }
               }
             } catch (error) {
               console.error('❌ Creative alert failed:', error.message);
             }
           }
         }
-      }, 2 * 60 * 1000);
+      }, 60 * 1000); // ✅ Проверяем каждую минуту вместо каждых 2 минут
     };
     
     // Campaign Analysis at 11:00 UTC+1 (after creative alert)
