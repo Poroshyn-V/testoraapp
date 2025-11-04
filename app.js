@@ -3670,6 +3670,7 @@ async function performSyncLogicLowPrice(exportAll = false) {
           
           // ✅ Если у клиента больше одного платежа - выгружаем в отдельную вкладку "LowPrice Upsells"
           if (allSuccessfulPayments.length > 1) {
+            const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
             await exportUpsellsToSeparateSheet(customerId, customer, allSuccessfulPayments, latestPayment);
           }
           
@@ -3953,6 +3954,11 @@ app.post('/api/export-all-lowprice-payments', async (req, res) => {
           updatedPurchases++;
           processed++;
           
+          // ✅ Если у клиента больше одного платежа - выгружаем в отдельную вкладку "LowPrice Upsells"
+          if (allSuccessfulPayments.length > 1) {
+            await exportUpsellsToSeparateSheet(customerId, customer, allSuccessfulPayments, latestPayment);
+          }
+          
         } else {
           // Add new customer - load ALL payments from Stripe (including all upsells)
           logger.info(`Adding new Low Price customer ${customerId} (loading ALL payments from Stripe)`);
@@ -3993,6 +3999,11 @@ app.post('/api/export-all-lowprice-payments', async (req, res) => {
           
           newPurchases++;
           processed++;
+          
+          // ✅ Если у клиента больше одного платежа - выгружаем в отдельную вкладку "LowPrice Upsells"
+          if (allSuccessfulPayments.length > 1) {
+            await exportUpsellsToSeparateSheet(customerId, customer, allSuccessfulPayments, latestPayment);
+          }
         }
         
         if (processed % 10 === 0) {
