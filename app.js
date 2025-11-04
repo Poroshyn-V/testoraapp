@@ -3269,6 +3269,122 @@ async function performSyncLogic() {
   }
 }
 
+// Helper function to export upsells to separate "LowPrice Upsells" sheet
+async function exportUpsellsToSeparateSheet(customerId, customer, allPayments, latestPayment) {
+  try {
+    const UPSELLS_SHEET_NAME = 'LowPrice Upsells';
+    const upsellsSheet = await googleSheets.getSheetByName(UPSELLS_SHEET_NAME);
+    
+    // Try to load headers, if they don't exist, create them
+    try {
+      await upsellsSheet.loadHeaderRow();
+    } catch (error) {
+      // Headers don't exist, create them
+      logger.info(`Creating headers for ${UPSELLS_SHEET_NAME} sheet...`);
+      const headers = [
+        'Customer ID',
+        'Email',
+        'First Payment Date',
+        'Latest Payment Date',
+        'Total Payments',
+        'Payment Intent IDs',
+        'Total Amount',
+        'Currency',
+        'First Payment Amount',
+        'Upsells Count',
+        'Upsells Total',
+        'Created UTC',
+        'Created Local (LA Time)'
+      ];
+      await upsellsSheet.setHeaderRow(headers);
+      logger.info(`Headers created for ${UPSELLS_SHEET_NAME} sheet`);
+    }
+    
+    // Check if customer already exists in upsells sheet
+    const existingRows = await upsellsSheet.getRows();
+    const existingCustomerRow = existingRows.find(row => {
+      const rowCustomerId = row.get('Customer ID');
+      return rowCustomerId === customerId;
+    });
+    
+    // Сортируем платежи по дате
+    allPayments.sort((a, b) => a.created - b.created);
+    const firstPayment = allPayments[0];
+    
+    // Вычисляем сумму апселлов (все платежи кроме первого)
+    let upsellsTotal = 0;
+    const upsellsCount = allPayments.length - 1;
+    for (let i = 1; i < allPayments.length; i++) {
+      upsellsTotal += allPayments[i].amount;
+    }
+    
+    // Суммируем все платежи
+    let totalAmount = 0;
+    const paymentIds = [];
+    for (const p of allPayments) {
+      totalAmount += p.amount;
+      paymentIds.push(p.id);
+    }
+    
+    // Форматируем данные
+    const firstPaymentDate = new Date(firstPayment.created * 1000);
+    const latestPaymentDate = new Date(latestPayment.created * 1000);
+    
+    // Форматируем LA time для последнего платежа
+    const laFormatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Los_Angeles',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
+    
+    const laParts = laFormatter.formatToParts(latestPaymentDate);
+    const laYear = laParts.find(p => p.type === 'year').value;
+    const laMonth = laParts.find(p => p.type === 'month').value;
+    const laDay = laParts.find(p => p.type === 'day').value;
+    const laHours = laParts.find(p => p.type === 'hour').value;
+    const laMinutes = laParts.find(p => p.type === 'minute').value;
+    const laSeconds = laParts.find(p => p.type === 'second').value;
+    const createdLATime = `${laYear}-${laMonth.padStart(2, '0')}-${laDay.padStart(2, '0')} ${laHours.padStart(2, '0')}:${laMinutes.padStart(2, '0')}:${laSeconds.padStart(2, '0')}.000 LA Time`;
+    
+    const upsellData = {
+      'Customer ID': customerId,
+      'Email': customer.email || 'N/A',
+      'First Payment Date': firstPaymentDate.toISOString(),
+      'Latest Payment Date': latestPaymentDate.toISOString(),
+      'Total Payments': allPayments.length.toString(),
+      'Payment Intent IDs': paymentIds.join(', '),
+      'Total Amount': (totalAmount / 100).toFixed(2),
+      'Currency': latestPayment.currency || 'USD',
+      'First Payment Amount': (firstPayment.amount / 100).toFixed(2),
+      'Upsells Count': upsellsCount.toString(),
+      'Upsells Total': (upsellsTotal / 100).toFixed(2),
+      'Created UTC': latestPaymentDate.toISOString(),
+      'Created Local (LA Time)': createdLATime
+    };
+    
+    if (existingCustomerRow) {
+      // Обновляем существующую запись
+      await existingCustomerRow.save(upsellData);
+      logger.debug(`Updated upsells for customer ${customerId} in ${UPSELLS_SHEET_NAME}`);
+    } else {
+      // Добавляем новую запись
+      await upsellsSheet.addRow(upsellData);
+      logger.info(`Added upsells for customer ${customerId} to ${UPSELLS_SHEET_NAME}: ${upsellsCount} upsells, $${(upsellsTotal / 100).toFixed(2)} total`);
+    }
+    
+  } catch (error) {
+    logger.warn(`Failed to export upsells for customer ${customerId}`, {
+      error: error.message,
+      stack: error.stack
+    });
+  }
+}
+
 // Helper function to add LA time formula to column G in LowPrice sheet
 async function addLaTimeFormulaToLowPriceSheet(rowNumber, utcColumnIndex = null) {
   try {
