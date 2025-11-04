@@ -3525,11 +3525,11 @@ async function performSyncLogicLowPrice(exportAll = false) {
       : await fetchWithRetry(() => getRecentPaymentsLowPrice(100));
     
     // Filter successful payments
+    // ✅ ВКЛЮЧАЕМ ВСЕ успешные платежи (включая subscription update - это могут быть апселлы!)
+    // Исключаем только тестовые платежи $0.60
     const successfulPayments = payments.filter(p => {
       if (p.status !== 'succeeded' || !p.customer) return false;
-      if (p.description && p.description.toLowerCase().includes('subscription update')) {
-        return false;
-      }
+      // ✅ УБРАЛИ исключение subscription update - это могут быть реальные апселлы!
       // Exclude test payments of $0.60 (60 cents) - these are refunded test payments
       if (p.amount === 60) {
         logger.info(`⏭️ Skipping test payment $0.60 (${p.id})`);
@@ -3609,11 +3609,11 @@ async function performSyncLogicLowPrice(exportAll = false) {
           logger.info(`Updating existing Low Price customer ${customerId}`);
           
           const allPayments = await fetchWithRetry(() => getCustomerPaymentsLowPrice(customerId));
+          // ✅ ВКЛЮЧАЕМ ВСЕ успешные платежи (включая subscription update - это могут быть апселлы!)
+          // Исключаем только тестовые платежи $0.60
           const allSuccessfulPayments = allPayments.filter(p => {
             if (p.status !== 'succeeded' || !p.customer) return false;
-            if (p.description && p.description.toLowerCase().includes('subscription update')) {
-              return false;
-            }
+            // ✅ УБРАЛИ исключение subscription update - это могут быть реальные апселлы!
             // Exclude test payments of $0.60
             if (p.amount === 60) return false;
             return true;
@@ -3681,11 +3681,11 @@ async function performSyncLogicLowPrice(exportAll = false) {
           // ✅ КРИТИЧЕСКИ ВАЖНО: Загружаем ВСЕ платежи клиента из Stripe (не только новые из группы)
           // Это гарантирует, что основная покупка + все апселлы будут суммированы вместе
           const allPayments = await fetchWithRetry(() => getCustomerPaymentsLowPrice(customerId));
+          // ✅ ВКЛЮЧАЕМ ВСЕ успешные платежи (включая subscription update - это могут быть апселлы!)
+          // Исключаем только тестовые платежи $0.60
           const allSuccessfulPayments = allPayments.filter(p => {
             if (p.status !== 'succeeded' || !p.customer) return false;
-            if (p.description && p.description.toLowerCase().includes('subscription update')) {
-              return false;
-            }
+            // ✅ УБРАЛИ исключение subscription update - это могут быть реальные апселлы!
             // Exclude test payments of $0.60
             if (p.amount === 60) return false;
             return true;

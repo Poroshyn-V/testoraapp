@@ -52,12 +52,11 @@ async function exportAllLowPricePayments() {
     const allPayments = await fetchWithRetry(() => getAllPaymentsLowPrice());
     console.log(`✅ Загружено ${allPayments.length} платежей из Stripe\n`);
 
-    // Фильтруем успешные платежи (исключаем тестовые $0.60)
+    // ✅ Фильтруем успешные платежи (ВКЛЮЧАЕМ subscription update - это могут быть апселлы!)
+    // Исключаем только тестовые платежи $0.60
     const successfulPayments = allPayments.filter(p => {
       if (p.status !== 'succeeded' || !p.customer) return false;
-      if (p.description && p.description.toLowerCase().includes('subscription update')) {
-        return false;
-      }
+      // ✅ УБРАЛИ исключение subscription update - это могут быть реальные апселлы!
       // Исключаем тестовые платежи $0.60
       if (p.amount === 60) return false;
       return true;
