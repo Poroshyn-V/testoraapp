@@ -3552,6 +3552,11 @@ async function performSyncLogicLowPrice(exportAll = false) {
           
           results.processed++;
           
+          // ✅ Если у клиента больше одного платежа - выгружаем в отдельную вкладку "LowPrice Upsells"
+          if (allSuccessfulPayments.length > 1) {
+            await exportUpsellsToSeparateSheet(customerId, customer, allSuccessfulPayments, latestPayment);
+          }
+          
         } else {
           // ADD NEW customer - load ALL payments from Stripe (including all upsells)
           logger.info(`Adding new Low Price customer ${customerId} (loading ALL payments from Stripe)`);
@@ -3598,6 +3603,11 @@ async function performSyncLogicLowPrice(exportAll = false) {
           results.processed++;
           
           logger.info(`✅ Added Low Price customer: ${customerId} (${rowData['Total Amount']} ${rowData['Currency']}, ${allSuccessfulPayments.length} payments including upsells)`);
+          
+          // ✅ Если у клиента больше одного платежа - выгружаем в отдельную вкладку "LowPrice Upsells"
+          if (allSuccessfulPayments.length > 1) {
+            await exportUpsellsToSeparateSheet(customerId, customer, allSuccessfulPayments, latestPayment);
+          }
         }
         
       } catch (error) {
