@@ -223,6 +223,11 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
   const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
   const paymentCount = metadata['Payment Count'] || '1';
   
+  // Get UTM Source (Platform)
+  const utmSource = (metadata['UTM Source'] && metadata['UTM Source'] !== 'N/A') 
+    ? metadata['UTM Source'] 
+    : (m.utm_source && m.utm_source !== 'N/A' ? m.utm_source : null);
+  
   // Get data from metadata or passed sheet data and format it nicely
   const rawAdName = (metadata['Ad Name'] && metadata['Ad Name'] !== 'N/A') || (m.ad_name && m.ad_name !== 'N/A') ? (metadata['Ad Name'] || m.ad_name) : null;
   const rawAdsetName = (metadata['Adset Name'] && metadata['Adset Name'] !== 'N/A') || (m.adset_name && m.adset_name !== 'N/A') ? (metadata['Adset Name'] || m.adset_name) : null;
@@ -253,6 +258,7 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
 💳 Payment Method: Card
 💰 Amount: ${amount} ${currency}${isVip ? ' 💎' : ''}
 🏷️ Payments: ${paymentCount}
+${utmSource ? `🔹 Platform: ${utmSource} (UTM Source)` : ''}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📧 Email: ${email}
 📍 Location: ${geo}`;
@@ -346,6 +352,11 @@ export function formatSlackNotification(payment, customer, metadata = {}) {
   const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
   const paymentCount = metadata['Payment Count'] || '1';
   
+  // Get UTM Source (Platform)
+  const utmSource = (metadata['UTM Source'] && metadata['UTM Source'] !== 'N/A') 
+    ? metadata['UTM Source'] 
+    : (m.utm_source && m.utm_source !== 'N/A' ? m.utm_source : null);
+  
   // Get data from metadata or passed sheet data and format it nicely
   const rawAdName = (metadata['Ad Name'] && metadata['Ad Name'] !== 'N/A') || (m.ad_name && m.ad_name !== 'N/A') ? (metadata['Ad Name'] || m.ad_name) : null;
   const rawAdsetName = (metadata['Adset Name'] && metadata['Adset Name'] !== 'N/A') || (m.adset_name && m.adset_name !== 'N/A') ? (metadata['Adset Name'] || m.adset_name) : null;
@@ -373,6 +384,7 @@ export function formatSlackNotification(payment, customer, metadata = {}) {
 💳 Payment Method: Card
 💰 Amount: ${amount} ${currency}
 🏷️ Payments: ${paymentCount}
+${utmSource ? `🔹 Platform: ${utmSource} (UTM Source)` : ''}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📧 Email: ${email}
 📍 Location: ${geo}`;

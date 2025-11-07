@@ -155,43 +155,73 @@ ${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFi
         return null;
       }
       
-      // Анализируем GEO данные
-      const geoStats = new Map();
+      // Анализируем данные по источникам (UTM Source) и GEO
+      const sourceStats = new Map(); // Map<source, {count: number, geo: Map<country, count>}>
       
       for (const purchase of todayPurchases) {
+        const utmSource = purchase.get('UTM Source') || 'N/A';
         const geo = purchase.get('GEO') || 'Unknown';
         const country = geo.split(',')[0].trim(); // Берем только страну
         
-        if (geoStats.has(country)) {
-          geoStats.set(country, geoStats.get(country) + 1);
+        if (!sourceStats.has(utmSource)) {
+          sourceStats.set(utmSource, { count: 0, geo: new Map() });
+        }
+        
+        const sourceData = sourceStats.get(utmSource);
+        sourceData.count++;
+        
+        if (sourceData.geo.has(country)) {
+          sourceData.geo.set(country, sourceData.geo.get(country) + 1);
         } else {
-          geoStats.set(country, 1);
+          sourceData.geo.set(country, 1);
         }
       }
       
-      // Сортируем по количеству покупок
-      const sortedGeo = Array.from(geoStats.entries())
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 3);
+      // Определяем порядок источников: Meta первый, Google второй, остальные по количеству
+      const sourceOrder = ['Meta', 'Google', 'facebook', 'google'];
+      const sortedSources = Array.from(sourceStats.entries()).sort((a, b) => {
+        const aIndex = sourceOrder.findIndex(s => a[0].toLowerCase().includes(s.toLowerCase()));
+        const bIndex = sourceOrder.findIndex(s => b[0].toLowerCase().includes(s.toLowerCase()));
+        
+        if (aIndex !== -1 && bIndex !== -1) {
+          return aIndex - bIndex; // Оба в списке приоритетов
+        }
+        if (aIndex !== -1) return -1; // a в списке, b нет
+        if (bIndex !== -1) return 1;  // b в списке, a нет
+        return b[1].count - a[1].count; // Оба не в списке - сортируем по количеству
+      });
       
-      // Формируем ТОП-3
-      const top3 = [];
-      for (const [country, count] of sortedGeo) {
-        const flag = this.getCountryFlag(country);
-        top3.push(`${flag} ${country} - ${count}`);
-      }
-      
-      // Добавляем WW (все остальные)
+      // Формируем сообщение с группировкой по источникам
+      const alertParts = [];
       const totalToday = todayPurchases.length;
-      const top3Total = sortedGeo.reduce((sum, [, count]) => sum + count, 0);
-      const wwCount = totalToday - top3Total;
       
-      if (wwCount > 0) {
-        top3.push(`🌍 WW - ${wwCount}`);
+      for (const [source, data] of sortedSources) {
+        const sourceName = source === 'N/A' ? 'Unknown' : source;
+        const sourceCount = data.count;
+        
+        // ТОП-3 GEO для этого источника
+        const sortedGeo = Array.from(data.geo.entries())
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 3);
+        
+        const geoLines = [];
+        for (const [country, count] of sortedGeo) {
+          const flag = this.getCountryFlag(country);
+          geoLines.push(`${flag} ${country} - ${count}`);
+        }
+        
+        // Добавляем WW для этого источника, если есть остальные
+        const top3Total = sortedGeo.reduce((sum, [, count]) => sum + count, 0);
+        const wwCount = sourceCount - top3Total;
+        if (wwCount > 0) {
+          geoLines.push(`🌍 WW - ${wwCount}`);
+        }
+        
+        alertParts.push(`🔹 **${sourceName}** (${sourceCount} purchases)\n${geoLines.join('\n')}`);
       }
       
-      // Формируем сообщение
-      const alertText = `📊 **TOP-3 GEO for today (${todayStr})**\n\n${top3.join('\n')}\n\n📈 Total purchases: ${totalToday}`;
+      // Формируем финальное сообщение
+      const alertText = `📊 **Hourly Report for today (${todayStr})**\n\n${alertParts.join('\n\n')}\n\n📈 Total purchases: ${totalToday}`;
       
       logInfo('📤 Отправляю GEO алерт:', { alertText });
       
@@ -620,3 +650,4 @@ ${isSignificantDrop ? '🔍 Check your campaigns!' : '🎉 Great performance!'}`
 // Export singleton instance
 export const analytics = new AnalyticsService();
 export default analytics;
+
