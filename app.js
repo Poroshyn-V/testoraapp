@@ -3526,17 +3526,30 @@ async function performSyncLogicLowPrice(exportAll = false) {
       : await fetchWithRetry(() => getRecentPaymentsLowPrice(1000));
     
     // Filter successful payments
-    // ✅ ВКЛЮЧАЕМ ВСЕ успешные платежи (включая subscription update - это могут быть апселлы!)
-    // Исключаем только тестовые платежи $0.60
+    // ✅ Включаем только покупки (subscription creation) и апселлы (subscription update в тот же день)
+    // Исключаем subscription update, которые НЕ являются апселлами (обновления подписки)
+    // Исключаем тестовые платежи $0.60
     const successfulPayments = payments.filter(p => {
       if (p.status !== 'succeeded' || !p.customer) return false;
-      // ✅ УБРАЛИ исключение subscription update - это могут быть реальные апселлы!
+      
       // Exclude test payments of $0.60 (60 cents) - these are refunded test payments
       if (p.amount === 60) {
         logger.info(`⏭️ Skipping test payment $0.60 (${p.id})`);
         results.skipped++;
         return false;
       }
+      
+      // Проверяем, является ли это subscription update
+      const isSubscriptionUpdate = p.description && p.description.toLowerCase().includes('subscription update');
+      
+      if (isSubscriptionUpdate) {
+        // Для subscription update нужно проверить, есть ли subscription creation в тот же день
+        // Это делаем после группировки по клиентам, пока пропускаем
+        // Временно включаем, но потом отфильтруем после группировки
+        return true;
+      }
+      
+      // Все остальные платежи (subscription creation и т.д.) включаем
       return true;
     });
     
@@ -3566,6 +3579,67 @@ async function performSyncLogicLowPrice(exportAll = false) {
         customerGroups.set(customerId, []);
       }
       customerGroups.get(customerId).push(payment);
+    }
+    
+    // ✅ Фильтруем subscription update: включаем только те, которые являются апселлами
+    // (есть subscription creation в тот же день для того же клиента)
+    for (const [customerId, customerPayments] of customerGroups.entries()) {
+      const paymentDateMap = new Map(); // Map<dateString, {hasCreation: boolean, updates: []}>
+      
+      // Группируем платежи по дате (день)
+      for (const payment of customerPayments) {
+        const paymentDate = new Date(payment.created * 1000);
+        const dateKey = paymentDate.toISOString().split('T')[0]; // YYYY-MM-DD
+        
+        if (!paymentDateMap.has(dateKey)) {
+          paymentDateMap.set(dateKey, { hasCreation: false, updates: [] });
+        }
+        
+        const dateData = paymentDateMap.get(dateKey);
+        const isSubscriptionUpdate = payment.description && payment.description.toLowerCase().includes('subscription update');
+        const isSubscriptionCreation = payment.description && (
+          payment.description.toLowerCase().includes('subscription creation') ||
+          payment.description.toLowerCase().includes('w2w:stripe: subscription creation')
+        );
+        
+        if (isSubscriptionCreation) {
+          dateData.hasCreation = true;
+        } else if (isSubscriptionUpdate) {
+          dateData.updates.push(payment);
+        }
+      }
+      
+      // Удаляем subscription update, которые НЕ являются апселлами (нет creation в тот же день)
+      const filteredPayments = customerPayments.filter(payment => {
+        const paymentDate = new Date(payment.created * 1000);
+        const dateKey = paymentDate.toISOString().split('T')[0];
+        const dateData = paymentDateMap.get(dateKey);
+        
+        const isSubscriptionUpdate = payment.description && payment.description.toLowerCase().includes('subscription update');
+        
+        if (isSubscriptionUpdate) {
+          // Включаем только если есть subscription creation в тот же день (это апселл)
+          if (dateData && dateData.hasCreation) {
+            logger.info(`✅ Including subscription update as upsell: ${payment.id} (has creation on ${dateKey})`);
+            return true;
+          } else {
+            logger.info(`⏭️ Excluding subscription update (not an upsell): ${payment.id} (no creation on ${dateKey})`);
+            results.skipped++;
+            return false;
+          }
+        }
+        
+        // Все остальные платежи включаем
+        return true;
+      });
+      
+      // Обновляем группу клиента отфильтрованными платежами
+      customerGroups.set(customerId, filteredPayments);
+      
+      // Если после фильтрации не осталось платежей, удаляем группу
+      if (filteredPayments.length === 0) {
+        customerGroups.delete(customerId);
+      }
     }
     
     // Process each customer group
@@ -3682,13 +3756,39 @@ async function performSyncLogicLowPrice(exportAll = false) {
           // ✅ КРИТИЧЕСКИ ВАЖНО: Загружаем ВСЕ платежи клиента из Stripe (не только новые из группы)
           // Это гарантирует, что основная покупка + все апселлы будут суммированы вместе
           const allPayments = await fetchWithRetry(() => getCustomerPaymentsLowPrice(customerId));
-          // ✅ ВКЛЮЧАЕМ ВСЕ успешные платежи (включая subscription update - это могут быть апселлы!)
-          // Исключаем только тестовые платежи $0.60
+          // ✅ Фильтруем платежи: включаем только покупки и апселлы (subscription update в тот же день)
           const allSuccessfulPayments = allPayments.filter(p => {
             if (p.status !== 'succeeded' || !p.customer) return false;
-            // ✅ УБРАЛИ исключение subscription update - это могут быть реальные апселлы!
             // Exclude test payments of $0.60
             if (p.amount === 60) return false;
+            
+            // Проверяем subscription update - включаем только если это апселл (есть creation в тот же день)
+            const isSubscriptionUpdate = p.description && p.description.toLowerCase().includes('subscription update');
+            if (isSubscriptionUpdate) {
+              // Проверяем, есть ли subscription creation в тот же день
+              const paymentDate = new Date(p.created * 1000);
+              const dateKey = paymentDate.toISOString().split('T')[0];
+              
+              const hasCreationSameDay = allPayments.some(otherPayment => {
+                if (otherPayment.id === p.id) return false;
+                const otherDate = new Date(otherPayment.created * 1000);
+                const otherDateKey = otherDate.toISOString().split('T')[0];
+                
+                if (otherDateKey !== dateKey) return false;
+                
+                const isCreation = otherPayment.description && (
+                  otherPayment.description.toLowerCase().includes('subscription creation') ||
+                  otherPayment.description.toLowerCase().includes('w2w:stripe: subscription creation')
+                );
+                
+                return isCreation && otherPayment.status === 'succeeded';
+              });
+              
+              // Включаем только если есть creation в тот же день (это апселл)
+              return hasCreationSameDay;
+            }
+            
+            // Все остальные платежи включаем
             return true;
           });
           
