@@ -74,7 +74,7 @@ export async function getCustomer(customerId) {
 }
 
 // Functions for Low Price Stripe account
-export async function getRecentPaymentsLowPrice(limit = 100) {
+export async function getRecentPaymentsLowPrice(limit = 1000) {
   if (!stripeLowPrice) {
     throw new Error('Low Price Stripe account not configured');
   }
@@ -82,18 +82,40 @@ export async function getRecentPaymentsLowPrice(limit = 100) {
   try {
     logInfo('Fetching recent payments from Low Price Stripe', { limit });
     
-    const payments = await stripeLowPrice.paymentIntents.list({
-      limit,
-      created: {
-        gte: Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000) // Last 7 days
+    // ✅ Используем пагинацию для получения всех платежей за последние 7 дней
+    const allPayments = [];
+    let hasMore = true;
+    let startingAfter = null;
+    
+    while (hasMore && allPayments.length < limit) {
+      const params = {
+        limit: Math.min(100, limit - allPayments.length), // Stripe max is 100 per request
+        created: {
+          gte: Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000) // Last 7 days
+        }
+      };
+      
+      if (startingAfter) {
+        params.starting_after = startingAfter;
       }
-    });
+      
+      const payments = await stripeLowPrice.paymentIntents.list(params);
+      allPayments.push(...payments.data);
+      
+      hasMore = payments.has_more && allPayments.length < limit;
+      if (hasMore && payments.data.length > 0) {
+        startingAfter = payments.data[payments.data.length - 1].id;
+      } else {
+        hasMore = false;
+      }
+    }
     
     logInfo('Successfully fetched payments from Low Price Stripe', { 
-      count: payments.data.length 
+      count: allPayments.length,
+      requestedLimit: limit
     });
     
-    return payments.data;
+    return allPayments;
   } catch (error) {
     logError('Error fetching payments from Low Price Stripe', error);
     throw error;

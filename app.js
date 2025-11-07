@@ -3855,12 +3855,11 @@ app.post('/api/export-all-lowprice-payments', async (req, res) => {
     const allPayments = await fetchWithRetry(() => getAllPaymentsLowPrice());
     logger.info(`Fetched ${allPayments.length} total payments from Low Price Stripe account`);
     
-    // Filter successful payments (exclude test $0.60)
+    // ✅ Фильтруем успешные платежи (ВКЛЮЧАЕМ subscription update - это могут быть апселлы!)
+    // Исключаем только тестовые платежи $0.60
     const successfulPayments = allPayments.filter(p => {
       if (p.status !== 'succeeded' || !p.customer) return false;
-      if (p.description && p.description.toLowerCase().includes('subscription update')) {
-        return false;
-      }
+      // ✅ УБРАЛИ исключение subscription update - это могут быть реальные апселлы!
       // Exclude test payments of $0.60
       if (p.amount === 60) return false;
       return true;
