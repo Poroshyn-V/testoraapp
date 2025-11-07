@@ -258,7 +258,7 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
 💳 Payment Method: Card
 💰 Amount: ${amount} ${currency}${isVip ? ' 💎' : ''}
 🏷️ Payments: ${paymentCount}
-${utmSource ? `🔹 Platform: ${utmSource} (UTM Source)` : ''}
+${utmSource ? `🔹 Platform: ${utmSource}` : ''}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📧 Email: ${email}
 📍 Location: ${geo}`;
@@ -384,7 +384,7 @@ export function formatSlackNotification(payment, customer, metadata = {}) {
 💳 Payment Method: Card
 💰 Amount: ${amount} ${currency}
 🏷️ Payments: ${paymentCount}
-${utmSource ? `🔹 Platform: ${utmSource} (UTM Source)` : ''}
+${utmSource ? `🔹 Platform: ${utmSource}` : ''}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📧 Email: ${email}
 📍 Location: ${geo}`;
