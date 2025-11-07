@@ -3520,9 +3520,10 @@ async function performSyncLogicLowPrice(exportAll = false) {
     logger.info(`📋 Found ${existingPaymentIds.size} existing payments in LowPrice sheet`);
     
     // Get payments from Low Price Stripe account (all or recent)
+    // ✅ Увеличили лимит до 1000 для обычной синхронизации, чтобы не пропустить покупки за сегодня
     const payments = exportAll 
       ? await fetchWithRetry(() => getAllPaymentsLowPrice())
-      : await fetchWithRetry(() => getRecentPaymentsLowPrice(100));
+      : await fetchWithRetry(() => getRecentPaymentsLowPrice(1000));
     
     // Filter successful payments
     // ✅ ВКЛЮЧАЕМ ВСЕ успешные платежи (включая subscription update - это могут быть апселлы!)
