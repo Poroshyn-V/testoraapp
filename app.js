@@ -3793,12 +3793,6 @@ async function performSyncLogicLowPrice(exportAll = false) {
           
           results.processed++;
           
-          // ✅ Если у клиента больше одного платежа - выгружаем в отдельную вкладку "LowPrice Upsells"
-          if (allSuccessfulPayments.length > 1) {
-            const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
-            await exportUpsellsToSeparateSheet(customerId, customer, allSuccessfulPayments, latestPayment);
-          }
-          
         } else {
           // ADD NEW customer - load ALL payments from Stripe (including all upsells)
           logger.info(`Adding new Low Price customer ${customerId} (loading ALL payments from Stripe)`);
@@ -3864,7 +3858,17 @@ async function performSyncLogicLowPrice(exportAll = false) {
           // 🔒 АТОМАРНОЕ добавление с внутренней блокировкой (предотвращает дубликаты)
           const addResult = await googleSheets.addRowIfNotExists(rowData, 'Customer ID');
           
-          if (addResult.exists) {
+          // ✅ КРИТИЧЕСКИ ВАЖНО: Проверяем успешность операции перед отправкой уведомления
+          if (!addResult.success) {
+            // Ошибка при добавлении - НЕ отправляем уведомление
+            logger.error(`❌ Failed to add Low Price customer ${customerId} to sheet`, {
+              exists: addResult.exists,
+              action: addResult.action,
+              reason: addResult.reason
+            });
+            results.failed++;
+            // НЕ отправляем уведомление при ошибке
+          } else if (addResult.exists) {
             // Кто-то добавил строку между нашими проверками!
             logger.warn(`⚠️ Low Price row appeared during atomic add for ${customerId} - converting to update`);
             results.duplicatesAvoided++;
@@ -3885,19 +3889,15 @@ async function performSyncLogicLowPrice(exportAll = false) {
             
             results.updatedPurchases++;
           } else {
-            // Успешно добавили
+            // Успешно добавили - ТОЛЬКО ТЕПЕРЬ отправляем уведомление
             // Add LA time formula to column G
             await addLaTimeFormulaToLowPriceSheet(addResult.row.rowNumber);
             
             results.newPurchases++;
-          }
-          
-          results.processed++;
-          
-          logger.info(`✅ Added Low Price customer: ${customerId} (${rowData['Total Amount']} ${rowData['Currency']}, ${allSuccessfulPayments.length} payments including upsells)`);
-          
-          // Send notification for new purchase (only if successfully added)
-          if (!addResult.exists) {
+            
+            logger.info(`✅ Added Low Price customer: ${customerId} (${rowData['Total Amount']} ${rowData['Currency']}, ${allSuccessfulPayments.length} payments including upsells)`);
+            
+            // Send notification for new purchase (ONLY after successful save)
             const sheetData = {
               'Ad Name': rowData['Ad Name'] || 'N/A',
               'Adset Name': rowData['Adset Name'] || 'N/A',
@@ -3929,12 +3929,6 @@ async function performSyncLogicLowPrice(exportAll = false) {
                 accountSource: 'FL'
               }
             });
-          }
-          
-          // ✅ Если у клиента больше одного платежа - выгружаем в отдельную вкладку "LowPrice Upsells"
-          if (allSuccessfulPayments.length > 1) {
-            const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
-            await exportUpsellsToSeparateSheet(customerId, customer, allSuccessfulPayments, latestPayment);
           }
         }
         
@@ -4164,11 +4158,6 @@ app.post('/api/export-all-lowprice-payments', async (req, res) => {
           updatedPurchases++;
           processed++;
           
-          // ✅ Если у клиента больше одного платежа - выгружаем в отдельную вкладку "LowPrice Upsells"
-          if (allSuccessfulPayments.length > 1) {
-            await exportUpsellsToSeparateSheet(customerId, customer, allSuccessfulPayments, latestPayment);
-          }
-          
         } else {
           // Add new customer - load ALL payments from Stripe (including all upsells)
           logger.info(`Adding new Low Price customer ${customerId} (loading ALL payments from Stripe)`);
@@ -4209,11 +4198,6 @@ app.post('/api/export-all-lowprice-payments', async (req, res) => {
           
           newPurchases++;
           processed++;
-          
-          // ✅ Если у клиента больше одного платежа - выгружаем в отдельную вкладку "LowPrice Upsells"
-          if (allSuccessfulPayments.length > 1) {
-            await exportUpsellsToSeparateSheet(customerId, customer, allSuccessfulPayments, latestPayment);
-          }
         }
         
         if (processed % 10 === 0) {
