@@ -2909,6 +2909,11 @@ async function performSyncLogic() {
       timestamp: new Date().toISOString()
     });
     
+    // ✅ КРИТИЧЕСКИ ВАЖНО: Используем лист "payments" для первого Stripe аккаунта
+    const MAIN_SHEET_NAME = ENV.STRIPE_SHEET_NAME || 'payments';
+    const mainSheet = await googleSheets.getSheetByName(MAIN_SHEET_NAME);
+    await mainSheet.loadHeaderRow();
+    
     // ✅ БЛОКИРОВКА УЖЕ ПОЛУЧЕНА В runSync() - не получаем повторно
     // const syncLockId = await distributedLock.acquire('sync_operation', 100, 200);
     
@@ -2920,7 +2925,7 @@ async function performSyncLogic() {
         purchaseCache.reload()
       ]);
     
-      // Get recent payments from Stripe
+      // Get recent payments from Stripe (ПЕРВЫЙ аккаунт - W2W)
       const payments = await fetchWithRetry(() => getRecentPayments(100));
       
       // Filter successful payments
@@ -3004,9 +3009,9 @@ async function performSyncLogic() {
           const latestPayment = payments[payments.length - 1];
           
           // 🔍 ТРОЙНАЯ ПРОВЕРКА перед обработкой (критично!)
-          const existingCustomers = await fetchWithRetry(() => 
-            googleSheets.findRows({ 'Customer ID': customerId })
-          );
+          // ✅ Используем лист "payments" напрямую
+          const allMainRows = await mainSheet.getRows();
+          const existingCustomers = allMainRows.filter(row => row.get('Customer ID') === customerId);
           
           if (existingCustomers.length > 0) {
             // Customer exists - UPDATE
@@ -3136,7 +3141,12 @@ async function performSyncLogic() {
             rowData['Payment Intent IDs'] = paymentIds.join(', ');
             
             // 🔒 АТОМАРНОЕ добавление с внутренней блокировкой
+            // ✅ Используем лист "payments" напрямую через googleSheets с указанием листа
+            // Временно устанавливаем правильный лист
+            const originalSheet = googleSheets.sheet;
+            googleSheets.sheet = mainSheet;
             const addResult = await googleSheets.addRowIfNotExists(rowData, 'Customer ID');
+            googleSheets.sheet = originalSheet; // Восстанавливаем
             
             if (addResult.exists) {
               // Кто-то добавил строку между нашими проверками!
