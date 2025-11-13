@@ -1,5 +1,5 @@
 import { logInfo, logWarn, logError } from '../utils/logging.js';
-import { sendTextNotifications, sendSlack } from './notifications.js';
+import { sendTextNotifications, sendTelegram, sendSlack } from './notifications.js';
 import { formatSlackNotification } from '../utils/formatting.js';
 import { metrics } from './metrics.js';
 
@@ -182,10 +182,17 @@ class NotificationQueue {
         };
         const sheetData = notification.sheetData || notification.metadata || {};
         
-        // Send to Telegram (using the formatted message)
-        await sendTextNotifications(notification.message);
+        // Send to Telegram (only Telegram, not Slack - to avoid duplicates)
+        try {
+          await sendTelegram(notification.message);
+        } catch (telegramError) {
+          logWarn('Failed to send Telegram notification for purchase', {
+            error: telegramError.message,
+            paymentId: payment.id
+          });
+        }
         
-        // Send to Slack (using proper formatting)
+        // Send to Slack (using proper formatting with account source)
         try {
           await sendSlack(payment, customer, sheetData);
         } catch (slackError) {
