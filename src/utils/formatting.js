@@ -223,6 +223,10 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
   const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
   const paymentCount = metadata['Payment Count'] || '1';
   
+  // Get account source (W2W for main sheet, FL for LowPrice sheet)
+  const accountSource = metadata.accountSource || metadata.account_source || 'W2W'; // Default to W2W for backward compatibility
+  const accountLabel = accountSource === 'FL' ? 'FL (LowPrice)' : 'W2W (payments)';
+  
   // Get UTM Source (Platform)
   const utmSource = (metadata['UTM Source'] && metadata['UTM Source'] !== 'N/A') 
     ? metadata['UTM Source'] 
@@ -258,6 +262,7 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
 💳 Payment Method: Card
 💰 Amount: ${amount} ${currency}${isVip ? ' 💎' : ''}
 🏷️ Payments: ${paymentCount}
+📋 Account: ${accountLabel}
 ${utmSource ? `🔹 Platform: ${utmSource}` : ''}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📧 Email: ${email}
@@ -352,6 +357,10 @@ export function formatSlackNotification(payment, customer, metadata = {}) {
   const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
   const paymentCount = metadata['Payment Count'] || '1';
   
+  // Get account source (W2W for main sheet, FL for LowPrice sheet)
+  const accountSource = metadata.accountSource || metadata.account_source || 'W2W'; // Default to W2W for backward compatibility
+  const accountLabel = accountSource === 'FL' ? 'FL (LowPrice)' : 'W2W (payments)';
+  
   // Get UTM Source (Platform)
   const utmSource = (metadata['UTM Source'] && metadata['UTM Source'] !== 'N/A') 
     ? metadata['UTM Source'] 
@@ -384,6 +393,7 @@ export function formatSlackNotification(payment, customer, metadata = {}) {
 💳 Payment Method: Card
 💰 Amount: ${amount} ${currency}
 🏷️ Payments: ${paymentCount}
+📋 Account: ${accountLabel}
 ${utmSource ? `🔹 Platform: ${utmSource}` : ''}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 📧 Email: ${email}

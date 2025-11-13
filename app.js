@@ -3074,7 +3074,10 @@ async function performSyncLogic() {
             };
             
             // Send notification via queue (VIP alert will be included if applicable)
-            const notificationMessage = await formatTelegramNotification(latestPaymentForUpdate, customer, sheetData);
+            const notificationMessage = await formatTelegramNotification(latestPaymentForUpdate, customer, {
+              ...sheetData,
+              accountSource: 'W2W' // Main Stripe account (payments sheet)
+            });
             const amount = parseFloat(sheetData['Total Amount'] || 0);
             const isVip = amount >= alertConfig.vipPurchaseThreshold;
             
@@ -3082,12 +3085,16 @@ async function performSyncLogic() {
               type: isVip ? 'vip_upsell_purchase' : 'upsell_purchase',
               channel: 'telegram',
               message: notificationMessage,
+              payment: latestPaymentForUpdate,
+              customer: customer,
+              sheetData: sheetData,
               metadata: {
                 paymentId: latestPaymentForUpdate.id, // ✅ Fixed: use latestPaymentForUpdate.id instead of latestPayment.id
                 customerId: customer.id,
                 amount: sheetData['Total Amount'],
                 type: 'upsell',
-                isVip: isVip
+                isVip: isVip,
+                accountSource: 'W2W'
               }
             });
             
@@ -3179,7 +3186,10 @@ async function performSyncLogic() {
             };
             
             // Send notification via queue (VIP alert will be included if applicable)
-            const notificationMessage = await formatTelegramNotification(firstPayment, customer, sheetData);
+            const notificationMessage = await formatTelegramNotification(firstPayment, customer, {
+              ...sheetData,
+              accountSource: 'W2W' // Main Stripe account (payments sheet)
+            });
             const amount = parseFloat(sheetData['Total Amount'] || 0);
             const isVip = amount >= alertConfig.vipPurchaseThreshold;
             
@@ -3187,12 +3197,16 @@ async function performSyncLogic() {
               type: isVip ? 'vip_new_purchase' : 'new_purchase',
               channel: 'telegram',
               message: notificationMessage,
+              payment: firstPayment,
+              customer: customer,
+              sheetData: sheetData,
               metadata: {
                 paymentId: firstPayment.id,
                 customerId: customer.id,
                 amount: sheetData['Total Amount'],
                 type: 'new_purchase',
-                isVip: isVip
+                isVip: isVip,
+                accountSource: 'W2W'
               }
             });
             
@@ -3735,6 +3749,42 @@ async function performSyncLogicLowPrice(exportAll = false) {
             await addLaTimeFormulaToLowPriceSheet(existingCustomerRow.rowNumber);
             
             logger.info(`✅ Updated Low Price customer ${customerId}: ${currentPaymentIds.length} → ${paymentIdsAll.length} payments, $${currentTotalAmount.toFixed(2)} → $${newTotalAmount}`);
+            
+            // Send notification for upsell (only if there was an actual update)
+            if (needsUpdate) {
+              const sheetData = {
+                'Ad Name': existingCustomerRow.get('Ad Name') || 'N/A',
+                'Adset Name': existingCustomerRow.get('Adset Name') || 'N/A',
+                'Campaign Name': existingCustomerRow.get('Campaign Name') || 'N/A',
+                'Creative Link': existingCustomerRow.get('Creative Link') || 'N/A',
+                'Total Amount': newTotalAmount,
+                'Payment Count': paymentIdsAll.length.toString(),
+                'Payment Intent IDs': newPaymentIdsSorted,
+                accountSource: 'FL' // LowPrice Stripe account
+              };
+              
+              const notificationMessage = await formatTelegramNotification(latestPayment, customer, sheetData);
+              const amount = parseFloat(newTotalAmount);
+              const isVip = amount >= alertConfig.vipPurchaseThreshold;
+              
+              await notificationQueue.add({
+                type: isVip ? 'vip_upsell_purchase' : 'upsell_purchase',
+                channel: 'telegram',
+                message: notificationMessage,
+                payment: latestPayment,
+                customer: customer,
+                sheetData: sheetData,
+                metadata: {
+                  paymentId: latestPayment.id,
+                  customerId: customer.id,
+                  amount: newTotalAmount,
+                  type: 'upsell',
+                  isVip: isVip,
+                  accountSource: 'FL'
+                }
+              });
+            }
+            
             results.updatedPurchases++;
           } else {
             logger.debug(`Low Price customer ${customerId} already up to date (${paymentIdsAll.length} payments)`);
@@ -3811,19 +3861,79 @@ async function performSyncLogicLowPrice(exportAll = false) {
           rowData['Payment Count'] = allSuccessfulPayments.length.toString();
           rowData['Payment Intent IDs'] = paymentIds.join(', ');
           
-          // Add row to LowPrice sheet
-          const newRow = await lowPriceSheet.addRow(rowData);
+          // 🔒 АТОМАРНОЕ добавление с внутренней блокировкой (предотвращает дубликаты)
+          const addResult = await googleSheets.addRowIfNotExists(rowData, 'Customer ID');
           
-          // Add LA time formula to column G
-          await addLaTimeFormulaToLowPriceSheet(newRow.rowNumber);
+          if (addResult.exists) {
+            // Кто-то добавил строку между нашими проверками!
+            logger.warn(`⚠️ Low Price row appeared during atomic add for ${customerId} - converting to update`);
+            results.duplicatesAvoided++;
+            
+            // Обновляем существующую строку (включая время)
+            await fetchWithRetry(() => 
+              googleSheets.updateRow(addResult.row, {
+                'Total Amount': rowData['Total Amount'],
+                'Payment Count': rowData['Payment Count'],
+                'Payment Intent IDs': rowData['Payment Intent IDs'],
+                'Created UTC': rowData['Created UTC'],
+                'Created Local (LA Time)': rowData['Created Local (LA Time)']
+              })
+            );
+            
+            // Add LA time formula to column G
+            await addLaTimeFormulaToLowPriceSheet(addResult.row.rowNumber);
+            
+            results.updatedPurchases++;
+          } else {
+            // Успешно добавили
+            // Add LA time formula to column G
+            await addLaTimeFormulaToLowPriceSheet(addResult.row.rowNumber);
+            
+            results.newPurchases++;
+          }
           
-          results.newPurchases++;
           results.processed++;
           
           logger.info(`✅ Added Low Price customer: ${customerId} (${rowData['Total Amount']} ${rowData['Currency']}, ${allSuccessfulPayments.length} payments including upsells)`);
           
+          // Send notification for new purchase (only if successfully added)
+          if (!addResult.exists) {
+            const sheetData = {
+              'Ad Name': rowData['Ad Name'] || 'N/A',
+              'Adset Name': rowData['Adset Name'] || 'N/A',
+              'Campaign Name': rowData['Campaign Name'] || 'N/A',
+              'Creative Link': rowData['Creative Link'] || 'N/A',
+              'Total Amount': rowData['Total Amount'],
+              'Payment Count': rowData['Payment Count'],
+              'Payment Intent IDs': rowData['Payment Intent IDs'],
+              accountSource: 'FL' // LowPrice Stripe account
+            };
+            
+            const notificationMessage = await formatTelegramNotification(firstPayment, customer, sheetData);
+            const amount = parseFloat(rowData['Total Amount']);
+            const isVip = amount >= alertConfig.vipPurchaseThreshold;
+            
+            await notificationQueue.add({
+              type: isVip ? 'vip_new_purchase' : 'new_purchase',
+              channel: 'telegram',
+              message: notificationMessage,
+              payment: firstPayment,
+              customer: customer,
+              sheetData: sheetData,
+              metadata: {
+                paymentId: firstPayment.id,
+                customerId: customer.id,
+                amount: rowData['Total Amount'],
+                type: 'new_purchase',
+                isVip: isVip,
+                accountSource: 'FL'
+              }
+            });
+          }
+          
           // ✅ Если у клиента больше одного платежа - выгружаем в отдельную вкладку "LowPrice Upsells"
           if (allSuccessfulPayments.length > 1) {
+            const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
             await exportUpsellsToSeparateSheet(customerId, customer, allSuccessfulPayments, latestPayment);
           }
         }

@@ -1,5 +1,6 @@
 import { logInfo, logWarn, logError } from '../utils/logging.js';
-import { sendTextNotifications } from './notifications.js';
+import { sendTextNotifications, sendSlack } from './notifications.js';
+import { formatSlackNotification } from '../utils/formatting.js';
 import { metrics } from './metrics.js';
 
 class NotificationQueue {
@@ -165,15 +166,45 @@ class NotificationQueue {
     const sendTimerId = metrics.startTimer('notification_send', { type: notification.type });
     
     try {
-      // Send to appropriate channel
-      if (notification.channel === 'telegram' || !notification.channel) {
-        // Default to telegram if no channel specified
+      // For purchase notifications, send to both Telegram and Slack with proper formatting
+      if (notification.type && (notification.type.includes('purchase') || notification.type.includes('upsell'))) {
+        // Extract payment and customer data from metadata if available
+        const payment = notification.payment || { 
+          id: notification.metadata?.paymentId,
+          amount: notification.metadata?.amount ? parseFloat(notification.metadata.amount) * 100 : 0,
+          currency: 'USD',
+          metadata: {}
+        };
+        const customer = notification.customer || { 
+          id: notification.metadata?.customerId,
+          email: 'N/A',
+          metadata: {}
+        };
+        const sheetData = notification.sheetData || notification.metadata || {};
+        
+        // Send to Telegram (using the formatted message)
         await sendTextNotifications(notification.message);
-      } else if (notification.channel === 'slack') {
-        // TODO: Implement Slack sending
-        throw new Error('Slack notifications not yet implemented');
+        
+        // Send to Slack (using proper formatting)
+        try {
+          await sendSlack(payment, customer, sheetData);
+        } catch (slackError) {
+          logWarn('Failed to send Slack notification for purchase', {
+            error: slackError.message,
+            paymentId: payment.id
+          });
+          // Don't fail the whole notification if Slack fails
+        }
       } else {
-        throw new Error(`Unknown notification channel: ${notification.channel}`);
+        // For other notifications (alerts, reports), use simple text notifications
+        if (notification.channel === 'telegram' || !notification.channel) {
+          // Default to telegram if no channel specified
+          await sendTextNotifications(notification.message);
+        } else if (notification.channel === 'slack') {
+          await sendTextNotifications(notification.message);
+        } else {
+          throw new Error(`Unknown notification channel: ${notification.channel}`);
+        }
       }
       
       metrics.endTimer(sendTimerId);
