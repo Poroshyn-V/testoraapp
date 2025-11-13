@@ -3867,7 +3867,11 @@ async function performSyncLogicLowPrice(exportAll = false) {
           rowData['Payment Intent IDs'] = paymentIds.join(', ');
           
           // 🔒 АТОМАРНОЕ добавление с внутренней блокировкой (предотвращает дубликаты)
+          // ✅ Используем лист "LowPrice" напрямую через googleSheets с указанием листа
+          const originalSheet = googleSheets.sheet;
+          googleSheets.sheet = lowPriceSheet;
           const addResult = await googleSheets.addRowIfNotExists(rowData, 'Customer ID');
+          googleSheets.sheet = originalSheet; // Восстанавливаем
           
           // ✅ КРИТИЧЕСКИ ВАЖНО: Проверяем результат операции
           // Если строка уже существует - это НЕ ошибка, нужно обновить
@@ -3876,9 +3880,9 @@ async function performSyncLogicLowPrice(exportAll = false) {
             logger.warn(`⚠️ Low Price row appeared during atomic add for ${customerId} - converting to update`);
             results.duplicatesAvoided++;
             
-            // Обновляем существующую строку (включая время)
+            // Обновляем существующую строку (включая время) в листе "LowPrice"
             await fetchWithRetry(() => 
-              googleSheets.updateRow(addResult.row, {
+              addResult.row.save({
                 'Total Amount': rowData['Total Amount'],
                 'Payment Count': rowData['Payment Count'],
                 'Payment Intent IDs': rowData['Payment Intent IDs'],
