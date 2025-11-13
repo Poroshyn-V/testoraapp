@@ -3858,17 +3858,9 @@ async function performSyncLogicLowPrice(exportAll = false) {
           // 🔒 АТОМАРНОЕ добавление с внутренней блокировкой (предотвращает дубликаты)
           const addResult = await googleSheets.addRowIfNotExists(rowData, 'Customer ID');
           
-          // ✅ КРИТИЧЕСКИ ВАЖНО: Проверяем успешность операции перед отправкой уведомления
-          if (!addResult.success) {
-            // Ошибка при добавлении - НЕ отправляем уведомление
-            logger.error(`❌ Failed to add Low Price customer ${customerId} to sheet`, {
-              exists: addResult.exists,
-              action: addResult.action,
-              reason: addResult.reason
-            });
-            results.failed++;
-            // НЕ отправляем уведомление при ошибке
-          } else if (addResult.exists) {
+          // ✅ КРИТИЧЕСКИ ВАЖНО: Проверяем результат операции
+          // Если строка уже существует - это НЕ ошибка, нужно обновить
+          if (addResult.exists) {
             // Кто-то добавил строку между нашими проверками!
             logger.warn(`⚠️ Low Price row appeared during atomic add for ${customerId} - converting to update`);
             results.duplicatesAvoided++;
