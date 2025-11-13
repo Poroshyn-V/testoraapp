@@ -3199,40 +3199,40 @@ async function performSyncLogic() {
             
             // Send notification ONLY if successfully added (not if it existed)
             if (!addResult.exists) {
-            const sheetData = {
-              'Ad Name': rowData['Ad Name'] || 'N/A',
-              'Adset Name': rowData['Adset Name'] || 'N/A',
-              'Campaign Name': rowData['Campaign Name'] || 'N/A',
-              'Creative Link': rowData['Creative Link'] || 'N/A',
-              'Total Amount': rowData['Total Amount'],
-              'Payment Count': rowData['Payment Count'],
-              'Payment Intent IDs': rowData['Payment Intent IDs']
-            };
-            
-            // Send notification via queue (VIP alert will be included if applicable)
-            const notificationMessage = await formatTelegramNotification(firstPayment, customer, {
-              ...sheetData,
-              accountSource: 'W2W' // Main Stripe account (payments sheet)
-            });
-            const amount = parseFloat(sheetData['Total Amount'] || 0);
-            const isVip = amount >= alertConfig.vipPurchaseThreshold;
-            
-            await notificationQueue.add({
-              type: isVip ? 'vip_new_purchase' : 'new_purchase',
-              channel: 'telegram',
-              message: notificationMessage,
-              payment: firstPayment,
-              customer: customer,
-              sheetData: sheetData,
-              metadata: {
-                paymentId: firstPayment.id,
-                customerId: customer.id,
-                amount: sheetData['Total Amount'],
-                type: 'new_purchase',
-                isVip: isVip,
-                accountSource: 'W2W'
-              }
-            });
+              const sheetData = {
+                'Ad Name': rowData['Ad Name'] || 'N/A',
+                'Adset Name': rowData['Adset Name'] || 'N/A',
+                'Campaign Name': rowData['Campaign Name'] || 'N/A',
+                'Creative Link': rowData['Creative Link'] || 'N/A',
+                'Total Amount': rowData['Total Amount'],
+                'Payment Count': rowData['Payment Count'],
+                'Payment Intent IDs': rowData['Payment Intent IDs']
+              };
+              
+              // Send notification via queue (VIP alert will be included if applicable)
+              const notificationMessage = await formatTelegramNotification(firstPayment, customer, {
+                ...sheetData,
+                accountSource: 'W2W' // Main Stripe account (payments sheet)
+              });
+              const amount = parseFloat(sheetData['Total Amount'] || 0);
+              const isVip = amount >= alertConfig.vipPurchaseThreshold;
+              
+              await notificationQueue.add({
+                type: isVip ? 'vip_new_purchase' : 'new_purchase',
+                channel: 'telegram',
+                message: notificationMessage,
+                payment: firstPayment,
+                customer: customer,
+                sheetData: sheetData,
+                metadata: {
+                  paymentId: firstPayment.id,
+                  customerId: customer.id,
+                  amount: sheetData['Total Amount'],
+                  type: 'new_purchase',
+                  isVip: isVip,
+                  accountSource: 'W2W'
+                }
+              });
             
             results.processed++;
           }
