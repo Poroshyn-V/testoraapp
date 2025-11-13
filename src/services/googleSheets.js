@@ -70,10 +70,12 @@ class GoogleSheetsService {
   async getAllRows() {
     await this.initialize();
     
-    return getCachedSheetsData('all-rows', async () => {
-      logInfo('Fetching all rows from Google Sheets');
+    // ✅ КРИТИЧЕСКИ ВАЖНО: Используем уникальный ключ кэша для каждого листа
+    const cacheKey = `all-rows-${this.sheet?.title || 'default'}`;
+    return getCachedSheetsData(cacheKey, async () => {
+      logInfo('Fetching all rows from Google Sheets', { sheetTitle: this.sheet?.title });
       const rows = await this.sheet.getRows();
-      logInfo('Successfully fetched rows from Google Sheets', { count: rows.length });
+      logInfo('Successfully fetched rows from Google Sheets', { count: rows.length, sheetTitle: this.sheet?.title });
       return rows;
     });
   }
@@ -361,7 +363,8 @@ class GoogleSheetsService {
       
       logInfo(`Checking if row exists (with lock): ${uniqueField}=${uniqueValue}`);
       
-      // Проверяем существование внутри блокировки
+      // ✅ КРИТИЧЕСКИ ВАЖНО: Используем правильный лист для поиска
+      // Проверяем существование внутри блокировки, используя текущий this.sheet
       const existing = await this.findRows({ [uniqueField]: uniqueValue });
       
       if (existing.length > 0) {

@@ -3149,6 +3149,18 @@ async function performSyncLogic() {
             const addResult = await googleSheets.addRowIfNotExists(rowData, 'Customer ID');
             googleSheets.sheet = originalSheet; // Восстанавливаем
             
+            // ✅ КРИТИЧЕСКИ ВАЖНО: Проверяем успешность операции
+            if (!addResult.success) {
+              // Ошибка при добавлении - НЕ отправляем уведомление
+              logger.error(`❌ Failed to add customer ${customerId} to payments sheet`, {
+                exists: addResult.exists,
+                action: addResult.action,
+                reason: addResult.reason
+              });
+              results.failed++;
+              continue; // Пропускаем отправку уведомления
+            }
+            
             if (addResult.exists) {
               // Кто-то добавил строку между нашими проверками!
               logger.warn(`⚠️ Row appeared during atomic add for ${customerId} - converting to update`);
@@ -3168,7 +3180,7 @@ async function performSyncLogic() {
               
               results.updatedPurchases++;
             } else {
-              // Успешно добавили
+              // Успешно добавили - ТОЛЬКО ТЕПЕРЬ отправляем уведомление
               results.newPurchases++;
             }
             
@@ -3185,7 +3197,8 @@ async function performSyncLogic() {
             
             logger.info(`✅ Added customer ${customerId} with ALL payments: ${allSuccessfulPayments.length} payments (${payments.length} new + ${allSuccessfulPayments.length - payments.length} existing), total $${rowData['Total Amount']}`);
             
-            // Send notification
+            // Send notification ONLY if successfully added (not if it existed)
+            if (!addResult.exists) {
             const sheetData = {
               'Ad Name': rowData['Ad Name'] || 'N/A',
               'Adset Name': rowData['Adset Name'] || 'N/A',
