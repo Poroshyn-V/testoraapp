@@ -3040,8 +3040,9 @@ async function performSyncLogic() {
             const latestPaymentForUpdate = allSuccessfulPayments[allSuccessfulPayments.length - 1];
             const updatedRowData = formatPaymentForSheets(latestPaymentForUpdate, customer);
             
+            // ✅ Обновляем строку в листе "payments" напрямую
             await fetchWithRetry(() => 
-              googleSheets.updateRow(existingCustomers[0], {
+              existingCustomers[0].save({
                 'Purchase ID': `purchase_${customerId}`,
                 'Total Amount': (totalAmountAll / 100).toFixed(2),
                 'Payment Count': paymentCountAll.toString(),
@@ -3153,9 +3154,9 @@ async function performSyncLogic() {
               logger.warn(`⚠️ Row appeared during atomic add for ${customerId} - converting to update`);
               results.duplicatesAvoided++;
               
-              // Обновляем существующую строку (включая время)
+              // Обновляем существующую строку (включая время) в листе "payments"
               await fetchWithRetry(() => 
-                googleSheets.updateRow(addResult.row, {
+                addResult.row.save({
                   'Total Amount': rowData['Total Amount'],
                   'Payment Count': rowData['Payment Count'],
                   'Payment Intent IDs': rowData['Payment Intent IDs'],
