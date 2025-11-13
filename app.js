@@ -3233,6 +3233,7 @@ async function performSyncLogic() {
                   accountSource: 'W2W'
                 }
               });
+            }
             
             results.processed++;
           }
