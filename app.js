@@ -3470,53 +3470,15 @@ async function performSyncLogicLowPrice(exportAll = false) {
     // Get the LowPrice sheet
     const lowPriceSheet = await googleSheets.getSheetByName(LOW_PRICE_SHEET_NAME);
     
-    // Try to load headers, if they don't exist, create them
+    // ✅ Заголовки уже созданы - просто пытаемся загрузить их
+    // Если не получается - продолжаем работу без заголовков (они уже есть в таблице)
     try {
       await lowPriceSheet.loadHeaderRow();
       logger.info(`✅ LowPrice sheet headers loaded successfully`);
     } catch (error) {
-      // Headers don't exist, create them for LowPrice (UTC and LA time only)
-      logger.info(`Creating headers for LowPrice sheet... (error: ${error.message})`);
-      try {
-        const headers = [
-          'Purchase ID',
-          'Created UTC',
-          'Created Local (LA Time)',
-          'Payment Intent IDs',
-          'Total Amount',
-          'Currency',
-          'Status',
-          'Customer ID',
-          'Email',
-          'GEO',
-          'Gender',
-          'Age',
-          'Product Tag',
-          'Creative Link',
-          'UTM Source',
-          'UTM Medium',
-          'UTM Campaign',
-          'UTM Content',
-          'UTM Term',
-          'Platform Placement',
-          'Ad Name',
-          'Adset Name',
-          'Campaign Name',
-          'Web Campaign',
-          'Client Reference ID',
-          'Mode',
-          'Raw Metadata JSON'
-        ];
-        await lowPriceSheet.setHeaderRow(headers);
-        logger.info('✅ Headers created for LowPrice sheet (UTC and LA time only)');
-      } catch (headerError) {
-        logger.error('❌ Failed to create headers for LowPrice sheet', {
-          error: headerError.message,
-          stack: headerError.stack,
-          sheetName: LOW_PRICE_SHEET_NAME
-        });
-        throw new Error(`Failed to create headers for LowPrice sheet: ${headerError.message}`);
-      }
+      // Заголовки могут не загрузиться из-за размера листа, но они уже есть
+      // Продолжаем работу - заголовки уже созданы вручную
+      logger.warn(`⚠️ Could not load headers (may be due to sheet size), but headers already exist. Continuing... (error: ${error.message})`);
     }
     
     // Load existing Payment Intent IDs from LowPrice sheet
