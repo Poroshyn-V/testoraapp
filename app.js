@@ -3739,42 +3739,10 @@ async function performSyncLogicLowPrice(exportAll = false) {
             // Add LA time formula to column G
             await addLaTimeFormulaToLowPriceSheet(existingCustomerRow.rowNumber);
             
-            logger.info(`✅ Updated Low Price customer ${customerId}: ${currentPaymentIds.length} → ${paymentIdsAll.length} payments, $${currentTotalAmount.toFixed(2)} → $${newTotalAmount}`);
+            logger.info(`✅ Updated Low Price customer ${customerId}: ${currentPaymentIds.length} → ${paymentIdsAll.length} payments, $${currentTotalAmount.toFixed(2)} → $${newTotalAmount} - no notification sent (to prevent spam)`);
             
-            // Send notification for upsell (only if there was an actual update)
-            if (needsUpdate) {
-              const sheetData = {
-                'Ad Name': existingCustomerRow.get('Ad Name') || 'N/A',
-                'Adset Name': existingCustomerRow.get('Adset Name') || 'N/A',
-                'Campaign Name': existingCustomerRow.get('Campaign Name') || 'N/A',
-                'Creative Link': existingCustomerRow.get('Creative Link') || 'N/A',
-                'Total Amount': newTotalAmount,
-                'Payment Count': paymentIdsAll.length.toString(),
-                'Payment Intent IDs': newPaymentIdsSorted,
-                accountSource: 'FL' // LowPrice Stripe account
-              };
-              
-              const notificationMessage = await formatTelegramNotification(latestPayment, customer, sheetData);
-              const amount = parseFloat(newTotalAmount);
-              const isVip = amount >= alertConfig.vipPurchaseThreshold;
-              
-              await notificationQueue.add({
-                type: isVip ? 'vip_upsell_purchase' : 'upsell_purchase',
-                channel: 'telegram',
-                message: notificationMessage,
-                payment: latestPayment,
-                customer: customer,
-                sheetData: sheetData,
-                metadata: {
-                  paymentId: latestPayment.id,
-                  customerId: customer.id,
-                  amount: newTotalAmount,
-                  type: 'upsell',
-                  isVip: isVip,
-                  accountSource: 'FL'
-                }
-              });
-            }
+            // ❌ УБРАЛИ УВЕДОМЛЕНИЯ ПРИ ОБНОВЛЕНИИ - это вызывало спам!
+            // Уведомления отправляются ТОЛЬКО для новых покупок, не для обновлений существующих
             
             results.updatedPurchases++;
           } else {
