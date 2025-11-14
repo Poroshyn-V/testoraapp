@@ -3467,8 +3467,9 @@ async function performSyncLogicLowPrice(exportAll = false) {
   try {
     logger.info(`🔄 Starting Low Price payment sync to sheet "${LOW_PRICE_SHEET_NAME}"...`);
     
-    // Get the LowPrice sheet
+    // ✅ КРИТИЧЕСКИ ВАЖНО: Получаем лист LowPrice для выгрузки
     const lowPriceSheet = await googleSheets.getSheetByName(LOW_PRICE_SHEET_NAME);
+    logger.info(`✅ Using LowPrice sheet: "${lowPriceSheet.title}" (ID: ${lowPriceSheet.sheetId})`);
     
     // ✅ Заголовки уже созданы - просто пытаемся загрузить их
     // Если не получается - продолжаем работу без заголовков (они уже есть в таблице)
@@ -3509,44 +3510,23 @@ async function performSyncLogicLowPrice(exportAll = false) {
     logger.info(`📋 Found ${existingPaymentIds.size} existing payments in LowPrice sheet`);
     
     // Get payments from Low Price Stripe account (all or recent)
-    // ✅ Увеличили лимит до 1000 для обычной синхронизации, чтобы не пропустить покупки за сегодня
     const payments = exportAll 
       ? await fetchWithRetry(() => getAllPaymentsLowPrice())
-      : await fetchWithRetry(() => getRecentPaymentsLowPrice(1000));
+      : await fetchWithRetry(() => getRecentPaymentsLowPrice(100));
     
-    // Filter successful payments
-    // ✅ Включаем только покупки (subscription creation) и апселлы (subscription update в тот же день)
-    // Исключаем subscription update, которые НЕ являются апселлами (обновления подписки)
-    // Исключаем тестовые платежи $0.60
+    // Filter successful payments (same logic as main account)
     const successfulPayments = payments.filter(p => {
       if (p.status !== 'succeeded' || !p.customer) return false;
-      
-      // Exclude test payments of $0.60 (60 cents) - these are refunded test payments
-      if (p.amount === 60) {
-        logger.info(`⏭️ Skipping test payment $0.60 (${p.id})`);
-        results.skipped++;
+      if (p.description && p.description.toLowerCase().includes('subscription update')) {
         return false;
       }
-      
-      // Проверяем, является ли это subscription update
-      const isSubscriptionUpdate = p.description && p.description.toLowerCase().includes('subscription update');
-      
-      if (isSubscriptionUpdate) {
-        // Для subscription update нужно проверить, есть ли subscription creation в тот же день
-        // Это делаем после группировки по клиентам, пока пропускаем
-        // Временно включаем, но потом отфильтруем после группировки
-        return true;
-      }
-      
-      // Все остальные платежи (subscription creation и т.д.) включаем
       return true;
     });
     
-    logger.info(`📊 Found ${successfulPayments.length} successful payments from Low Price account (excluded ${results.skipped} test payments of $0.60)`);
+    logger.info(`📊 Found ${successfulPayments.length} successful payments from Low Price account`);
     
     // Filter out existing payments by payment ID
     const newPayments = successfulPayments.filter(p => {
-      // Check if this payment ID exists in the sheet
       if (existingPaymentIds.has(p.id)) {
         results.duplicatesAvoided++;
         return false;
@@ -3556,79 +3536,14 @@ async function performSyncLogicLowPrice(exportAll = false) {
     
     logger.info(`🆕 Processing ${newPayments.length} new Low Price payments, avoided ${results.duplicatesAvoided} duplicates`);
     
-    // Group payments by customer (like main sync)
+    // Group payments by customer
     const customerGroups = new Map();
     for (const payment of newPayments) {
       const customerId = payment.customer;
-      if (!customerId) {
-        results.skipped++;
-        continue;
-      }
       if (!customerGroups.has(customerId)) {
         customerGroups.set(customerId, []);
       }
       customerGroups.get(customerId).push(payment);
-    }
-    
-    // ✅ Фильтруем subscription update: включаем только те, которые являются апселлами
-    // (есть subscription creation в тот же день для того же клиента)
-    for (const [customerId, customerPayments] of customerGroups.entries()) {
-      const paymentDateMap = new Map(); // Map<dateString, {hasCreation: boolean, updates: []}>
-      
-      // Группируем платежи по дате (день)
-      for (const payment of customerPayments) {
-        const paymentDate = new Date(payment.created * 1000);
-        const dateKey = paymentDate.toISOString().split('T')[0]; // YYYY-MM-DD
-        
-        if (!paymentDateMap.has(dateKey)) {
-          paymentDateMap.set(dateKey, { hasCreation: false, updates: [] });
-        }
-        
-        const dateData = paymentDateMap.get(dateKey);
-        const isSubscriptionUpdate = payment.description && payment.description.toLowerCase().includes('subscription update');
-        const isSubscriptionCreation = payment.description && (
-          payment.description.toLowerCase().includes('subscription creation') ||
-          payment.description.toLowerCase().includes('w2w:stripe: subscription creation')
-        );
-        
-        if (isSubscriptionCreation) {
-          dateData.hasCreation = true;
-        } else if (isSubscriptionUpdate) {
-          dateData.updates.push(payment);
-        }
-      }
-      
-      // Удаляем subscription update, которые НЕ являются апселлами (нет creation в тот же день)
-      const filteredPayments = customerPayments.filter(payment => {
-        const paymentDate = new Date(payment.created * 1000);
-        const dateKey = paymentDate.toISOString().split('T')[0];
-        const dateData = paymentDateMap.get(dateKey);
-        
-        const isSubscriptionUpdate = payment.description && payment.description.toLowerCase().includes('subscription update');
-        
-        if (isSubscriptionUpdate) {
-          // Включаем только если есть subscription creation в тот же день (это апселл)
-          if (dateData && dateData.hasCreation) {
-            logger.info(`✅ Including subscription update as upsell: ${payment.id} (has creation on ${dateKey})`);
-            return true;
-          } else {
-            logger.info(`⏭️ Excluding subscription update (not an upsell): ${payment.id} (no creation on ${dateKey})`);
-            results.skipped++;
-            return false;
-          }
-        }
-        
-        // Все остальные платежи включаем
-        return true;
-      });
-      
-      // Обновляем группу клиента отфильтрованными платежами
-      customerGroups.set(customerId, filteredPayments);
-      
-      // Если после фильтрации не осталось платежей, удаляем группу
-      if (filteredPayments.length === 0) {
-        customerGroups.delete(customerId);
-      }
     }
     
     // Process each customer group
@@ -3660,159 +3575,80 @@ async function performSyncLogicLowPrice(exportAll = false) {
         // Sort payments by creation date
         payments.sort((a, b) => a.created - b.created);
         const firstPayment = payments[0];
+        const latestPayment = payments[payments.length - 1];
         
         // Check if customer exists in LowPrice sheet
-        const existingRows = await lowPriceSheet.getRows();
-        const existingCustomerRow = existingRows.find(row => {
-          const rowCustomerId = row.get('Customer ID');
-          return rowCustomerId === customerId;
-        });
+        const allLowPriceRows = await lowPriceSheet.getRows();
+        const existingCustomers = allLowPriceRows.filter(row => row.get('Customer ID') === customerId);
         
-        if (existingCustomerRow) {
-          // Customer exists - UPDATE (get all payments and sum them)
+        if (existingCustomers.length > 0) {
+          // Customer exists - UPDATE
           logger.info(`Updating existing Low Price customer ${customerId}`);
           
           const allPayments = await fetchWithRetry(() => getCustomerPaymentsLowPrice(customerId));
-          // ✅ Фильтруем платежи: включаем только покупки и апселлы (subscription update в тот же день)
-          // Исключаем тестовые платежи $0.60
           const allSuccessfulPayments = allPayments.filter(p => {
             if (p.status !== 'succeeded' || !p.customer) return false;
-            // Exclude test payments of $0.60
-            if (p.amount === 60) return false;
-            
-            // Проверяем subscription update - включаем только если это апселл (есть creation в тот же день)
-            const isSubscriptionUpdate = p.description && p.description.toLowerCase().includes('subscription update');
-            if (isSubscriptionUpdate) {
-              // Проверяем, есть ли subscription creation в тот же день
-              const paymentDate = new Date(p.created * 1000);
-              const dateKey = paymentDate.toISOString().split('T')[0];
-              
-              const hasCreationSameDay = allPayments.some(otherPayment => {
-                if (otherPayment.id === p.id) return false;
-                const otherDate = new Date(otherPayment.created * 1000);
-                const otherDateKey = otherDate.toISOString().split('T')[0];
-                
-                if (otherDateKey !== dateKey) return false;
-                
-                const isCreation = otherPayment.description && (
-                  otherPayment.description.toLowerCase().includes('subscription creation') ||
-                  otherPayment.description.toLowerCase().includes('w2w:stripe: subscription creation')
-                );
-                
-                return isCreation && otherPayment.status === 'succeeded';
-              });
-              
-              // Включаем только если есть creation в тот же день (это апселл)
-              return hasCreationSameDay;
+            if (p.description && p.description.toLowerCase().includes('subscription update')) {
+              return false;
             }
-            
-            // Все остальные платежи включаем
             return true;
           });
           
-          // ✅ Суммируем ВСЕ платежи (основная покупка + все апселлы)
           let totalAmountAll = 0;
+          let paymentCountAll = 0;
           const paymentIdsAll = [];
           
           for (const p of allSuccessfulPayments) {
             totalAmountAll += p.amount;
+            paymentCountAll++;
             paymentIdsAll.push(p.id);
           }
           
-          // Получаем текущие значения из таблицы для сравнения
-          const currentPaymentIds = (existingCustomerRow.get('Payment Intent IDs') || '').split(',').map(id => id.trim()).filter(Boolean);
-          const currentPaymentIdsSorted = currentPaymentIds.sort().join(', ');
-          const newPaymentIdsSorted = paymentIdsAll.sort().join(', ');
-          const currentTotalAmount = parseFloat(existingCustomerRow.get('Total Amount') || 0);
-          const newTotalAmount = (totalAmountAll / 100).toFixed(2);
+          // Get latest payment for updated timestamp
+          const latestPaymentForUpdate = allSuccessfulPayments[allSuccessfulPayments.length - 1];
+          const updatedRowData = formatPaymentForSheetsLowPrice(latestPaymentForUpdate, customer);
           
-          // Проверяем, нужно ли обновление (если количество или ID платежей изменились, или сумма)
-          const needsUpdate = 
-            currentPaymentIds.length !== paymentIdsAll.length ||
-            currentPaymentIdsSorted !== newPaymentIdsSorted ||
-            Math.abs(currentTotalAmount - parseFloat(newTotalAmount)) >= 0.01;
-          
-          if (needsUpdate) {
-            // Get latest payment for updated timestamp
-            const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
-            const updatedRowData = formatPaymentForSheetsLowPrice(latestPayment, customer);
-            
-            // Update existing row with all payments data (only UTC and LA time, no UTC+1)
-            await existingCustomerRow.save({
+          // ✅ КРИТИЧЕСКИ ВАЖНО: Обновление существующей строки в листе LowPrice
+          logger.debug(`📝 Updating row in LowPrice sheet: "${lowPriceSheet.title}"`);
+          await fetchWithRetry(() => 
+            existingCustomers[0].save({
               'Purchase ID': `purchase_${customerId}`,
-              'Total Amount': newTotalAmount,
-              'Payment Count': paymentIdsAll.length.toString(),
-              'Payment Intent IDs': newPaymentIdsSorted,
-              'Created UTC': updatedRowData['Created UTC'],  // Время из Stripe
-              'Created Local (LA Time)': updatedRowData['Created Local (LA Time)']  // Время по LA
-            });
-            
-            // Add LA time formula to column G
-            await addLaTimeFormulaToLowPriceSheet(existingCustomerRow.rowNumber);
-            
-            logger.info(`✅ Updated Low Price customer ${customerId}: ${currentPaymentIds.length} → ${paymentIdsAll.length} payments, $${currentTotalAmount.toFixed(2)} → $${newTotalAmount} - no notification sent (to prevent spam)`);
-            
-            // ❌ УБРАЛИ УВЕДОМЛЕНИЯ ПРИ ОБНОВЛЕНИИ - это вызывало спам!
-            // Уведомления отправляются ТОЛЬКО для новых покупок, не для обновлений существующих
-            
-            results.updatedPurchases++;
-          } else {
-            logger.debug(`Low Price customer ${customerId} already up to date (${paymentIdsAll.length} payments)`);
-            results.duplicatesAvoided++;
-          }
+              'Total Amount': (totalAmountAll / 100).toFixed(2),
+              'Payment Count': paymentCountAll.toString(),
+              'Payment Intent IDs': paymentIdsAll.join(', '),
+              'Created UTC': updatedRowData['Created UTC'],
+              'Created Local (LA Time)': updatedRowData['Created Local (LA Time)']
+            })
+          );
           
+          // Add LA time formula
+          await addLaTimeFormulaToLowPriceSheet(existingCustomers[0].rowNumber);
+          
+          logger.info(`✅ Updated existing Low Price customer ${customerId} - no notification sent (to prevent spam)`);
+          
+          results.updatedPurchases++;
           results.processed++;
           
         } else {
-          // ADD NEW customer - load ALL payments from Stripe (including all upsells)
+          // ADD NEW customer - load ALL payments from Stripe
           logger.info(`Adding new Low Price customer ${customerId} (loading ALL payments from Stripe)`);
           
-          // ✅ КРИТИЧЕСКИ ВАЖНО: Загружаем ВСЕ платежи клиента из Stripe (не только новые из группы)
-          // Это гарантирует, что основная покупка + все апселлы будут суммированы вместе
           const allPayments = await fetchWithRetry(() => getCustomerPaymentsLowPrice(customerId));
-          // ✅ Фильтруем платежи: включаем только покупки и апселлы (subscription update в тот же день)
           const allSuccessfulPayments = allPayments.filter(p => {
             if (p.status !== 'succeeded' || !p.customer) return false;
-            // Exclude test payments of $0.60
-            if (p.amount === 60) return false;
-            
-            // Проверяем subscription update - включаем только если это апселл (есть creation в тот же день)
-            const isSubscriptionUpdate = p.description && p.description.toLowerCase().includes('subscription update');
-            if (isSubscriptionUpdate) {
-              // Проверяем, есть ли subscription creation в тот же день
-              const paymentDate = new Date(p.created * 1000);
-              const dateKey = paymentDate.toISOString().split('T')[0];
-              
-              const hasCreationSameDay = allPayments.some(otherPayment => {
-                if (otherPayment.id === p.id) return false;
-                const otherDate = new Date(otherPayment.created * 1000);
-                const otherDateKey = otherDate.toISOString().split('T')[0];
-                
-                if (otherDateKey !== dateKey) return false;
-                
-                const isCreation = otherPayment.description && (
-                  otherPayment.description.toLowerCase().includes('subscription creation') ||
-                  otherPayment.description.toLowerCase().includes('w2w:stripe: subscription creation')
-                );
-                
-                return isCreation && otherPayment.status === 'succeeded';
-              });
-              
-              // Включаем только если есть creation в тот же день (это апселл)
-              return hasCreationSameDay;
+            if (p.description && p.description.toLowerCase().includes('subscription update')) {
+              return false;
             }
-            
-            // Все остальные платежи включаем
             return true;
           });
           
-          // Сортируем по дате создания (первая покупка)
+          // Sort by creation date (first payment)
           allSuccessfulPayments.sort((a, b) => a.created - b.created);
           const firstPayment = allSuccessfulPayments[0];
           
           const rowData = formatPaymentForSheetsLowPrice(firstPayment, customer);
           
-          // ✅ Суммируем ВСЕ платежи клиента (основная покупка + все апселлы)
+          // Sum all payments
           let totalAmount = 0;
           const paymentIds = [];
           for (const p of allSuccessfulPayments) {
@@ -3825,21 +3661,24 @@ async function performSyncLogicLowPrice(exportAll = false) {
           rowData['Payment Count'] = allSuccessfulPayments.length.toString();
           rowData['Payment Intent IDs'] = paymentIds.join(', ');
           
-          // 🔒 АТОМАРНОЕ добавление с внутренней блокировкой (предотвращает дубликаты)
-          // ✅ Используем лист "LowPrice" напрямую через googleSheets с указанием листа
+          // ✅ КРИТИЧЕСКИ ВАЖНО: Атомарное добавление в лист LowPrice
           const originalSheet = googleSheets.sheet;
-          googleSheets.sheet = lowPriceSheet;
+          googleSheets.sheet = lowPriceSheet; // Устанавливаем лист LowPrice
+          logger.debug(`📝 Adding to LowPrice sheet: "${lowPriceSheet.title}"`);
           const addResult = await googleSheets.addRowIfNotExists(rowData, 'Customer ID');
           googleSheets.sheet = originalSheet; // Восстанавливаем
           
-          // ✅ КРИТИЧЕСКИ ВАЖНО: Проверяем результат операции
-          // Если строка уже существует - это НЕ ошибка, нужно обновить
-          if (addResult.exists) {
-            // Кто-то добавил строку между нашими проверками!
+          if (!addResult.success) {
+            logger.error(`❌ Failed to add Low Price customer ${customerId}`, {
+              exists: addResult.exists,
+              action: addResult.action,
+              reason: addResult.reason
+            });
+            results.failed++;
+          } else if (addResult.exists) {
             logger.warn(`⚠️ Low Price row appeared during atomic add for ${customerId} - converting to update`);
             results.duplicatesAvoided++;
             
-            // Обновляем существующую строку (включая время) в листе "LowPrice"
             await fetchWithRetry(() => 
               addResult.row.save({
                 'Total Amount': rowData['Total Amount'],
@@ -3850,20 +3689,16 @@ async function performSyncLogicLowPrice(exportAll = false) {
               })
             );
             
-            // Add LA time formula to column G
             await addLaTimeFormulaToLowPriceSheet(addResult.row.rowNumber);
-            
             results.updatedPurchases++;
           } else {
-            // Успешно добавили - ТОЛЬКО ТЕПЕРЬ отправляем уведомление
-            // Add LA time formula to column G
+            // Successfully added - send notification
             await addLaTimeFormulaToLowPriceSheet(addResult.row.rowNumber);
-            
             results.newPurchases++;
             
-            logger.info(`✅ Added Low Price customer: ${customerId} (${rowData['Total Amount']} ${rowData['Currency']}, ${allSuccessfulPayments.length} payments including upsells)`);
+            logger.info(`✅ Added Low Price customer ${customerId} with ALL payments: ${allSuccessfulPayments.length} payments, total $${rowData['Total Amount']}`);
             
-            // Send notification for new purchase (ONLY after successful save)
+            // Send notification ONLY if successfully added
             const sheetData = {
               'Ad Name': rowData['Ad Name'] || 'N/A',
               'Adset Name': rowData['Adset Name'] || 'N/A',
@@ -3871,12 +3706,14 @@ async function performSyncLogicLowPrice(exportAll = false) {
               'Creative Link': rowData['Creative Link'] || 'N/A',
               'Total Amount': rowData['Total Amount'],
               'Payment Count': rowData['Payment Count'],
-              'Payment Intent IDs': rowData['Payment Intent IDs'],
-              accountSource: 'FL' // LowPrice Stripe account
+              'Payment Intent IDs': rowData['Payment Intent IDs']
             };
             
-            const notificationMessage = await formatTelegramNotification(firstPayment, customer, sheetData);
-            const amount = parseFloat(rowData['Total Amount']);
+            const notificationMessage = await formatTelegramNotification(firstPayment, customer, {
+              ...sheetData,
+              accountSource: 'FL' // LowPrice Stripe account
+            });
+            const amount = parseFloat(sheetData['Total Amount'] || 0);
             const isVip = amount >= alertConfig.vipPurchaseThreshold;
             
             await notificationQueue.add({
@@ -3889,13 +3726,15 @@ async function performSyncLogicLowPrice(exportAll = false) {
               metadata: {
                 paymentId: firstPayment.id,
                 customerId: customer.id,
-                amount: rowData['Total Amount'],
+                amount: sheetData['Total Amount'],
                 type: 'new_purchase',
                 isVip: isVip,
                 accountSource: 'FL'
               }
             });
           }
+          
+          results.processed++;
         }
         
       } catch (error) {
