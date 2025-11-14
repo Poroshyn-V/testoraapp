@@ -3604,6 +3604,7 @@ async function performSyncLogicLowPrice(exportAll = false) {
         const latestPayment = payments[payments.length - 1];
         
         // ✅ КРИТИЧЕСКИ ВАЖНО: Проверяем существование клиента в листе LowPrice
+        // Используем ПРЯМОЙ доступ к lowPriceSheet, а не через googleSheets.sheet
         logger.info(`🔍 Checking if customer ${customerId} exists in LowPrice sheet "${lowPriceSheet.title}"...`);
         const allLowPriceRows = await lowPriceSheet.getRows();
         const existingCustomers = allLowPriceRows.filter(row => {
@@ -3728,32 +3729,47 @@ async function performSyncLogicLowPrice(exportAll = false) {
           
           logger.info(`💰 Customer ${customerId}: ${allSuccessfulPayments.length} payments, total $${rowData['Total Amount']}`);
           
-          // ✅ КРИТИЧЕСКИ ВАЖНО: Атомарное добавление в лист LowPrice
-          const originalSheet = googleSheets.sheet;
-          googleSheets.sheet = lowPriceSheet; // Устанавливаем лист LowPrice
-          logger.info(`📝 Adding customer ${customerId} to LowPrice sheet: "${lowPriceSheet.title}"`);
+          // ✅ КРИТИЧЕСКИ ВАЖНО: Добавляем НАПРЯМУЮ в lowPriceSheet, без использования googleSheets.sheet
+          logger.info(`📝 Adding customer ${customerId} DIRECTLY to LowPrice sheet: "${lowPriceSheet.title}"`);
           
           let addResult;
           let rowSaved = false;
           try {
-            addResult = await googleSheets.addRowIfNotExists(rowData, 'Customer ID');
-            logger.info(`📊 Add result for ${customerId}:`, {
-              success: addResult.success,
-              exists: addResult.exists,
-              action: addResult.action,
-              rowNumber: addResult.row?.rowNumber
+            // Проверяем существование напрямую в lowPriceSheet
+            const existingInLowPrice = allLowPriceRows.filter(row => {
+              const rowCustomerId = row.get('Customer ID');
+              return rowCustomerId === customerId;
             });
+            
+            if (existingInLowPrice.length > 0) {
+              // Клиент уже существует - обновляем
+              addResult = {
+                success: false,
+                exists: true,
+                action: 'skipped',
+                row: existingInLowPrice[0]
+              };
+              logger.info(`📊 Customer ${customerId} already exists in LowPrice sheet (row ${existingInLowPrice[0].rowNumber})`);
+            } else {
+              // Добавляем новую строку НАПРЯМУЮ в lowPriceSheet
+              const newRow = await lowPriceSheet.addRow(rowData);
+              addResult = {
+                success: true,
+                exists: false,
+                action: 'added',
+                row: newRow
+              };
+              logger.info(`📊 Successfully added customer ${customerId} to LowPrice sheet (row ${newRow.rowNumber})`);
+            }
           } catch (addError) {
             logger.error(`❌ CRITICAL: Failed to add Low Price customer ${customerId} to sheet`, {
               error: addError.message,
               stack: addError.stack,
-              customerId
+              customerId,
+              sheetName: lowPriceSheet.title
             });
             results.failed++;
-            googleSheets.sheet = originalSheet;
             continue; // Пропускаем этого клиента, НЕ отправляем уведомление
-          } finally {
-            googleSheets.sheet = originalSheet; // Восстанавливаем
           }
           
           if (!addResult.success) {
@@ -3763,6 +3779,7 @@ async function performSyncLogicLowPrice(exportAll = false) {
               results.duplicatesAvoided++;
               
               try {
+                // Обновляем существующую строку НАПРЯМУЮ в lowPriceSheet
                 await fetchWithRetry(() => 
                   addResult.row.save({
                     'Total Amount': rowData['Total Amount'],
@@ -3774,12 +3791,13 @@ async function performSyncLogicLowPrice(exportAll = false) {
                 );
                 rowSaved = true;
                 await addLaTimeFormulaToLowPriceSheet(addResult.row.rowNumber);
-                logger.info(`✅ Updated existing Low Price customer ${customerId} in sheet - NO notification sent`);
+                logger.info(`✅ Updated existing Low Price customer ${customerId} in "${lowPriceSheet.title}" sheet - NO notification sent`);
                 results.updatedPurchases++;
               } catch (saveError) {
                 logger.error(`❌ Failed to update existing Low Price customer ${customerId}`, {
                   error: saveError.message,
-                  customerId
+                  customerId,
+                  sheetName: lowPriceSheet.title
                 });
                 results.failed++;
               }
