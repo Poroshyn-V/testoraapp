@@ -3555,17 +3555,6 @@ async function performSyncLogicLowPrice(exportAll = false) {
       };
     }
     
-    if (newPayments.length === 0) {
-      logger.warn(`⚠️ No new payments to process for LowPrice account`);
-      return {
-        success: true,
-        message: `No new payments to process`,
-        ...results,
-        duration: `${Date.now() - startTime}ms`,
-        sheetName: LOW_PRICE_SHEET_NAME
-      };
-    }
-    
     // Group payments by customer
     const customerGroups = new Map();
     for (const payment of newPayments) {
