@@ -5945,37 +5945,45 @@ app.listen(ENV.PORT, () => {
     
     // ✅ Автоматическая синхронизация LowPrice каждые 5 минут
     if (!ENV.AUTO_SYNC_DISABLED && ENV.STRIPE_SECRET_KEY_LOW_PRICE) {
-      console.log('🔄 Starting LowPrice automatic sync every 5 minutes...');
+      const lowPriceSyncInterval = 5 * 60 * 1000; // 5 минут в миллисекундах
+      console.log(`🔄 Starting LowPrice automatic sync every ${lowPriceSyncInterval / 1000 / 60} minutes...`);
       
-      // Первая синхронизация через 30 секунд после основного sync
+      // Первая синхронизация через 1 минуту после старта
       setTimeout(async () => {
         try {
           console.log('🚀 Running initial LowPrice sync...');
           const result = await performSyncLogicLowPrice();
           if (result.success) {
-            console.log(`✅ Initial LowPrice sync completed: ${result.processed || 0} customers processed`);
+            console.log(`✅ Initial LowPrice sync completed: ${result.processed || 0} customers processed, ${result.newPurchases || 0} new, ${result.updatedPurchases || 0} updated`);
           } else {
             console.log(`⚠️ Initial LowPrice sync failed: ${result.message}`);
           }
         } catch (error) {
-          console.error('❌ Initial LowPrice sync failed:', error.message);
+          console.error('❌ Initial LowPrice sync failed:', error.message, error.stack);
         }
-      }, 60000); // Через 1 минуту после старта (чтобы не конфликтовать с основным sync)
+      }, 60000); // Через 1 минуту после старта
       
-      // Затем каждые 5 минут
+      // Затем каждые 5 минут (используем фиксированный интервал, не зависимый от alertConfig)
       setInterval(async () => {
         try {
           console.log('🔄 Running scheduled LowPrice sync...');
           const result = await performSyncLogicLowPrice();
           if (result.success) {
-            console.log(`✅ LowPrice sync completed: ${result.processed || 0} customers processed, ${result.updatedPurchases || 0} updated`);
+            console.log(`✅ LowPrice sync completed: ${result.processed || 0} customers processed, ${result.newPurchases || 0} new, ${result.updatedPurchases || 0} updated`);
           } else {
             console.log(`⚠️ LowPrice sync failed: ${result.message}`);
           }
         } catch (error) {
-          console.error('❌ LowPrice sync failed:', error.message);
+          console.error('❌ LowPrice sync failed:', error.message, error.stack);
         }
-      }, alertConfig.syncInterval * 60 * 1000); // Те же 5 минут что и основной sync
+      }, lowPriceSyncInterval); // Фиксированные 5 минут
+    } else {
+      if (ENV.AUTO_SYNC_DISABLED) {
+        console.log('⚠️ LowPrice auto sync is DISABLED (AUTO_SYNC_DISABLED is set)');
+      }
+      if (!ENV.STRIPE_SECRET_KEY_LOW_PRICE) {
+        console.log('⚠️ LowPrice auto sync is DISABLED (STRIPE_SECRET_KEY_LOW_PRICE is not set)');
+      }
     }
     
     // Дополнительная система проверки каждую минуту (fallback)
