@@ -3664,74 +3664,135 @@ async function performSyncLogicLowPrice(exportAll = false) {
           // ✅ КРИТИЧЕСКИ ВАЖНО: Атомарное добавление в лист LowPrice
           const originalSheet = googleSheets.sheet;
           googleSheets.sheet = lowPriceSheet; // Устанавливаем лист LowPrice
-          logger.debug(`📝 Adding to LowPrice sheet: "${lowPriceSheet.title}"`);
-          const addResult = await googleSheets.addRowIfNotExists(rowData, 'Customer ID');
-          googleSheets.sheet = originalSheet; // Восстанавливаем
+          logger.info(`📝 Adding customer ${customerId} to LowPrice sheet: "${lowPriceSheet.title}"`);
           
-          if (!addResult.success) {
-            logger.error(`❌ Failed to add Low Price customer ${customerId}`, {
+          let addResult;
+          let rowSaved = false;
+          try {
+            addResult = await googleSheets.addRowIfNotExists(rowData, 'Customer ID');
+            logger.info(`📊 Add result for ${customerId}:`, {
+              success: addResult.success,
               exists: addResult.exists,
               action: addResult.action,
-              reason: addResult.reason
+              rowNumber: addResult.row?.rowNumber
+            });
+          } catch (addError) {
+            logger.error(`❌ CRITICAL: Failed to add Low Price customer ${customerId} to sheet`, {
+              error: addError.message,
+              stack: addError.stack,
+              customerId
             });
             results.failed++;
-          } else if (addResult.exists) {
-            logger.warn(`⚠️ Low Price row appeared during atomic add for ${customerId} - converting to update`);
-            results.duplicatesAvoided++;
+            googleSheets.sheet = originalSheet;
+            continue; // Пропускаем этого клиента, НЕ отправляем уведомление
+          } finally {
+            googleSheets.sheet = originalSheet; // Восстанавливаем
+          }
+          
+          if (!addResult.success) {
+            if (addResult.exists) {
+              // Строка уже существует - обновляем БЕЗ уведомления
+              logger.warn(`⚠️ Low Price customer ${customerId} already exists - updating without notification`);
+              results.duplicatesAvoided++;
+              
+              try {
+                await fetchWithRetry(() => 
+                  addResult.row.save({
+                    'Total Amount': rowData['Total Amount'],
+                    'Payment Count': rowData['Payment Count'],
+                    'Payment Intent IDs': rowData['Payment Intent IDs'],
+                    'Created UTC': rowData['Created UTC'],
+                    'Created Local (LA Time)': rowData['Created Local (LA Time)']
+                  })
+                );
+                rowSaved = true;
+                await addLaTimeFormulaToLowPriceSheet(addResult.row.rowNumber);
+                logger.info(`✅ Updated existing Low Price customer ${customerId} in sheet - NO notification sent`);
+                results.updatedPurchases++;
+              } catch (saveError) {
+                logger.error(`❌ Failed to update existing Low Price customer ${customerId}`, {
+                  error: saveError.message,
+                  customerId
+                });
+                results.failed++;
+              }
+            } else {
+              // Ошибка при добавлении - НЕ отправляем уведомление
+              logger.error(`❌ Failed to add Low Price customer ${customerId}`, {
+                exists: addResult.exists,
+                action: addResult.action,
+                reason: addResult.reason,
+                customerId
+              });
+              results.failed++;
+            }
+          } else if (addResult.success && !addResult.exists) {
+            // ✅ УСПЕШНО ДОБАВЛЕНО - проверяем, что строка действительно в таблице
+            try {
+              await addLaTimeFormulaToLowPriceSheet(addResult.row.rowNumber);
+              
+              // Дополнительная проверка: убеждаемся, что строка сохранена
+              const verifyRows = await lowPriceSheet.getRows();
+              const verifyRow = verifyRows.find(r => r.get('Customer ID') === customerId);
+              
+              if (!verifyRow) {
+                logger.error(`❌ CRITICAL: Row for ${customerId} not found in sheet after add! NOT sending notification.`);
+                results.failed++;
+                rowSaved = false;
+              } else {
+                rowSaved = true;
+                results.newPurchases++;
+                logger.info(`✅ VERIFIED: Low Price customer ${customerId} successfully added to sheet (row ${verifyRow.rowNumber})`);
+              }
+            } catch (verifyError) {
+              logger.error(`❌ CRITICAL: Error verifying row for ${customerId}`, {
+                error: verifyError.message,
+                customerId
+              });
+              results.failed++;
+              rowSaved = false;
+            }
             
-            await fetchWithRetry(() => 
-              addResult.row.save({
+            // ✅ ОТПРАВЛЯЕМ УВЕДОМЛЕНИЕ ТОЛЬКО ЕСЛИ СТРОКА УСПЕШНО СОХРАНЕНА В ТАБЛИЦУ
+            if (rowSaved) {
+              const sheetData = {
+                'Ad Name': rowData['Ad Name'] || 'N/A',
+                'Adset Name': rowData['Adset Name'] || 'N/A',
+                'Campaign Name': rowData['Campaign Name'] || 'N/A',
+                'Creative Link': rowData['Creative Link'] || 'N/A',
                 'Total Amount': rowData['Total Amount'],
                 'Payment Count': rowData['Payment Count'],
-                'Payment Intent IDs': rowData['Payment Intent IDs'],
-                'Created UTC': rowData['Created UTC'],
-                'Created Local (LA Time)': rowData['Created Local (LA Time)']
-              })
-            );
-            
-            await addLaTimeFormulaToLowPriceSheet(addResult.row.rowNumber);
-            results.updatedPurchases++;
-          } else {
-            // Successfully added - send notification
-            await addLaTimeFormulaToLowPriceSheet(addResult.row.rowNumber);
-            results.newPurchases++;
-            
-            logger.info(`✅ Added Low Price customer ${customerId} with ALL payments: ${allSuccessfulPayments.length} payments, total $${rowData['Total Amount']}`);
-            
-            // Send notification ONLY if successfully added
-            const sheetData = {
-              'Ad Name': rowData['Ad Name'] || 'N/A',
-              'Adset Name': rowData['Adset Name'] || 'N/A',
-              'Campaign Name': rowData['Campaign Name'] || 'N/A',
-              'Creative Link': rowData['Creative Link'] || 'N/A',
-              'Total Amount': rowData['Total Amount'],
-              'Payment Count': rowData['Payment Count'],
-              'Payment Intent IDs': rowData['Payment Intent IDs']
-            };
-            
-            const notificationMessage = await formatTelegramNotification(firstPayment, customer, {
-              ...sheetData,
-              accountSource: 'FL' // LowPrice Stripe account
-            });
-            const amount = parseFloat(sheetData['Total Amount'] || 0);
-            const isVip = amount >= alertConfig.vipPurchaseThreshold;
-            
-            await notificationQueue.add({
-              type: isVip ? 'vip_new_purchase' : 'new_purchase',
-              channel: 'telegram',
-              message: notificationMessage,
-              payment: firstPayment,
-              customer: customer,
-              sheetData: sheetData,
-              metadata: {
-                paymentId: firstPayment.id,
-                customerId: customer.id,
-                amount: sheetData['Total Amount'],
-                type: 'new_purchase',
-                isVip: isVip,
-                accountSource: 'FL'
-              }
-            });
+                'Payment Intent IDs': rowData['Payment Intent IDs']
+              };
+              
+              const notificationMessage = await formatTelegramNotification(firstPayment, customer, {
+                ...sheetData,
+                accountSource: 'FL' // LowPrice Stripe account
+              });
+              const amount = parseFloat(sheetData['Total Amount'] || 0);
+              const isVip = amount >= alertConfig.vipPurchaseThreshold;
+              
+              logger.info(`📬 Sending notification for NEW Low Price purchase: ${customerId} (${rowData['Total Amount']} USD)`);
+              
+              await notificationQueue.add({
+                type: isVip ? 'vip_new_purchase' : 'new_purchase',
+                channel: 'telegram',
+                message: notificationMessage,
+                payment: firstPayment,
+                customer: customer,
+                sheetData: sheetData,
+                metadata: {
+                  paymentId: firstPayment.id,
+                  customerId: customer.id,
+                  amount: sheetData['Total Amount'],
+                  type: 'new_purchase',
+                  isVip: isVip,
+                  accountSource: 'FL'
+                }
+              });
+            } else {
+              logger.error(`❌ NOT sending notification for ${customerId} - row not saved to sheet!`);
+            }
           }
           
           results.processed++;
