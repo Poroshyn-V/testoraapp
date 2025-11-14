@@ -2967,15 +2967,22 @@ async function performSyncLogic() {
       
       logger.info(`🆕 Processing ${newPayments.length} new payments, avoided ${results.duplicatesAvoided} duplicates`);
       
-      // Group payments by customer
-      const customerGroups = new Map();
-      for (const payment of newPayments) {
-        const customerId = payment.customer;
-        if (!customerGroups.has(customerId)) {
-          customerGroups.set(customerId, []);
-        }
-        customerGroups.get(customerId).push(payment);
+    // Group payments by customer
+    const customerGroups = new Map();
+    for (const payment of newPayments) {
+      const customerId = payment.customer;
+      if (!customerId) {
+        logger.warn(`⚠️ Payment ${payment.id} has no customer ID, skipping`);
+        results.skipped++;
+        continue;
       }
+      if (!customerGroups.has(customerId)) {
+        customerGroups.set(customerId, []);
+      }
+      customerGroups.get(customerId).push(payment);
+    }
+    
+    logger.info(`👥 Grouped ${newPayments.length} payments into ${customerGroups.size} customer groups`);
       
       // Process each customer group
       for (const [customerId, payments] of customerGroups.entries()) {
@@ -3529,12 +3536,24 @@ async function performSyncLogicLowPrice(exportAll = false) {
     const newPayments = successfulPayments.filter(p => {
       if (existingPaymentIds.has(p.id)) {
         results.duplicatesAvoided++;
+        logger.debug(`⏭️ Payment ${p.id} already exists in sheet, skipping`);
         return false;
       }
       return true;
     });
     
-    logger.info(`🆕 Processing ${newPayments.length} new Low Price payments, avoided ${results.duplicatesAvoided} duplicates`);
+    logger.info(`🆕 Processing ${newPayments.length} new Low Price payments (out of ${successfulPayments.length} total), avoided ${results.duplicatesAvoided} duplicates`);
+    
+    if (newPayments.length === 0) {
+      logger.info(`ℹ️ No new payments to process for LowPrice account`);
+      return {
+        success: true,
+        message: `No new payments to process`,
+        ...results,
+        duration: `${Date.now() - startTime}ms`,
+        sheetName: LOW_PRICE_SHEET_NAME
+      };
+    }
     
     if (newPayments.length === 0) {
       logger.warn(`⚠️ No new payments to process for LowPrice account`);
@@ -3596,8 +3615,14 @@ async function performSyncLogicLowPrice(exportAll = false) {
         const latestPayment = payments[payments.length - 1];
         
         // Check if customer exists in LowPrice sheet
+        logger.debug(`🔍 Checking if customer ${customerId} exists in LowPrice sheet...`);
         const allLowPriceRows = await lowPriceSheet.getRows();
-        const existingCustomers = allLowPriceRows.filter(row => row.get('Customer ID') === customerId);
+        const existingCustomers = allLowPriceRows.filter(row => {
+          const rowCustomerId = row.get('Customer ID');
+          return rowCustomerId === customerId;
+        });
+        
+        logger.debug(`🔍 Found ${existingCustomers.length} existing rows for customer ${customerId} in LowPrice sheet`);
         
         if (existingCustomers.length > 0) {
           // Customer exists - UPDATE
