@@ -3520,7 +3520,19 @@ async function performSyncLogicLowPrice(exportAll = false) {
     }
     
     // Load existing Payment Intent IDs from LowPrice sheet
-    const existingRows = await lowPriceSheet.getRows();
+    let existingRows;
+    try {
+      existingRows = await lowPriceSheet.getRows();
+      logger.info(`✅ Loaded ${existingRows.length} existing rows from LowPrice sheet`);
+    } catch (error) {
+      logger.error('❌ Failed to load rows from LowPrice sheet', {
+        error: error.message,
+        stack: error.stack,
+        sheetName: LOW_PRICE_SHEET_NAME
+      });
+      throw new Error(`Failed to load rows from LowPrice sheet: ${error.message}`);
+    }
+    
     const existingPaymentIds = new Set();
     
     for (const row of existingRows) {
