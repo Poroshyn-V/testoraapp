@@ -3536,15 +3536,33 @@ async function performSyncLogicLowPrice(exportAll = false) {
     
     logger.info(`🆕 Processing ${newPayments.length} new Low Price payments, avoided ${results.duplicatesAvoided} duplicates`);
     
+    if (newPayments.length === 0) {
+      logger.warn(`⚠️ No new payments to process for LowPrice account`);
+      return {
+        success: true,
+        message: `No new payments to process`,
+        ...results,
+        duration: `${Date.now() - startTime}ms`,
+        sheetName: LOW_PRICE_SHEET_NAME
+      };
+    }
+    
     // Group payments by customer
     const customerGroups = new Map();
     for (const payment of newPayments) {
       const customerId = payment.customer;
+      if (!customerId) {
+        logger.warn(`⚠️ Payment ${payment.id} has no customer ID, skipping`);
+        results.skipped++;
+        continue;
+      }
       if (!customerGroups.has(customerId)) {
         customerGroups.set(customerId, []);
       }
       customerGroups.get(customerId).push(payment);
     }
+    
+    logger.info(`📦 Grouped ${newPayments.length} payments into ${customerGroups.size} customer groups`);
     
     // Process each customer group
     for (const [customerId, payments] of customerGroups.entries()) {
@@ -3631,9 +3649,21 @@ async function performSyncLogicLowPrice(exportAll = false) {
           
         } else {
           // ADD NEW customer - load ALL payments from Stripe
-          logger.info(`Adding new Low Price customer ${customerId} (loading ALL payments from Stripe)`);
+          logger.info(`🆕 Adding NEW Low Price customer ${customerId} (loading ALL payments from Stripe)`);
           
-          const allPayments = await fetchWithRetry(() => getCustomerPaymentsLowPrice(customerId));
+          let allPayments;
+          try {
+            allPayments = await fetchWithRetry(() => getCustomerPaymentsLowPrice(customerId));
+            logger.info(`📥 Loaded ${allPayments.length} total payments for customer ${customerId} from Stripe`);
+          } catch (paymentsError) {
+            logger.error(`❌ Failed to load payments for customer ${customerId}`, {
+              error: paymentsError.message,
+              customerId
+            });
+            results.failed++;
+            continue;
+          }
+          
           const allSuccessfulPayments = allPayments.filter(p => {
             if (p.status !== 'succeeded' || !p.customer) return false;
             if (p.description && p.description.toLowerCase().includes('subscription update')) {
@@ -3642,11 +3672,32 @@ async function performSyncLogicLowPrice(exportAll = false) {
             return true;
           });
           
+          logger.info(`✅ Filtered to ${allSuccessfulPayments.length} successful payments for customer ${customerId}`);
+          
+          if (allSuccessfulPayments.length === 0) {
+            logger.warn(`⚠️ No successful payments for customer ${customerId}, skipping`);
+            results.skipped++;
+            continue;
+          }
+          
           // Sort by creation date (first payment)
           allSuccessfulPayments.sort((a, b) => a.created - b.created);
           const firstPayment = allSuccessfulPayments[0];
           
-          const rowData = formatPaymentForSheetsLowPrice(firstPayment, customer);
+          logger.info(`📝 Formatting row data for customer ${customerId}, first payment: ${firstPayment.id}`);
+          
+          let rowData;
+          try {
+            rowData = formatPaymentForSheetsLowPrice(firstPayment, customer);
+          } catch (formatError) {
+            logger.error(`❌ Failed to format payment data for customer ${customerId}`, {
+              error: formatError.message,
+              customerId,
+              paymentId: firstPayment.id
+            });
+            results.failed++;
+            continue;
+          }
           
           // Sum all payments
           let totalAmount = 0;
@@ -3660,6 +3711,8 @@ async function performSyncLogicLowPrice(exportAll = false) {
           rowData['Total Amount'] = (totalAmount / 100).toFixed(2);
           rowData['Payment Count'] = allSuccessfulPayments.length.toString();
           rowData['Payment Intent IDs'] = paymentIds.join(', ');
+          
+          logger.info(`💰 Customer ${customerId}: ${allSuccessfulPayments.length} payments, total $${rowData['Total Amount']}`);
           
           // ✅ КРИТИЧЕСКИ ВАЖНО: Атомарное добавление в лист LowPrice
           const originalSheet = googleSheets.sheet;
