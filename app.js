@@ -3473,40 +3473,50 @@ async function performSyncLogicLowPrice(exportAll = false) {
     // Try to load headers, if they don't exist, create them
     try {
       await lowPriceSheet.loadHeaderRow();
+      logger.info(`✅ LowPrice sheet headers loaded successfully`);
     } catch (error) {
       // Headers don't exist, create them for LowPrice (UTC and LA time only)
-      logger.info(`Creating headers for LowPrice sheet...`);
-      const headers = [
-        'Purchase ID',
-        'Created UTC',
-        'Created Local (LA Time)',
-        'Payment Intent IDs',
-        'Total Amount',
-        'Currency',
-        'Status',
-        'Customer ID',
-        'Email',
-        'GEO',
-        'Gender',
-        'Age',
-        'Product Tag',
-        'Creative Link',
-        'UTM Source',
-        'UTM Medium',
-        'UTM Campaign',
-        'UTM Content',
-        'UTM Term',
-        'Platform Placement',
-        'Ad Name',
-        'Adset Name',
-        'Campaign Name',
-        'Web Campaign',
-        'Client Reference ID',
-        'Mode',
-        'Raw Metadata JSON'
-      ];
-      await lowPriceSheet.setHeaderRow(headers);
-      logger.info('Headers created for LowPrice sheet (UTC and LA time only)');
+      logger.info(`Creating headers for LowPrice sheet... (error: ${error.message})`);
+      try {
+        const headers = [
+          'Purchase ID',
+          'Created UTC',
+          'Created Local (LA Time)',
+          'Payment Intent IDs',
+          'Total Amount',
+          'Currency',
+          'Status',
+          'Customer ID',
+          'Email',
+          'GEO',
+          'Gender',
+          'Age',
+          'Product Tag',
+          'Creative Link',
+          'UTM Source',
+          'UTM Medium',
+          'UTM Campaign',
+          'UTM Content',
+          'UTM Term',
+          'Platform Placement',
+          'Ad Name',
+          'Adset Name',
+          'Campaign Name',
+          'Web Campaign',
+          'Client Reference ID',
+          'Mode',
+          'Raw Metadata JSON'
+        ];
+        await lowPriceSheet.setHeaderRow(headers);
+        logger.info('✅ Headers created for LowPrice sheet (UTC and LA time only)');
+      } catch (headerError) {
+        logger.error('❌ Failed to create headers for LowPrice sheet', {
+          error: headerError.message,
+          stack: headerError.stack,
+          sheetName: LOW_PRICE_SHEET_NAME
+        });
+        throw new Error(`Failed to create headers for LowPrice sheet: ${headerError.message}`);
+      }
     }
     
     // Load existing Payment Intent IDs from LowPrice sheet
@@ -3956,15 +3966,30 @@ async function performSyncLogicLowPrice(exportAll = false) {
     logger.error('Critical Low Price sync error', {
       error: error.message,
       stack: error.stack,
-      duration: `${duration}ms`
+      duration: `${duration}ms`,
+      errorName: error.name,
+      errorType: error.constructor?.name,
+      sheetName: LOW_PRICE_SHEET_NAME,
+      hasStripeLowPrice: !!stripeLowPrice,
+      hasEnvKey: !!ENV.STRIPE_SECRET_KEY_LOW_PRICE
+    });
+    
+    // Логируем детали ошибки для отладки
+    console.error('❌ LowPrice sync error details:', {
+      message: error.message,
+      name: error.name,
+      stack: error.stack,
+      sheetName: LOW_PRICE_SHEET_NAME
     });
     
     return {
       success: false,
-      message: 'Critical Low Price sync error occurred',
+      message: `Critical Low Price sync error: ${error.message}`,
       error: error.message,
+      errorName: error.name,
       partialResults: results,
-      duration: `${duration}ms`
+      duration: `${duration}ms`,
+      sheetName: LOW_PRICE_SHEET_NAME
     };
   }
 }
