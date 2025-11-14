@@ -3603,15 +3603,15 @@ async function performSyncLogicLowPrice(exportAll = false) {
         const firstPayment = payments[0];
         const latestPayment = payments[payments.length - 1];
         
-        // Check if customer exists in LowPrice sheet
-        logger.debug(`🔍 Checking if customer ${customerId} exists in LowPrice sheet...`);
+        // ✅ КРИТИЧЕСКИ ВАЖНО: Проверяем существование клиента в листе LowPrice
+        logger.info(`🔍 Checking if customer ${customerId} exists in LowPrice sheet "${lowPriceSheet.title}"...`);
         const allLowPriceRows = await lowPriceSheet.getRows();
         const existingCustomers = allLowPriceRows.filter(row => {
           const rowCustomerId = row.get('Customer ID');
           return rowCustomerId === customerId;
         });
         
-        logger.debug(`🔍 Found ${existingCustomers.length} existing rows for customer ${customerId} in LowPrice sheet`);
+        logger.info(`🔍 Found ${existingCustomers.length} existing rows for customer ${customerId} in LowPrice sheet "${lowPriceSheet.title}"`);
         
         if (existingCustomers.length > 0) {
           // Customer exists - UPDATE
