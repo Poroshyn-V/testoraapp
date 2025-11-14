@@ -3068,41 +3068,9 @@ async function performSyncLogic() {
               paymentCount: paymentCountAll.toString()
             });
             
-            // Send notification
-            const sheetData = {
-              'Ad Name': existingCustomers[0].get('Ad Name') || 'N/A',
-              'Adset Name': existingCustomers[0].get('Adset Name') || 'N/A',
-              'Campaign Name': existingCustomers[0].get('Campaign Name') || 'N/A',
-              'Creative Link': existingCustomers[0].get('Creative Link') || 'N/A',
-              'Total Amount': (totalAmountAll / 100).toFixed(2),
-              'Payment Count': paymentCountAll.toString(),
-              'Payment Intent IDs': paymentIdsAll.join(', ')
-            };
-            
-            // Send notification via queue (VIP alert will be included if applicable)
-            const notificationMessage = await formatTelegramNotification(latestPaymentForUpdate, customer, {
-              ...sheetData,
-              accountSource: 'W2W' // Main Stripe account (payments sheet)
-            });
-            const amount = parseFloat(sheetData['Total Amount'] || 0);
-            const isVip = amount >= alertConfig.vipPurchaseThreshold;
-            
-            await notificationQueue.add({
-              type: isVip ? 'vip_upsell_purchase' : 'upsell_purchase',
-              channel: 'telegram',
-              message: notificationMessage,
-              payment: latestPaymentForUpdate,
-              customer: customer,
-              sheetData: sheetData,
-              metadata: {
-                paymentId: latestPaymentForUpdate.id, // ✅ Fixed: use latestPaymentForUpdate.id instead of latestPayment.id
-                customerId: customer.id,
-                amount: sheetData['Total Amount'],
-                type: 'upsell',
-                isVip: isVip,
-                accountSource: 'W2W'
-              }
-            });
+            // ❌ УБРАЛИ УВЕДОМЛЕНИЯ ПРИ ОБНОВЛЕНИИ - это вызывало спам!
+            // Уведомления отправляются ТОЛЬКО для новых покупок, не для обновлений существующих
+            logger.info(`✅ Updated existing customer ${customerId} - no notification sent (to prevent spam)`);
             
             results.updatedPurchases++;
             results.processed++;
@@ -3158,8 +3126,8 @@ async function performSyncLogic() {
                 reason: addResult.reason
               });
               results.failed++;
-              continue; // Пропускаем отправку уведомления
-            }
+              // Не используем continue здесь - просто пропускаем отправку уведомления
+            } else {
             
             if (addResult.exists) {
               // Кто-то добавил строку между нашими проверками!
