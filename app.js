@@ -3015,8 +3015,7 @@ async function performSyncLogic() {
           const firstPayment = payments[0];
           const latestPayment = payments[payments.length - 1];
           
-          // 🔍 ТРОЙНАЯ ПРОВЕРКА перед обработкой (критично!)
-          // ✅ Используем лист "payments" напрямую
+          // ✅ КРИТИЧЕСКИ ВАЖНО: Загружаем все строки из листа "payments" ОДИН РАЗ для всех операций
           const allMainRows = await mainSheet.getRows();
           const existingCustomers = allMainRows.filter(row => row.get('Customer ID') === customerId);
           
@@ -3116,13 +3115,34 @@ async function performSyncLogic() {
             rowData['Payment Count'] = allSuccessfulPayments.length.toString();
             rowData['Payment Intent IDs'] = paymentIds.join(', ');
             
-            // 🔒 АТОМАРНОЕ добавление с внутренней блокировкой
-            // ✅ Используем лист "payments" напрямую через googleSheets с указанием листа
-            // Временно устанавливаем правильный лист
-            const originalSheet = googleSheets.sheet;
-            googleSheets.sheet = mainSheet;
-            const addResult = await googleSheets.addRowIfNotExists(rowData, 'Customer ID');
-            googleSheets.sheet = originalSheet; // Восстанавливаем
+            // ✅ КРИТИЧЕСКИ ВАЖНО: Добавляем НАПРЯМУЮ в mainSheet, без использования googleSheets.sheet
+            // Проверяем существование напрямую в mainSheet
+            const existingInMain = allMainRows.filter(row => {
+              const rowCustomerId = row.get('Customer ID');
+              return rowCustomerId === customerId;
+            });
+            
+            let addResult;
+            if (existingInMain.length > 0) {
+              // Клиент уже существует - обновляем
+              addResult = {
+                success: false,
+                exists: true,
+                action: 'skipped',
+                row: existingInMain[0]
+              };
+              logger.info(`📊 Customer ${customerId} already exists in payments sheet (row ${existingInMain[0].rowNumber})`);
+            } else {
+              // Добавляем новую строку НАПРЯМУЮ в mainSheet
+              const newRow = await mainSheet.addRow(rowData);
+              addResult = {
+                success: true,
+                exists: false,
+                action: 'added',
+                row: newRow
+              };
+              logger.info(`📊 Successfully added customer ${customerId} to payments sheet (row ${newRow.rowNumber})`);
+            }
             
             // ✅ КРИТИЧЕСКИ ВАЖНО: Проверяем успешность операции
             if (!addResult.success) {
