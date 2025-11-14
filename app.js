@@ -3126,10 +3126,8 @@ async function performSyncLogic() {
                 reason: addResult.reason
               });
               results.failed++;
-              // Не используем continue здесь - просто пропускаем отправку уведомления
-            } else {
-            
-            if (addResult.exists) {
+              // Пропускаем дальнейшую обработку для этого клиента
+            } else if (addResult.exists) {
               // Кто-то добавил строку между нашими проверками!
               logger.warn(`⚠️ Row appeared during atomic add for ${customerId} - converting to update`);
               results.duplicatesAvoided++;
