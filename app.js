@@ -3689,13 +3689,40 @@ async function performSyncLogicLowPrice(exportAll = false) {
           logger.info(`Updating existing Low Price customer ${customerId}`);
           
           const allPayments = await fetchWithRetry(() => getCustomerPaymentsLowPrice(customerId));
-          // ✅ ВКЛЮЧАЕМ ВСЕ успешные платежи (включая subscription update - это могут быть апселлы!)
-          // Исключаем только тестовые платежи $0.60
+          // ✅ Фильтруем платежи: включаем только покупки и апселлы (subscription update в тот же день)
+          // Исключаем тестовые платежи $0.60
           const allSuccessfulPayments = allPayments.filter(p => {
             if (p.status !== 'succeeded' || !p.customer) return false;
-            // ✅ УБРАЛИ исключение subscription update - это могут быть реальные апселлы!
             // Exclude test payments of $0.60
             if (p.amount === 60) return false;
+            
+            // Проверяем subscription update - включаем только если это апселл (есть creation в тот же день)
+            const isSubscriptionUpdate = p.description && p.description.toLowerCase().includes('subscription update');
+            if (isSubscriptionUpdate) {
+              // Проверяем, есть ли subscription creation в тот же день
+              const paymentDate = new Date(p.created * 1000);
+              const dateKey = paymentDate.toISOString().split('T')[0];
+              
+              const hasCreationSameDay = allPayments.some(otherPayment => {
+                if (otherPayment.id === p.id) return false;
+                const otherDate = new Date(otherPayment.created * 1000);
+                const otherDateKey = otherDate.toISOString().split('T')[0];
+                
+                if (otherDateKey !== dateKey) return false;
+                
+                const isCreation = otherPayment.description && (
+                  otherPayment.description.toLowerCase().includes('subscription creation') ||
+                  otherPayment.description.toLowerCase().includes('w2w:stripe: subscription creation')
+                );
+                
+                return isCreation && otherPayment.status === 'succeeded';
+              });
+              
+              // Включаем только если есть creation в тот же день (это апселл)
+              return hasCreationSameDay;
+            }
+            
+            // Все остальные платежи включаем
             return true;
           });
           
