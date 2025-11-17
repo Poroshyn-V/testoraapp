@@ -3542,11 +3542,14 @@ async function performSyncLogicLowPrice(exportAll = false) {
       : await fetchWithRetry(() => getRecentPaymentsLowPrice(100));
     
     // Filter successful payments (same logic as main account)
+    // ✅ КРИТИЧЕСКИ ВАЖНО: Исключаем тестовые платежи $0.60 (они возвращаются)
     const successfulPayments = payments.filter(p => {
       if (p.status !== 'succeeded' || !p.customer) return false;
       if (p.description && p.description.toLowerCase().includes('subscription update')) {
         return false;
       }
+      // Исключаем тестовые платежи $0.60 (60 центов = 60 в Stripe API)
+      if (p.amount === 60) return false;
       return true;
     });
     
