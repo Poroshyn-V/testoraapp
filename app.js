@@ -3647,6 +3647,8 @@ async function performSyncLogicLowPrice(exportAll = false) {
             if (p.description && p.description.toLowerCase().includes('subscription update')) {
               return false;
             }
+            // ✅ Исключаем тестовые платежи $0.60 (они возвращаются)
+            if (p.amount === 60) return false;
             return true;
           });
           
