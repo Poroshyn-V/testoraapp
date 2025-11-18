@@ -3543,12 +3543,23 @@ async function performSyncLogicLowPrice(exportAll = false) {
     
     // Filter successful payments (same logic as main account)
     // ✅ КРИТИЧЕСКИ ВАЖНО: Исключаем тестовые платежи $0.60 (они возвращаются)
+    // ✅ Также исключаем reversed/refunded/canceled платежи
     const successfulPayments = payments.filter(p => {
+      // Сначала исключаем все неподходящие статусы
       if (p.status !== 'succeeded' || !p.customer) return false;
+      // Исключаем reversed/refunded/canceled платежи (они возвращены или отменены)
+      if (p.status === 'reversed' || p.status === 'refunded' || p.status === 'canceled') return false;
+      // Проверяем charges на наличие refunded/reversed
+      if (p.charges && p.charges.data) {
+        const hasRefunded = p.charges.data.some(charge => 
+          charge.refunded || charge.status === 'refunded' || charge.status === 'reversed'
+        );
+        if (hasRefunded) return false;
+      }
       if (p.description && p.description.toLowerCase().includes('subscription update')) {
         return false;
       }
-      // Исключаем тестовые платежи $0.60 (60 центов = 60 в Stripe API)
+      // Исключаем тестовые платежи $0.60 (60 центов = 60 в Stripe API) - они всегда возвращаются
       if (p.amount === 60) return false;
       return true;
     });
@@ -3644,6 +3655,15 @@ async function performSyncLogicLowPrice(exportAll = false) {
           const allPayments = await fetchWithRetry(() => getCustomerPaymentsLowPrice(customerId));
           const allSuccessfulPayments = allPayments.filter(p => {
             if (p.status !== 'succeeded' || !p.customer) return false;
+            // ✅ Исключаем reversed/refunded/canceled платежи (они возвращены или отменены)
+            if (p.status === 'reversed' || p.status === 'refunded' || p.status === 'canceled') return false;
+            // Проверяем charges на наличие refunded/reversed
+            if (p.charges && p.charges.data) {
+              const hasRefunded = p.charges.data.some(charge => 
+                charge.refunded || charge.status === 'refunded' || charge.status === 'reversed'
+              );
+              if (hasRefunded) return false;
+            }
             if (p.description && p.description.toLowerCase().includes('subscription update')) {
               return false;
             }
@@ -3709,10 +3729,12 @@ async function performSyncLogicLowPrice(exportAll = false) {
             if (p.description && p.description.toLowerCase().includes('subscription update')) {
               return false;
             }
+            // ✅ Исключаем тестовые платежи $0.60 (они возвращаются)
+            if (p.amount === 60) return false;
             return true;
           });
           
-          logger.info(`✅ Filtered to ${allSuccessfulPayments.length} successful payments for customer ${customerId}`);
+          logger.info(`✅ Filtered to ${allSuccessfulPayments.length} successful payments for customer ${customerId} (excluded $0.6 test payments)`);
           
           if (allSuccessfulPayments.length === 0) {
             logger.warn(`⚠️ No successful payments for customer ${customerId}, skipping`);
