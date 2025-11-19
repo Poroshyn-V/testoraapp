@@ -3704,9 +3704,11 @@ async function performSyncLogicLowPrice(exportAll = false) {
           results.processed++;
           
         } else {
-          // ADD NEW customer - load ALL payments from Stripe
-          logger.info(`🆕 Adding NEW Low Price customer ${customerId} (loading ALL payments from Stripe)`);
+          // ADD NEW customer - load ALL payments from Stripe (including all upsells)
+          logger.info(`Adding new Low Price customer ${customerId} (loading ALL payments from Stripe)`);
           
+          // ✅ КРИТИЧЕСКИ ВАЖНО: Загружаем ВСЕ платежи клиента из Stripe (не только новые из группы)
+          // Это гарантирует, что основная покупка + все апселлы будут суммированы вместе
           let allPayments;
           try {
             allPayments = await fetchWithRetry(() => getCustomerPaymentsLowPrice(customerId));
@@ -3736,7 +3738,7 @@ async function performSyncLogicLowPrice(exportAll = false) {
             continue;
           }
           
-          // Sort by creation date (first payment)
+          // Сортируем по дате создания (первая покупка)
           allSuccessfulPayments.sort((a, b) => a.created - b.created);
           const firstPayment = allSuccessfulPayments[0];
           
@@ -3755,7 +3757,7 @@ async function performSyncLogicLowPrice(exportAll = false) {
             continue;
           }
           
-          // Sum all payments
+          // ✅ Суммируем ВСЕ платежи клиента (основная покупка + все апселлы)
           let totalAmount = 0;
           const paymentIds = [];
           for (const p of allSuccessfulPayments) {
