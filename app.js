@@ -3650,6 +3650,8 @@ async function performSyncLogicLowPrice(exportAll = false) {
           // Customer exists - UPDATE
           logger.info(`Updating existing Low Price customer ${customerId}`);
           
+          // ✅ КРИТИЧЕСКИ ВАЖНО: Загружаем ВСЕ платежи клиента из Stripe для обновления суммы
+          // Это гарантирует, что основная покупка + все апселлы будут суммированы вместе
           const allPayments = await fetchWithRetry(() => getCustomerPaymentsLowPrice(customerId));
           const allSuccessfulPayments = allPayments.filter(p => {
             if (p.status !== 'succeeded' || !p.customer) return false;
@@ -3698,6 +3700,8 @@ async function performSyncLogicLowPrice(exportAll = false) {
           // Add LA time formula
           await addLaTimeFormulaToLowPriceSheet(existingCustomers[0].rowNumber);
           
+          // ❌ УБРАЛИ УВЕДОМЛЕНИЯ ПРИ ОБНОВЛЕНИИ - это вызывало спам!
+          // Уведомления отправляются ТОЛЬКО для новых покупок, не для обновлений существующих
           logger.info(`✅ Updated existing Low Price customer ${customerId} - no notification sent (to prevent spam)`);
           
           results.updatedPurchases++;
