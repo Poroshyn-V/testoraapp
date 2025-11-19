@@ -3556,15 +3556,13 @@ async function performSyncLogicLowPrice(exportAll = false) {
         );
         if (hasRefunded) return false;
       }
-      if (p.description && p.description.toLowerCase().includes('subscription update')) {
-        return false;
-      }
-      // Исключаем тестовые платежи $0.60 (60 центов = 60 в Stripe API) - они всегда возвращаются
+      // ✅ НЕ исключаем subscription update для LowPrice - это апселлы, их нужно включать!
+      // Исключаем только тестовые платежи $0.60 (60 центов = 60 в Stripe API) - они всегда возвращаются
       if (p.amount === 60) return false;
       return true;
     });
     
-    logger.info(`📊 Found ${successfulPayments.length} successful payments from Low Price account`);
+    logger.info(`📊 Found ${successfulPayments.length} successful payments from Low Price account (including upsells)`);
     
     // Filter out existing payments by payment ID
     const newPayments = successfulPayments.filter(p => {
@@ -3664,10 +3662,8 @@ async function performSyncLogicLowPrice(exportAll = false) {
               );
               if (hasRefunded) return false;
             }
-            if (p.description && p.description.toLowerCase().includes('subscription update')) {
-              return false;
-            }
-            // ✅ Исключаем тестовые платежи $0.60 (они возвращаются)
+            // ✅ НЕ исключаем subscription update для LowPrice - это апселлы!
+            // Исключаем только тестовые платежи $0.60 (они возвращаются)
             if (p.amount === 60) return false;
             return true;
           });
@@ -3726,15 +3722,13 @@ async function performSyncLogicLowPrice(exportAll = false) {
           
           const allSuccessfulPayments = allPayments.filter(p => {
             if (p.status !== 'succeeded' || !p.customer) return false;
-            if (p.description && p.description.toLowerCase().includes('subscription update')) {
-              return false;
-            }
-            // ✅ Исключаем тестовые платежи $0.60 (они возвращаются)
+            // ✅ НЕ исключаем subscription update для LowPrice - это апселлы, их нужно включать!
+            // Исключаем только тестовые платежи $0.60 (они возвращаются)
             if (p.amount === 60) return false;
             return true;
           });
           
-          logger.info(`✅ Filtered to ${allSuccessfulPayments.length} successful payments for customer ${customerId} (excluded $0.6 test payments)`);
+          logger.info(`✅ Filtered to ${allSuccessfulPayments.length} successful payments for customer ${customerId} (including upsells, excluded $0.6 test payments)`);
           
           if (allSuccessfulPayments.length === 0) {
             logger.warn(`⚠️ No successful payments for customer ${customerId}, skipping`);
