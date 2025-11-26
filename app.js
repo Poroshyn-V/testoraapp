@@ -794,8 +794,12 @@ app.post('/api/force-notifications', async (req, res) => {
     
     for (const customerId of customerIds) {
       try {
-        // Get customer data from Stripe
-        const customer = await fetchWithRetry(() => getCustomer(customerId));
+        // ✅ OPTIMIZATION: Get customer data and payments in parallel (safe - they're independent)
+        const [customer, payments] = await Promise.all([
+          fetchWithRetry(() => getCustomer(customerId)),
+          fetchWithRetry(() => getCustomerPayments(customerId))
+        ]);
+        
         if (!customer) {
           results.push({
             customerId,
@@ -804,9 +808,6 @@ app.post('/api/force-notifications', async (req, res) => {
           });
           continue;
         }
-        
-        // Get customer payments
-        const payments = await fetchWithRetry(() => getCustomerPayments(customerId));
         const successfulPayments = payments.filter(p => {
           if (p.status !== 'succeeded' || !p.customer) return false;
           if (p.description && p.description.toLowerCase().includes('subscription update')) {
@@ -965,8 +966,12 @@ app.post('/api/export-all-purchases', async (req, res) => {
           continue;
         }
         
-        // Get customer data from Stripe
-        const customer = await fetchWithRetry(() => getCustomer(customerId));
+        // ✅ OPTIMIZATION: Get customer data and payments in parallel (safe - they're independent)
+        const [customer, payments] = await Promise.all([
+          fetchWithRetry(() => getCustomer(customerId)),
+          fetchWithRetry(() => getCustomerPayments(customerId))
+        ]);
+        
         if (!customer) {
           results.failed++;
           results.errors.push({
@@ -976,9 +981,6 @@ app.post('/api/export-all-purchases', async (req, res) => {
           });
           continue;
         }
-        
-        // Get customer payments
-        const payments = await fetchWithRetry(() => getCustomerPayments(customerId));
         const successfulPayments = payments.filter(p => {
           if (p.status !== 'succeeded' || !p.customer) return false;
           if (p.description && p.description.toLowerCase().includes('subscription update')) {
@@ -5008,12 +5010,13 @@ app.post('/api/fix-existing-rows', async (req, res) => {
         const customerId = row.get('Customer ID');
         if (!customerId || customerId === 'N/A') continue;
         
-        // Get customer data from Stripe
-        const customer = await getCustomer(customerId);
-        if (!customer) continue;
+        // ✅ OPTIMIZATION: Get customer data and payments in parallel (safe - they're independent)
+        const [customer, payments] = await Promise.all([
+          getCustomer(customerId),
+          getCustomerPayments(customerId)
+        ]);
         
-        // Get customer payments
-        const payments = await getCustomerPayments(customerId);
+        if (!customer) continue;
         const successfulPayments = payments.filter(p => {
           if (p.status !== 'succeeded' || !p.customer) return false;
           if (p.description && p.description.toLowerCase().includes('subscription update')) {
