@@ -4453,15 +4453,36 @@ app.get('/api/weekly-report', async (req, res) => {
 // GEO alert endpoint
 app.get('/api/hourly-report', async (req, res) => {
   try {
-    logger.info('📊 Generating hourly report...');
+    logger.info('📊 Generating hourly report (manual trigger)...');
     const report = await analytics.generateHourlyReport();
     if (report) {
-      await sendTextNotifications(report);
-      res.json({
-        success: true,
-        message: 'Hourly report generated and sent',
-        report: report
-      });
+      // При ручном вызове тоже проверяем, не был ли уже отправлен отчет за этот час
+      const now = new Date();
+      const today = now.toISOString().split('T')[0];
+      const currentHour = now.getUTCHours();
+      const hourlyReportKey = `hourly_${today}_${currentHour}`;
+      
+      // Отправляем только если еще не был отправлен автоматически
+      if (!sentAlerts.hourlyReport || !sentAlerts.hourlyReport.has(hourlyReportKey)) {
+        await sendTextNotifications(report);
+        sentAlerts.hourlyReport.add(hourlyReportKey);
+        logger.info(`✅ Hourly report sent manually (key: ${hourlyReportKey})`);
+        res.json({
+          success: true,
+          message: 'Hourly report generated and sent',
+          report: report,
+          sent: true
+        });
+      } else {
+        logger.info(`⏭️ Hourly report already sent automatically for this hour (key: ${hourlyReportKey})`);
+        res.json({
+          success: true,
+          message: 'Hourly report already sent automatically for this hour',
+          report: report,
+          sent: false,
+          alreadySent: true
+        });
+      }
     } else {
       res.json({
         success: true,
@@ -4478,51 +4499,15 @@ app.get('/api/hourly-report', async (req, res) => {
   }
 });
 
+// GEO Alert endpoint DISABLED - replaced by Hourly Report
+// Hourly Report includes GEO data with platform breakdown and both Stripe accounts
 app.get('/api/geo-alert', async (req, res) => {
-  try {
-    const now = new Date();
-    const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
-    const today = utcPlus1.toISOString().split('T')[0];
-    const currentHour = utcPlus1.getUTCHours();
-    const currentMinute = utcPlus1.getUTCMinutes();
-    
-    // Защита от спама: не отправляем GEO алерт чаще чем раз в 30 минут
-    const geoAlertKey = `geo_${today}_${currentHour}_${Math.floor(currentMinute / 30)}`;
-    
-    if (sentAlerts.geoAlert && sentAlerts.geoAlert.has(geoAlertKey)) {
-      logger.info('🌍 GEO alert already sent for this 30-minute window, skipping');
-      return res.json({
-        success: true,
-        message: 'GEO alert already sent for this time window'
-      });
-    }
-    
-    const alert = await analytics.generateGeoAlert();
-    
-    if (alert) {
-      await sendTextNotifications(alert);
-      
-      // Отмечаем, что GEO алерт был отправлен
-      sentAlerts.geoAlert.add(geoAlertKey);
-      
-      res.json({
-        success: true,
-        message: 'GEO alert sent successfully'
-      });
-    } else {
-      res.json({
-        success: true,
-        message: 'No data for GEO alert'
-      });
-    }
-  } catch (error) {
-    logger.error('Error generating GEO alert', error);
-    res.status(500).json({
-      success: false,
-      message: 'GEO alert failed',
-      error: error.message
-    });
-  }
+  res.json({
+    success: true,
+    message: 'GEO Alert has been replaced by Hourly Report. Use /api/hourly-report instead.',
+    deprecated: true,
+    replacement: '/api/hourly-report'
+  });
 });
 
 // Daily stats endpoint
@@ -5756,8 +5741,9 @@ async function checkMissedAlerts() {
     });
   }
   
-  // GEO Alert будет отправлен через scheduleGeoAlert (через 30 секунд)
-  // Не отправляем здесь, чтобы избежать дублирования
+  // GEO Alert DISABLED - replaced by Hourly Report
+  // Hourly Report includes GEO data with platform breakdown and both Stripe accounts
+  // Не отправляем GEO Alert здесь, чтобы избежать дублирования с Hourly Report
   
   // Проверяем Creative Alert (должен отправиться в настроенное время)
   if (currentHour >= alertConfig.creativeAlertHours[0] && currentHour < alertConfig.creativeAlertHours[1]) {
@@ -6146,17 +6132,21 @@ app.listen(ENV.PORT, () => {
           
           const hourlyReportKey = `hourly_${today}_${currentHour}`;
           
-          // Отправляем в начале каждого часа (0-1 минута)
+          // Отправляем в начале каждого часа (только в 0-1 минуту, чтобы избежать дублирования)
           if (currentMinute >= 0 && currentMinute <= 1) {
             if (!sentAlerts.hourlyReport || !sentAlerts.hourlyReport.has(hourlyReportKey)) {
-              console.log('📊 Running hourly report...');
+              console.log(`📊 Running hourly report for ${today} ${currentHour}:00 UTC...`);
               // ✅ ПРЯМОЙ ВЫЗОВ
               const report = await analytics.generateHourlyReport();
               if (report) {
                 await sendTextNotifications(report);
                 sentAlerts.hourlyReport.add(hourlyReportKey);
-                console.log('✅ Hourly report completed');
+                console.log(`✅ Hourly report completed and marked as sent (key: ${hourlyReportKey})`);
+              } else {
+                console.log('ℹ️ No purchases found for today, skipping hourly report');
               }
+            } else {
+              console.log(`⏭️ Hourly report already sent for ${today} ${currentHour}:00 UTC (key: ${hourlyReportKey})`);
             }
           }
         } catch (error) {
@@ -6165,34 +6155,15 @@ app.listen(ENV.PORT, () => {
       }, 60 * 1000); // Проверяем каждую минуту
     };
     
-    // GEO Alert every hour (scheduled only, no initial run)
+    // GEO Alert DISABLED - replaced by Hourly Report which includes GEO data
+    // Hourly Report now includes platform breakdown with country stats (US, AU, CA, WW)
+    // and includes data from both Stripe accounts (payments + LowPrice)
     const scheduleGeoAlert = () => {
-      console.log('🌍 Starting hourly GEO alerts...');
-      
-      geoAlertInterval = setInterval(async () => {
-        try {
-          const now = new Date();
-          const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
-          const today = utcPlus1.toISOString().split('T')[0];
-          const currentHour = utcPlus1.getUTCHours();
-          const currentMinute = utcPlus1.getUTCMinutes();
-          
-          const geoAlertKey = `geo_${today}_${currentHour}_${Math.floor(currentMinute / 30)}`;
-          
-          if (!sentAlerts.geoAlert || !sentAlerts.geoAlert.has(geoAlertKey)) {
-            console.log('🌍 Running scheduled GEO alert...');
-            // ✅ ПРЯМОЙ ВЫЗОВ
-            const alert = await analytics.generateGeoAlert();
-            if (alert) {
-              await sendTextNotifications(alert);
-              sentAlerts.geoAlert.add(geoAlertKey);
-              console.log('✅ GEO alert completed');
-            }
-          }
-        } catch (error) {
-          console.error('❌ GEO alert failed:', error.message);
-        }
-      }, alertConfig.geoAlertInterval * 60 * 60 * 1000);
+      console.log('🌍 GEO Alert disabled - using Hourly Report instead');
+      // GEO Alert отключен, так как Hourly Report уже включает эту информацию
+      // и более информативен (показывает платформы и данные из обоих Stripe аккаунтов)
+      // НЕ создаем интервал - функция пустая, чтобы избежать дублирования отчетов
+      return; // Явно выходим, чтобы ничего не делать
     };
     
     // Weekly Report every Monday at 9 AM UTC+1 (8 AM UTC)
@@ -6437,7 +6408,7 @@ app.listen(ENV.PORT, () => {
     console.log('   ✅ Checks Stripe every 5 minutes');
     console.log('   ✅ Adds new purchases to Google Sheets');
     console.log('   ✅ Sends notifications to Telegram and Slack');
-    console.log('   ✅ GEO alerts every hour (scheduled only)');
+    console.log('   ✅ Hourly reports every hour at :00 UTC (replaces GEO alerts, includes both Stripe accounts)');
     console.log('   ✅ Daily stats every morning at 7:00 UTC+1');
     console.log('   ✅ Creative alerts at 10:00 and 22:00 UTC+1');
     console.log('   ✅ Campaign analysis at 11:00 UTC+1');
