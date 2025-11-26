@@ -1142,8 +1142,29 @@ app.post('/api/export-today-purchases', async (req, res) => {
           continue;
         }
         
-        // Get customer data from Stripe
-        const customer = await fetchWithRetry(() => getCustomer(customerId));
+        // ✅ ОПТИМИЗАЦИЯ: Загружаем customer и payments параллельно (они независимы)
+        // Используем Promise.allSettled для надежности - если один запрос упадет, другой все равно выполнится
+        const [customerResult, paymentsResult] = await Promise.allSettled([
+          fetchWithRetry(() => getCustomer(customerId)),
+          fetchWithRetry(() => getCustomerPayments(customerId))
+        ]);
+        
+        // Проверяем результаты
+        if (customerResult.status === 'rejected' || paymentsResult.status === 'rejected') {
+          results.failed++;
+          results.errors.push({
+            customerId,
+            row: row.rowNumber,
+            error: customerResult.status === 'rejected' 
+              ? `Customer fetch failed: ${customerResult.reason?.message}`
+              : `Payments fetch failed: ${paymentsResult.reason?.message}`
+          });
+          continue;
+        }
+        
+        const customer = customerResult.value;
+        const payments = paymentsResult.value;
+        
         if (!customer) {
           results.failed++;
           results.errors.push({
@@ -1153,9 +1174,6 @@ app.post('/api/export-today-purchases', async (req, res) => {
           });
           continue;
         }
-        
-        // Get customer payments
-        const payments = await fetchWithRetry(() => getCustomerPayments(customerId));
         const successfulPayments = payments.filter(p => {
           if (p.status !== 'succeeded' || !p.customer) return false;
           if (p.description && p.description.toLowerCase().includes('subscription update')) {
@@ -3008,7 +3026,31 @@ async function performSyncLogic() {
         }
         
         try {
-          const customer = await fetchWithRetry(() => getCustomer(customerId));
+          // ✅ ОПТИМИЗАЦИЯ: Загружаем customer и rows параллельно (они независимы)
+          // Используем Promise.allSettled для надежности - если один запрос упадет, другой все равно выполнится
+          const [customerResult, rowsResult] = await Promise.allSettled([
+            fetchWithRetry(() => getCustomer(customerId)),
+            mainSheet.getRows()
+          ]);
+          
+          // Проверяем результаты
+          if (customerResult.status === 'rejected') {
+            logger.error(`Failed to fetch customer ${customerId}`, { error: customerResult.reason?.message });
+            results.failed++;
+            results.errors.push({ customerId, error: customerResult.reason?.message });
+            continue;
+          }
+          
+          if (rowsResult.status === 'rejected') {
+            logger.error(`Failed to fetch rows from sheet`, { error: rowsResult.reason?.message });
+            results.failed++;
+            results.errors.push({ customerId, error: 'Failed to load sheet rows' });
+            continue;
+          }
+          
+          const customer = customerResult.value;
+          const allMainRows = rowsResult.value;
+          
           if (!customer) {
             logger.warn(`Customer ${customerId} not found in Stripe`);
             results.skipped += payments.length;
@@ -3020,8 +3062,7 @@ async function performSyncLogic() {
           const firstPayment = payments[0];
           const latestPayment = payments[payments.length - 1];
           
-          // ✅ КРИТИЧЕСКИ ВАЖНО: Загружаем все строки из листа "payments" ОДИН РАЗ для всех операций
-          const allMainRows = await mainSheet.getRows();
+          // ✅ КРИТИЧЕСКИ ВАЖНО: Используем уже загруженные строки
           const existingCustomers = allMainRows.filter(row => row.get('Customer ID') === customerId);
           
           if (existingCustomers.length > 0) {
@@ -3628,7 +3669,32 @@ async function performSyncLogicLowPrice(exportAll = false) {
       }
       
       try {
-        const customer = await fetchWithRetry(() => getCustomerLowPrice(customerId));
+        // ✅ ОПТИМИЗАЦИЯ: Загружаем customer и rows параллельно (они независимы)
+        logger.info(`🔍 Checking if customer ${customerId} exists in LowPrice sheet "${lowPriceSheet.title}"...`);
+        // Используем Promise.allSettled для надежности - если один запрос упадет, другой все равно выполнится
+        const [customerResult, rowsResult] = await Promise.allSettled([
+          fetchWithRetry(() => getCustomerLowPrice(customerId)),
+          lowPriceSheet.getRows()
+        ]);
+        
+        // Проверяем результаты
+        if (customerResult.status === 'rejected') {
+          logger.error(`Failed to fetch Low Price customer ${customerId}`, { error: customerResult.reason?.message });
+          results.failed++;
+          results.errors.push({ customerId, error: customerResult.reason?.message });
+          continue;
+        }
+        
+        if (rowsResult.status === 'rejected') {
+          logger.error(`Failed to fetch rows from LowPrice sheet`, { error: rowsResult.reason?.message });
+          results.failed++;
+          results.errors.push({ customerId, error: 'Failed to load LowPrice sheet rows' });
+          continue;
+        }
+        
+        const customer = customerResult.value;
+        const allLowPriceRows = rowsResult.value;
+        
         if (!customer) {
           logger.warn(`Low Price customer ${customerId} not found in Stripe`);
           results.skipped += payments.length;
@@ -3640,10 +3706,7 @@ async function performSyncLogicLowPrice(exportAll = false) {
         const firstPayment = payments[0];
         const latestPayment = payments[payments.length - 1];
         
-        // ✅ КРИТИЧЕСКИ ВАЖНО: Проверяем существование клиента в листе LowPrice
-        // Используем ПРЯМОЙ доступ к lowPriceSheet, а не через googleSheets.sheet
-        logger.info(`🔍 Checking if customer ${customerId} exists in LowPrice sheet "${lowPriceSheet.title}"...`);
-        const allLowPriceRows = await lowPriceSheet.getRows();
+        // ✅ КРИТИЧЕСКИ ВАЖНО: Используем уже загруженные строки
         const existingCustomers = allLowPriceRows.filter(row => {
           const rowCustomerId = row.get('Customer ID');
           return rowCustomerId === customerId;
