@@ -180,7 +180,11 @@ class NotificationQueue {
           email: 'N/A',
           metadata: {}
         };
-        const sheetData = notification.sheetData || notification.metadata || {};
+        // Merge sheetData and metadata to ensure accountSource is included
+        const sheetData = {
+          ...(notification.sheetData || {}),
+          ...(notification.metadata || {})
+        };
         
         // Send to Telegram (only Telegram, not Slack - to avoid duplicates)
         try {

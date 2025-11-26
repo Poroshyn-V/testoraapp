@@ -89,6 +89,7 @@ function saveAlertHistory(alertType, status, message, metadata = {}) {
 
 // Interval variables for graceful shutdown
 let syncInterval = null;
+let hourlyReportInterval = null;
 let geoAlertInterval = null;
 let dailyStatsInterval = null;
 let creativeAlertInterval = null;
@@ -144,6 +145,7 @@ let isSyncing = false;
 
 // Alert tracking to prevent duplicate sends
 const sentAlerts = {
+  hourlyReport: new Set(),
   dailyStats: new Set(),
   creativeAlert: new Set(),
   weeklyReport: new Set(),
@@ -501,6 +503,7 @@ app.get('/', (_req, res) => res.json({
   endpoints: [
     '/api/test',
     '/api/sync-payments',
+    '/api/hourly-report',
     '/api/geo-alert',
     '/api/creative-alert',
     '/api/daily-stats',
@@ -4448,6 +4451,33 @@ app.get('/api/weekly-report', async (req, res) => {
 });
 
 // GEO alert endpoint
+app.get('/api/hourly-report', async (req, res) => {
+  try {
+    logger.info('📊 Generating hourly report...');
+    const report = await analytics.generateHourlyReport();
+    if (report) {
+      await sendTextNotifications(report);
+      res.json({
+        success: true,
+        message: 'Hourly report generated and sent',
+        report: report
+      });
+    } else {
+      res.json({
+        success: true,
+        message: 'No purchases found for today',
+        report: null
+      });
+    }
+  } catch (error) {
+    logger.error('Error generating hourly report', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
 app.get('/api/geo-alert', async (req, res) => {
   try {
     const now = new Date();
@@ -6103,6 +6133,38 @@ app.listen(ENV.PORT, () => {
       }
     }, 30 * 60 * 1000); // Каждые 30 минут
     
+    // Hourly Report every hour (scheduled only, no initial run)
+    const scheduleHourlyReport = () => {
+      console.log('📊 Starting hourly reports...');
+      
+      hourlyReportInterval = setInterval(async () => {
+        try {
+          const now = new Date();
+          const today = now.toISOString().split('T')[0]; // UTC date
+          const currentHour = now.getUTCHours();
+          const currentMinute = now.getUTCMinutes();
+          
+          const hourlyReportKey = `hourly_${today}_${currentHour}`;
+          
+          // Отправляем в начале каждого часа (0-1 минута)
+          if (currentMinute >= 0 && currentMinute <= 1) {
+            if (!sentAlerts.hourlyReport || !sentAlerts.hourlyReport.has(hourlyReportKey)) {
+              console.log('📊 Running hourly report...');
+              // ✅ ПРЯМОЙ ВЫЗОВ
+              const report = await analytics.generateHourlyReport();
+              if (report) {
+                await sendTextNotifications(report);
+                sentAlerts.hourlyReport.add(hourlyReportKey);
+                console.log('✅ Hourly report completed');
+              }
+            }
+          }
+        } catch (error) {
+          console.error('❌ Hourly report failed:', error.message);
+        }
+      }, 60 * 1000); // Проверяем каждую минуту
+    };
+    
     // GEO Alert every hour (scheduled only, no initial run)
     const scheduleGeoAlert = () => {
       console.log('🌍 Starting hourly GEO alerts...');
@@ -6357,6 +6419,7 @@ app.listen(ENV.PORT, () => {
     };
     
     // Start all alert scheduling
+    scheduleHourlyReport();
     scheduleGeoAlert();
     scheduleWeeklyReport();
     scheduleDailyStats();

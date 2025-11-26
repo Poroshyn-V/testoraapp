@@ -128,6 +128,113 @@ ${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFi
     };
   }
   
+  // Generate Hourly Report with platform breakdown (includes both Stripe accounts)
+  async generateHourlyReport() {
+    try {
+      logInfo('📊 Генерирую часовой отчет...');
+      
+      // Получаем данные из обоих листов
+      const paymentsSheet = await googleSheets.getSheetByName('payments');
+      const lowPriceSheet = await googleSheets.getSheetByName('LowPrice');
+      
+      await paymentsSheet.loadHeaderRow();
+      await lowPriceSheet.loadHeaderRow();
+      
+      const paymentsRows = await paymentsSheet.getRows();
+      const lowPriceRows = await lowPriceSheet.getRows();
+      
+      // Получаем сегодняшнюю дату в UTC
+      const today = new Date();
+      const todayUTC = today.toISOString().split('T')[0]; // YYYY-MM-DD
+      
+      logInfo(`📅 Анализирую покупки за ${todayUTC} (UTC)`);
+      
+      // Фильтруем покупки за сегодня по UTC (для обоих листов)
+      const todayPayments = paymentsRows.filter(row => {
+        const createdUTC = row.get('Created UTC') || '';
+        return createdUTC.includes(todayUTC);
+      });
+      
+      const todayLowPrice = lowPriceRows.filter(row => {
+        const createdUTC = row.get('Created UTC') || '';
+        return createdUTC.includes(todayUTC);
+      });
+      
+      const allTodayPurchases = [...todayPayments, ...todayLowPrice];
+      
+      logInfo(`📊 Найдено ${allTodayPurchases.length} покупок за сегодня (${todayPayments.length} из payments, ${todayLowPrice.length} из LowPrice)`);
+      
+      if (allTodayPurchases.length === 0) {
+        logInfo('📭 Нет покупок за сегодня - пропускаю часовой отчет');
+        return null;
+      }
+      
+      // Группируем по платформе (UTM Source)
+      const platformStats = new Map();
+      
+      for (const purchase of allTodayPurchases) {
+        const utmSource = purchase.get('UTM Source') || 'N/A';
+        const geo = purchase.get('GEO') || 'Unknown';
+        const country = geo.split(',')[0].trim();
+        
+        if (!platformStats.has(utmSource)) {
+          platformStats.set(utmSource, {
+            total: 0,
+            countries: new Map()
+          });
+        }
+        
+        const platform = platformStats.get(utmSource);
+        platform.total++;
+        
+        if (platform.countries.has(country)) {
+          platform.countries.set(country, platform.countries.get(country) + 1);
+        } else {
+          platform.countries.set(country, 1);
+        }
+      }
+      
+      // Формируем отчет для каждой платформы
+      const reports = [];
+      
+      for (const [platform, stats] of platformStats.entries()) {
+        if (platform === 'N/A') continue;
+        
+        const countryStats = Array.from(stats.countries.entries())
+          .sort((a, b) => b[1] - a[1]);
+        
+        // Определяем основные страны
+        const usCount = stats.countries.get('US') || 0;
+        const auCount = stats.countries.get('AU') || 0;
+        const caCount = stats.countries.get('CA') || 0;
+        
+        // WW = все остальные страны
+        const wwCount = stats.total - usCount - auCount - caCount;
+        
+        const countryLines = [];
+        if (usCount > 0) countryLines.push(`🇺🇸 US - ${usCount}`);
+        if (auCount > 0) countryLines.push(`🇦🇺 AU - ${auCount}`);
+        if (caCount > 0) countryLines.push(`🇨🇦 CA - ${caCount}`);
+        if (wwCount > 0) countryLines.push(`🌍 WW - ${wwCount}`);
+        
+        const platformReport = `🔹 **${platform}** (${stats.total} purchases)\n\n${countryLines.join('\n')}`;
+        reports.push(platformReport);
+      }
+      
+      // Формируем итоговое сообщение
+      const totalPurchases = allTodayPurchases.length;
+      const reportText = `📊 **Hourly Report for today (${todayUTC})**\n\n${reports.join('\n\n')}\n\n📈 Total purchases: ${totalPurchases}`;
+      
+      logInfo('📤 Отправляю часовой отчет:', { totalPurchases, platforms: platformStats.size });
+      
+      return reportText;
+      
+    } catch (error) {
+      logError('Error generating hourly report', error);
+      throw error;
+    }
+  }
+  
   // Generate GEO alert (restored from old working version)
   async generateGeoAlert() {
     try {
@@ -155,73 +262,44 @@ ${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFi
         return null;
       }
       
-      // Анализируем данные по источникам (UTM Source) и GEO
-      const sourceStats = new Map(); // Map<source, {count: number, geo: Map<country, count>}>
+      // Анализируем GEO данные
+      const geoStats = new Map();
       
       for (const purchase of todayPurchases) {
-        const utmSource = purchase.get('UTM Source') || 'N/A';
         const geo = purchase.get('GEO') || 'Unknown';
         const country = geo.split(',')[0].trim(); // Берем только страну
         
-        if (!sourceStats.has(utmSource)) {
-          sourceStats.set(utmSource, { count: 0, geo: new Map() });
-        }
-        
-        const sourceData = sourceStats.get(utmSource);
-        sourceData.count++;
-        
-        if (sourceData.geo.has(country)) {
-          sourceData.geo.set(country, sourceData.geo.get(country) + 1);
+        if (geoStats.has(country)) {
+          geoStats.set(country, geoStats.get(country) + 1);
         } else {
-          sourceData.geo.set(country, 1);
+          geoStats.set(country, 1);
         }
+
       }
       
-      // Определяем порядок источников: Meta первый, Google второй, остальные по количеству
-      const sourceOrder = ['Meta', 'Google', 'facebook', 'google'];
-      const sortedSources = Array.from(sourceStats.entries()).sort((a, b) => {
-        const aIndex = sourceOrder.findIndex(s => a[0].toLowerCase().includes(s.toLowerCase()));
-        const bIndex = sourceOrder.findIndex(s => b[0].toLowerCase().includes(s.toLowerCase()));
-        
-        if (aIndex !== -1 && bIndex !== -1) {
-          return aIndex - bIndex; // Оба в списке приоритетов
-        }
-        if (aIndex !== -1) return -1; // a в списке, b нет
-        if (bIndex !== -1) return 1;  // b в списке, a нет
-        return b[1].count - a[1].count; // Оба не в списке - сортируем по количеству
-      });
+      // Сортируем по количеству покупок
+      const sortedGeo = Array.from(geoStats.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3);
       
-      // Формируем сообщение с группировкой по источникам
-      const alertParts = [];
+      // Формируем ТОП-3
+      const top3 = [];
+      for (const [country, count] of sortedGeo) {
+        const flag = this.getCountryFlag(country);
+        top3.push(`${flag} ${country} - ${count}`);
+      }
+      
+      // Добавляем WW (все остальные)
       const totalToday = todayPurchases.length;
+      const top3Total = sortedGeo.reduce((sum, [, count]) => sum + count, 0);
+      const wwCount = totalToday - top3Total;
       
-      for (const [source, data] of sortedSources) {
-        const sourceName = source === 'N/A' ? 'Unknown' : source;
-        const sourceCount = data.count;
-        
-        // ТОП-3 GEO для этого источника
-        const sortedGeo = Array.from(data.geo.entries())
-          .sort((a, b) => b[1] - a[1])
-          .slice(0, 3);
-        
-        const geoLines = [];
-        for (const [country, count] of sortedGeo) {
-          const flag = this.getCountryFlag(country);
-          geoLines.push(`${flag} ${country} - ${count}`);
-        }
-        
-        // Добавляем WW для этого источника, если есть остальные
-        const top3Total = sortedGeo.reduce((sum, [, count]) => sum + count, 0);
-        const wwCount = sourceCount - top3Total;
-        if (wwCount > 0) {
-          geoLines.push(`🌍 WW - ${wwCount}`);
-        }
-        
-        alertParts.push(`🔹 **${sourceName}** (${sourceCount} purchases)\n${geoLines.join('\n')}`);
+      if (wwCount > 0) {
+        top3.push(`🌍 WW - ${wwCount}`);
       }
       
-      // Формируем финальное сообщение
-      const alertText = `📊 **Hourly Report for today (${todayStr})**\n\n${alertParts.join('\n\n')}\n\n📈 Total purchases: ${totalToday}`;
+      // Формируем сообщение
+      const alertText = `📊 **TOP-3 GEO for today (${todayStr})**\n\n${top3.join('\n')}\n\n📈 Total purchases: ${totalToday}`;
       
       logInfo('📤 Отправляю GEO алерт:', { alertText });
       
