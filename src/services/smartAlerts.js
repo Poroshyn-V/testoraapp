@@ -11,8 +11,14 @@ export class SmartAlerts {
       revenue_drop_percent: alertConfig.revenueDrop,
       conversion_drop_percent: alertConfig.conversionDrop,
       payment_failure_rate: alertConfig.paymentFailureRate,
-      new_geo_threshold: 5 // Если >5 покупок из новой страны
+      new_geo_threshold: 5, // Если >5 покупок из новой страны
+      // Оперативные алерты - пороги для немедленного уведомления
+      campaignHourlyThreshold: 5, // Если кампания принесла 5+ покупок за час
+      creativeHourlyThreshold: 10 // Если креатив принес 10+ покупок за час
     };
+    
+    // Кэш для отслеживания уже отправленных оперативных алертов
+    this.sentRealTimeAlerts = new Map(); // key: "campaign_{name}_{hour}" или "creative_{name}_{hour}"
   }
   
   async checkRevenueAnomaly() {
@@ -245,6 +251,261 @@ Drop: ${drop}%
     return purchases.reduce((a, b) => a + b, 0) / purchases.length;
   }
   
+  /**
+   * Оперативный алерт: кампании с 5+ покупками за час
+   * Вызывается автоматически после каждой синхронизации
+   */
+  async checkRealTimeCampaignAlert() {
+    try {
+      logInfo('⚡ Проверяю оперативные алерты по кампаниям...');
+      
+      const paymentsSheet = await googleSheets.getSheetByName('payments');
+      const lowPriceSheet = await googleSheets.getSheetByName('LowPrice');
+      
+      await paymentsSheet.loadHeaderRow();
+      await lowPriceSheet.loadHeaderRow();
+      
+      const paymentsRows = await paymentsSheet.getRows();
+      const lowPriceRows = await lowPriceSheet.getRows();
+      const allRows = [...paymentsRows, ...lowPriceRows];
+      
+      const now = new Date();
+      const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+      const currentHour = now.getUTCHours();
+      
+      // Покупки за последний час
+      const lastHourPurchases = allRows.filter(row => {
+        const createdUTC = row.get('Created UTC') || '';
+        if (!createdUTC) return false;
+        const purchaseDate = new Date(createdUTC);
+        return purchaseDate >= oneHourAgo;
+      });
+      
+      if (lastHourPurchases.length === 0) {
+        return null;
+      }
+      
+      // Группируем по кампаниям
+      const campaignStats = new Map();
+      
+      for (const purchase of lastHourPurchases) {
+        const campaignName = purchase.get('Campaign Name') || purchase.get('UTM Campaign') || '';
+        const amount = parseFloat(purchase.get('Total Amount') || 0);
+        
+        if (campaignName && campaignName !== 'N/A') {
+          if (!campaignStats.has(campaignName)) {
+            campaignStats.set(campaignName, {
+              name: campaignName,
+              purchases: 0,
+              revenue: 0
+            });
+          }
+          const stat = campaignStats.get(campaignName);
+          stat.purchases++;
+          stat.revenue += amount;
+        }
+      }
+      
+      // Находим кампании с 5+ покупками за час
+      const hotCampaigns = Array.from(campaignStats.values())
+        .filter(stat => stat.purchases >= this.thresholds.campaignHourlyThreshold)
+        .sort((a, b) => b.purchases - a.purchases);
+      
+      if (hotCampaigns.length === 0) {
+        return null;
+      }
+      
+      // Проверяем, не отправляли ли мы уже алерт для этих кампаний в этом часу
+      const alertsToSend = [];
+      
+      for (const campaign of hotCampaigns) {
+        const alertKey = `campaign_${campaign.name}_${currentHour}`;
+        
+        if (!this.sentRealTimeAlerts.has(alertKey)) {
+          alertsToSend.push(campaign);
+          this.sentRealTimeAlerts.set(alertKey, true);
+          
+          // Очищаем старые записи (старше 2 часов)
+          setTimeout(() => {
+            this.sentRealTimeAlerts.delete(alertKey);
+          }, 2 * 60 * 60 * 1000);
+        }
+      }
+      
+      if (alertsToSend.length === 0) {
+        return null;
+      }
+      
+      // Формируем алерт
+      let alertText = `⚡ **REAL-TIME ALERT: Hot Campaigns (Last Hour)**\n\n`;
+      alertText += `📊 Total purchases last hour: ${lastHourPurchases.length}\n\n`;
+      
+      alertText += `🔥 **Campaigns with ${this.thresholds.campaignHourlyThreshold}+ purchases:**\n\n`;
+      
+      for (let i = 0; i < alertsToSend.length; i++) {
+        const campaign = alertsToSend[i];
+        alertText += `${i + 1}. **${campaign.name}**\n`;
+        alertText += `   📦 Purchases: ${campaign.purchases}\n`;
+        alertText += `   💰 Revenue: $${campaign.revenue.toFixed(2)}\n`;
+        alertText += `   💡 **ACTION:** Consider increasing budget for this campaign!\n\n`;
+      }
+      
+      alertText += `⏰ Alert time: ${now.toISOString().split('T')[1].split('.')[0]} UTC`;
+      
+      logInfo(`📤 Отправляю оперативный алерт по ${alertsToSend.length} кампаниям`);
+      return alertText;
+      
+    } catch (error) {
+      logError('Error checking real-time campaign alert', error);
+      return null; // Не бросаем ошибку, чтобы не ломать синхронизацию
+    }
+  }
+
+  /**
+   * Оперативный алерт: креативы с 10+ покупками за час
+   * Вызывается автоматически после каждой синхронизации
+   */
+  async checkRealTimeCreativeAlert() {
+    try {
+      logInfo('⚡ Проверяю оперативные алерты по креативам...');
+      
+      const paymentsSheet = await googleSheets.getSheetByName('payments');
+      const lowPriceSheet = await googleSheets.getSheetByName('LowPrice');
+      
+      await paymentsSheet.loadHeaderRow();
+      await lowPriceSheet.loadHeaderRow();
+      
+      const paymentsRows = await paymentsSheet.getRows();
+      const lowPriceRows = await lowPriceSheet.getRows();
+      const allRows = [...paymentsRows, ...lowPriceRows];
+      
+      const now = new Date();
+      const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
+      const currentHour = now.getUTCHours();
+      
+      // Покупки за последний час
+      const lastHourPurchases = allRows.filter(row => {
+        const createdUTC = row.get('Created UTC') || '';
+        if (!createdUTC) return false;
+        const purchaseDate = new Date(createdUTC);
+        return purchaseDate >= oneHourAgo;
+      });
+      
+      if (lastHourPurchases.length === 0) {
+        return null;
+      }
+      
+      // Группируем по креативам
+      const creativeStats = new Map();
+      
+      for (const purchase of lastHourPurchases) {
+        const adName = purchase.get('Ad Name') || '';
+        const campaignName = purchase.get('Campaign Name') || purchase.get('UTM Campaign') || '';
+        const adsetName = purchase.get('Adset Name') || '';
+        const amount = parseFloat(purchase.get('Total Amount') || 0);
+        
+        if (adName && adName !== 'N/A') {
+          if (!creativeStats.has(adName)) {
+            creativeStats.set(adName, {
+              name: adName,
+              campaign: campaignName,
+              adset: adsetName,
+              purchases: 0,
+              revenue: 0,
+              adsets: new Set()
+            });
+          }
+          const stat = creativeStats.get(adName);
+          stat.purchases++;
+          stat.revenue += amount;
+          if (adsetName) stat.adsets.add(adsetName);
+        }
+      }
+      
+      // Находим креативы с 10+ покупками за час
+      const hotCreatives = Array.from(creativeStats.values())
+        .filter(stat => stat.purchases >= this.thresholds.creativeHourlyThreshold)
+        .sort((a, b) => b.purchases - a.purchases);
+      
+      if (hotCreatives.length === 0) {
+        return null;
+      }
+      
+      // Проверяем, не отправляли ли мы уже алерт для этих креативов в этом часу
+      const alertsToSend = [];
+      
+      for (const creative of hotCreatives) {
+        const alertKey = `creative_${creative.name}_${currentHour}`;
+        
+        if (!this.sentRealTimeAlerts.has(alertKey)) {
+          alertsToSend.push(creative);
+          this.sentRealTimeAlerts.set(alertKey, true);
+          
+          // Очищаем старые записи (старше 2 часов)
+          setTimeout(() => {
+            this.sentRealTimeAlerts.delete(alertKey);
+          }, 2 * 60 * 60 * 1000);
+        }
+      }
+      
+      if (alertsToSend.length === 0) {
+        return null;
+      }
+      
+      // Формируем алерт
+      let alertText = `⚡ **REAL-TIME ALERT: Hot Creatives (Last Hour)**\n\n`;
+      alertText += `📊 Total purchases last hour: ${lastHourPurchases.length}\n\n`;
+      
+      alertText += `🔥 **Creatives with ${this.thresholds.creativeHourlyThreshold}+ purchases:**\n\n`;
+      
+      for (let i = 0; i < alertsToSend.length; i++) {
+        const creative = alertsToSend[i];
+        alertText += `${i + 1}. **${creative.name}**\n`;
+        alertText += `   📦 Purchases: ${creative.purchases}\n`;
+        alertText += `   💰 Revenue: $${creative.revenue.toFixed(2)}\n`;
+        alertText += `   🎯 Campaign: ${creative.campaign}\n`;
+        alertText += `   📋 Current Adsets: ${creative.adsets.size}\n`;
+        alertText += `   💡 **ACTION:** Scale this creative to other ad sets!\n\n`;
+      }
+      
+      alertText += `⏰ Alert time: ${now.toISOString().split('T')[1].split('.')[0]} UTC`;
+      
+      logInfo(`📤 Отправляю оперативный алерт по ${alertsToSend.length} креативам`);
+      return alertText;
+      
+    } catch (error) {
+      logError('Error checking real-time creative alert', error);
+      return null; // Не бросаем ошибку, чтобы не ломать синхронизацию
+    }
+  }
+
+  /**
+   * Проверяет все оперативные алерты (кампании и креативы)
+   * Вызывается после каждой синхронизации
+   */
+  async checkAllRealTimeAlerts() {
+    try {
+      const alerts = [];
+      
+      // Проверяем кампании
+      const campaignAlert = await this.checkRealTimeCampaignAlert();
+      if (campaignAlert) alerts.push(campaignAlert);
+      
+      // Проверяем креативы
+      const creativeAlert = await this.checkRealTimeCreativeAlert();
+      if (creativeAlert) alerts.push(creativeAlert);
+      
+      if (alerts.length === 0) {
+        return null;
+      }
+      
+      return alerts.join('\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n');
+    } catch (error) {
+      logError('Error checking all real-time alerts', error);
+      return null;
+    }
+  }
+
   // Run all smart alerts
   async runAllChecks() {
     try {

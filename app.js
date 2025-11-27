@@ -435,9 +435,48 @@ async function runSync() {
     // Записываем время последней синхронизации
     global.lastSyncTime = Date.now();
     
+    // ✅ Проверяем оперативные алерты после успешной синхронизации
+    if (result.success && (result.newPurchases > 0 || result.updatedPurchases > 0)) {
+      try {
+        const realTimeAlerts = await smartAlerts.checkAllRealTimeAlerts();
+        if (realTimeAlerts) {
+          await sendTextNotifications(realTimeAlerts);
+          logger.info('⚡ Real-time alerts sent after sync', {
+            newPurchases: result.newPurchases,
+            updatedPurchases: result.updatedPurchases
+          });
+        }
+      } catch (alertError) {
+        logger.error('❌ Real-time alerts check failed', {
+          error: alertError.message,
+          stack: alertError.stack
+        });
+        // Не прерываем синхронизацию из-за ошибки алертов
+      }
+    }
+    
     // Also sync Low Price account (async, don't wait for it)
     // ✅ КРИТИЧЕСКИ ВАЖНО: Синхронизируем LowPrice с проверкой ВСЕХ существующих клиентов
-    performSyncLogicLowPrice().catch(error => {
+    performSyncLogicLowPrice().then(async (lowPriceResult) => {
+      // ✅ Проверяем оперативные алерты после успешной синхронизации LowPrice
+      if (lowPriceResult && lowPriceResult.success && (lowPriceResult.newPurchases > 0 || lowPriceResult.updatedPurchases > 0)) {
+        try {
+          const realTimeAlerts = await smartAlerts.checkAllRealTimeAlerts();
+          if (realTimeAlerts) {
+            await sendTextNotifications(realTimeAlerts);
+            logger.info('⚡ Real-time alerts sent after LowPrice sync', {
+              newPurchases: lowPriceResult.newPurchases,
+              updatedPurchases: lowPriceResult.updatedPurchases
+            });
+          }
+        } catch (alertError) {
+          logger.error('❌ Real-time alerts check failed after LowPrice sync', {
+            error: alertError.message
+          });
+          // Не прерываем синхронизацию из-за ошибки алертов
+        }
+      }
+    }).catch(error => {
       logger.error('Low Price sync failed', {
         error: error.message,
         stack: error.stack
@@ -4093,6 +4132,25 @@ app.post('/api/sync-payments-low-price', async (req, res) => {
   try {
     const result = await performSyncLogicLowPrice();
     
+    // ✅ Проверяем оперативные алерты после успешной синхронизации LowPrice
+    if (result.success && (result.newPurchases > 0 || result.updatedPurchases > 0)) {
+      try {
+        const realTimeAlerts = await smartAlerts.checkAllRealTimeAlerts();
+        if (realTimeAlerts) {
+          await sendTextNotifications(realTimeAlerts);
+          logger.info('⚡ Real-time alerts sent after LowPrice sync', {
+            newPurchases: result.newPurchases,
+            updatedPurchases: result.updatedPurchases
+          });
+        }
+      } catch (alertError) {
+        logger.error('❌ Real-time alerts check failed after LowPrice sync', {
+          error: alertError.message
+        });
+        // Не прерываем синхронизацию из-за ошибки алертов
+      }
+    }
+    
     if (result.success) {
       res.json(result);
     } else {
@@ -6048,6 +6106,18 @@ app.listen(ENV.PORT, () => {
         const result = await runSync();
         if (result.success) {
           console.log(`✅ Scheduled sync completed: ${result.total_payments || 0} payments processed`);
+          
+          // ✅ Проверяем оперативные алерты после успешной синхронизации
+          try {
+            const realTimeAlerts = await smartAlerts.checkAllRealTimeAlerts();
+            if (realTimeAlerts) {
+              await sendTextNotifications(realTimeAlerts);
+              console.log('⚡ Real-time alerts sent');
+            }
+          } catch (alertError) {
+            console.error('❌ Real-time alerts check failed:', alertError.message);
+            // Не прерываем синхронизацию из-за ошибки алертов
+          }
         } else {
           console.log(`⚠️ Scheduled sync skipped: ${result.message}`);
         }
@@ -6083,6 +6153,18 @@ app.listen(ENV.PORT, () => {
           const result = await performSyncLogicLowPrice();
           if (result.success) {
             console.log(`✅ LowPrice sync completed: ${result.processed || 0} customers processed, ${result.newPurchases || 0} new, ${result.updatedPurchases || 0} updated`);
+            
+            // ✅ Проверяем оперативные алерты после успешной синхронизации LowPrice
+            try {
+              const realTimeAlerts = await smartAlerts.checkAllRealTimeAlerts();
+              if (realTimeAlerts) {
+                await sendTextNotifications(realTimeAlerts);
+                console.log('⚡ Real-time alerts sent (after LowPrice sync)');
+              }
+            } catch (alertError) {
+              console.error('❌ Real-time alerts check failed:', alertError.message);
+              // Не прерываем синхронизацию из-за ошибки алертов
+            }
           } else {
             console.log(`⚠️ LowPrice sync failed: ${result.message}`);
           }
@@ -6480,6 +6562,7 @@ app.listen(ENV.PORT, () => {
     console.log('   ✅ Campaign analysis at 11:00 UTC+1');
     console.log('   ✅ Campaign reports at 16:00 UTC+1');
     console.log('   ✅ Weekly reports every Monday at 9 AM UTC+1');
+    console.log('   ⚡ REAL-TIME alerts: Campaigns with 5+ purchases/hour, Creatives with 10+ purchases/hour');
     console.log('   ✅ Automatic memory cleanup every 24 hours');
     console.log('   ✅ Works WITHOUT manual intervention');
   } else {
