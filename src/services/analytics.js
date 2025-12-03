@@ -644,11 +644,25 @@ ${isSignificantDrop ? '🔍 Check your campaigns!' : '🎉 Great performance!'}`
   }
   
   // Generate creative alert (restored from old working version)
+  // ✅ Обновлено: включает данные из обоих Stripe аккаунтов (payments + LowPrice)
   async generateCreativeAlert() {
     try {
       logInfo('🎨 Анализирую креативы за сегодня...');
       
-      const rows = await googleSheets.getAllRows();
+      // ✅ Получаем данные из обоих листов
+      const paymentsSheet = await googleSheets.getSheetByName('payments');
+      const lowPriceSheet = await googleSheets.getSheetByName('LowPrice');
+      
+      await paymentsSheet.loadHeaderRow();
+      await lowPriceSheet.loadHeaderRow();
+      
+      const paymentsRows = await paymentsSheet.getRows();
+      const lowPriceRows = await lowPriceSheet.getRows();
+      
+      // Объединяем все покупки из обоих аккаунтов
+      const allRows = [...paymentsRows, ...lowPriceRows];
+      
+      logInfo(`📊 Загружено ${paymentsRows.length} покупок из основного аккаунта, ${lowPriceRows.length} из LowPrice`);
       
       // Получаем сегодняшнюю дату в UTC+1
       const today = new Date();
@@ -658,12 +672,12 @@ ${isSignificantDrop ? '🔍 Check your campaigns!' : '🎉 Great performance!'}`
       logInfo(`📅 Анализирую креативы за ${todayStr} (UTC+1)`);
       
       // Фильтруем покупки за сегодня
-      const todayPurchases = rows.filter(row => {
+      const todayPurchases = allRows.filter(row => {
         const createdLocal = row.get('Created Local (UTC+1)') || '';
         return createdLocal.includes(todayStr);
       });
       
-      logInfo(`📊 Найдено ${todayPurchases.length} покупок за сегодня`);
+      logInfo(`📊 Найдено ${todayPurchases.length} покупок за сегодня (из обоих аккаунтов)`);
       
       if (todayPurchases.length === 0) {
         logInfo('📭 Нет покупок за сегодня - пропускаю креатив алерт');
@@ -675,7 +689,7 @@ ${isSignificantDrop ? '🔍 Check your campaigns!' : '🎉 Great performance!'}`
       
       for (const purchase of todayPurchases) {
         const adName = purchase.get('Ad Name') || '';
-        if (adName && adName.trim() !== '') {
+        if (adName && adName.trim() !== '' && adName !== 'N/A') {
           if (creativeStats.has(adName)) {
             creativeStats.set(adName, creativeStats.get(adName) + 1);
           } else {
@@ -712,7 +726,7 @@ ${isSignificantDrop ? '🔍 Check your campaigns!' : '🎉 Great performance!'}`
       });
       
       // Формируем сообщение
-      const alertText = `🎨 **TOP-5 Creative Performance for today (${todayStr})**\n\n${top5.join('\n')}\n\n📈 Total purchases: ${todayPurchases.length}\n⏰ Report time: ${timeStr} UTC+1`;
+      const alertText = `🎨 **TOP-5 Creative Performance for today (${todayStr})**\n\n${top5.join('\n')}\n\n📈 Total purchases: ${todayPurchases.length} (W2W + FL)\n⏰ Report time: ${timeStr} UTC+1`;
       
       logInfo('📤 Отправляю креатив алерт:', { alertText });
       
