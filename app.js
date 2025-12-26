@@ -4547,103 +4547,105 @@ async function performSyncLogicPrimer(exportAll = false) {
           // ADD NEW customer - load ALL payments from Primer (как в Stripe логике)
           logger.info(`Adding new Primer customer ${customerId} (loading ALL payments from Primer)`);
           
-          // ✅ КРИТИЧЕСКИ ВАЖНО: Загружаем ВСЕ платежи клиента из Primer (не только новые из группы)
-          // Это гарантирует, что все платежи будут суммированы вместе (как в Stripe логике)
-          const allPayments = await fetchWithRetry(() => getCustomerPaymentsPrimer(customerId));
-          const normalizedAllPayments = allPayments.map(normalizePrimerPayment);
-          const allSuccessfulPayments = normalizedAllPayments.filter(p => {
-            if (p.status !== 'succeeded' || !p.customer) return false;
-            if (p.status === 'reversed' || p.status === 'refunded' || p.status === 'canceled') return false;
-            return true;
-          });
-          
-          if (allSuccessfulPayments.length === 0) {
-            logger.warn(`⚠️ No successful payments for customer ${customerId}, skipping`);
-            results.skipped++;
-            continue;
-          }
-          
-          // Сортируем по дате создания (первая покупка)
-          allSuccessfulPayments.sort((a, b) => a.created - b.created);
-          const firstPayment = allSuccessfulPayments[0];
-          
-          const rowData = formatPaymentForSheetsPrimer(firstPayment, customer, { accountSource: 'primer' });
-          
-          // ✅ Суммируем ВСЕ платежи клиента (как в Stripe логике)
-          let totalAmount = 0;
-          const paymentIds = [];
-          for (const p of allSuccessfulPayments) {
-            totalAmount += p.amount;
-            paymentIds.push(p.id);
-          }
-          
-          rowData['Purchase ID'] = `purchase_${customerId}_${firstPayment.created}`;
-          // ✅ Primer amounts are always in cents, so always divide by 100
-          rowData['Total Amount'] = (totalAmount / 100).toFixed(2);
-          rowData['Payment Count'] = allSuccessfulPayments.length.toString();
-          rowData['Payment Intent IDs'] = paymentIds.join(', ');
-          
-          // ✅ Убеждаемся что email и GEO заполнены
-          if (!rowData['Email'] || rowData['Email'] === 'N/A') {
-            rowData['Email'] = customer?.email || firstPayment.email || 'N/A';
-          }
-          if (!rowData['GEO'] || rowData['GEO'] === 'Unknown') {
-            rowData['GEO'] = customer?.country || customer?.address?.country || firstPayment.country || 'Unknown';
-          }
-          
-          logger.info(`➕ Добавляю новую покупку Primer: Customer=${customerId}, Email=${rowData['Email']}, GEO=${rowData['GEO']}, Amount=$${rowData['Total Amount']}, Payments=${allSuccessfulPayments.length}`);
-          
-          // ✅ КРИТИЧЕСКИ ВАЖНО: Добавляем НАПРЯМУЮ в primerSheet (как в Stripe логике)
-          const addResult = await primerSheet.addRow(rowData);
-          
-          // Add LA time formula to Created Local (UTC-8) column
-          await addLaTimeFormulaToPrimerSheet(addResult.row.rowNumber);
-          
-          logger.info(`✅ Added new Primer customer ${customerId} to sheet`);
-          
-          // Send notification for NEW purchase
           try {
-            // ✅ Убеждаемся что customer объект правильно заполнен перед отправкой уведомления
-            const notificationCustomer = {
-              id: customer?.id || customerId,
-              email: customer?.email || firstPayment.email || rowData['Email'] || 'N/A',
-              address: customer?.address || (customer?.country ? { country: customer.country } : null),
-              country: customer?.country || firstPayment.country || null,
-              metadata: {
-                ...(customer?.metadata || {}),
-                ...firstPayment.metadata
-              }
-            };
-            
-            // ✅ Убеждаемся что payment имеет правильный формат для уведомления
-            const notificationPayment = {
-              ...firstPayment,
-              _primer: true,
-              _source: 'primer'
-            };
-            
-            logger.info(`📱 Отправляю уведомление для Primer покупки: Customer=${customerId}, Email=${notificationCustomer.email}, Amount=$${rowData['Total Amount']}`);
-            
-            await sendPurchaseNotification(notificationPayment, notificationCustomer, {
-              ...rowData,
-              accountSource: 'primer',
-              'Total Amount': rowData['Total Amount'],
-              'Payment Count': rowData['Payment Count'],
-              'Email': notificationCustomer.email,
-              'GEO': rowData['GEO']
+            // ✅ КРИТИЧЕСКИ ВАЖНО: Загружаем ВСЕ платежи клиента из Primer (не только новые из группы)
+            // Это гарантирует, что все платежи будут суммированы вместе (как в Stripe логике)
+            const allPayments = await fetchWithRetry(() => getCustomerPaymentsPrimer(customerId));
+            const normalizedAllPayments = allPayments.map(normalizePrimerPayment);
+            const allSuccessfulPayments = normalizedAllPayments.filter(p => {
+              if (p.status !== 'succeeded' || !p.customer) return false;
+              if (p.status === 'reversed' || p.status === 'refunded' || p.status === 'canceled') return false;
+              return true;
             });
             
-            logger.info(`✅ Уведомление отправлено для новой Primer покупки: ${customerId}`);
-          } catch (notifError) {
-            logger.error(`❌ Ошибка отправки уведомления для Primer покупки ${customerId}`, {
-              error: notifError.message,
-              stack: notifError.stack
-            });
-            // Don't fail the sync if notification fails
-          }
-          
-          results.newPurchases++;
-          results.processed++;
+            if (allSuccessfulPayments.length === 0) {
+              logger.warn(`⚠️ No successful payments for customer ${customerId}, skipping`);
+              results.skipped++;
+              continue;
+            }
+            
+            // Сортируем по дате создания (первая покупка)
+            allSuccessfulPayments.sort((a, b) => a.created - b.created);
+            const firstPayment = allSuccessfulPayments[0];
+            
+            const rowData = formatPaymentForSheetsPrimer(firstPayment, customer, { accountSource: 'primer' });
+            
+            // ✅ Суммируем ВСЕ платежи клиента (как в Stripe логике)
+            let totalAmount = 0;
+            const paymentIds = [];
+            for (const p of allSuccessfulPayments) {
+              totalAmount += p.amount;
+              paymentIds.push(p.id);
+            }
+            
+            rowData['Purchase ID'] = `purchase_${customerId}_${firstPayment.created}`;
+            // ✅ Primer amounts are always in cents, so always divide by 100
+            rowData['Total Amount'] = (totalAmount / 100).toFixed(2);
+            rowData['Payment Count'] = allSuccessfulPayments.length.toString();
+            rowData['Payment Intent IDs'] = paymentIds.join(', ');
+            
+            // ✅ Убеждаемся что email и GEO заполнены
+            if (!rowData['Email'] || rowData['Email'] === 'N/A') {
+              rowData['Email'] = customer?.email || firstPayment.email || 'N/A';
+            }
+            if (!rowData['GEO'] || rowData['GEO'] === 'Unknown') {
+              rowData['GEO'] = customer?.country || customer?.address?.country || firstPayment.country || 'Unknown';
+            }
+            
+            logger.info(`➕ Добавляю новую покупку Primer: Customer=${customerId}, Email=${rowData['Email']}, GEO=${rowData['GEO']}, Amount=$${rowData['Total Amount']}, Payments=${allSuccessfulPayments.length}`);
+            
+            // ✅ КРИТИЧЕСКИ ВАЖНО: Добавляем НАПРЯМУЮ в primerSheet (как в Stripe логике)
+            const addResult = await primerSheet.addRow(rowData);
+            
+            // Add LA time formula to Created Local (UTC-8) column
+            await addLaTimeFormulaToPrimerSheet(addResult.row.rowNumber);
+            
+            logger.info(`✅ Added new Primer customer ${customerId} to sheet`);
+            
+            // Send notification for NEW purchase
+            try {
+              // ✅ Убеждаемся что customer объект правильно заполнен перед отправкой уведомления
+              const notificationCustomer = {
+                id: customer?.id || customerId,
+                email: customer?.email || firstPayment.email || rowData['Email'] || 'N/A',
+                address: customer?.address || (customer?.country ? { country: customer.country } : null),
+                country: customer?.country || firstPayment.country || null,
+                metadata: {
+                  ...(customer?.metadata || {}),
+                  ...firstPayment.metadata
+                }
+              };
+              
+              // ✅ Убеждаемся что payment имеет правильный формат для уведомления
+              const notificationPayment = {
+                ...firstPayment,
+                _primer: true,
+                _source: 'primer'
+              };
+              
+              logger.info(`📱 Отправляю уведомление для Primer покупки: Customer=${customerId}, Email=${notificationCustomer.email}, Amount=$${rowData['Total Amount']}`);
+              
+              await sendPurchaseNotification(notificationPayment, notificationCustomer, {
+                ...rowData,
+                accountSource: 'primer',
+                'Total Amount': rowData['Total Amount'],
+                'Payment Count': rowData['Payment Count'],
+                'Email': notificationCustomer.email,
+                'GEO': rowData['GEO']
+              });
+              
+              logger.info(`✅ Уведомление отправлено для новой Primer покупки: ${customerId}`);
+            } catch (notifError) {
+              logger.error(`❌ Ошибка отправки уведомления для Primer покупки ${customerId}`, {
+                error: notifError.message,
+                stack: notifError.stack
+              });
+              // Don't fail the sync if notification fails
+            }
+            
+            results.newPurchases++;
+            results.processed++;
+            
           } catch (paymentsError) {
             logger.error(`❌ Failed to load payments for customer ${customerId}`, {
               error: paymentsError.message,
@@ -4652,6 +4654,7 @@ async function performSyncLogicPrimer(exportAll = false) {
             results.failed++;
             continue;
           }
+        }
         }
         
       } finally {
