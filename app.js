@@ -4533,7 +4533,8 @@ async function performSyncLogicPrimer(exportAll = false) {
             }
             
             rowData['Purchase ID'] = `purchase_${customerId}_${firstPayment.created}`;
-            rowData['Total Amount'] = (totalAmount >= 1000 ? (totalAmount / 100).toFixed(2) : totalAmount.toFixed(2));
+            // ✅ Primer amounts are always in cents, so always divide by 100
+            rowData['Total Amount'] = (totalAmount / 100).toFixed(2);
             rowData['Payment Count'] = allSuccessfulPayments.length.toString();
             rowData['Payment Intent IDs'] = paymentIds.join(', ');
             
