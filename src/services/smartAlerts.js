@@ -3,6 +3,7 @@ import googleSheets from './googleSheets.js';
 import { metrics } from './metrics.js';
 import AlertPriority from './alertPriority.js';
 import { alertConfig } from '../config/alertConfig.js';
+import { ENV } from '../config/env.js';
 
 // Smart alerts service
 export class SmartAlerts {
@@ -267,7 +268,19 @@ Drop: ${drop}%
       
       const paymentsRows = await paymentsSheet.getRows();
       const lowPriceRows = await lowPriceSheet.getRows();
-      const allRows = [...paymentsRows, ...lowPriceRows];
+      
+      // Попытаемся получить данные из Primer листа (если он существует)
+      let primerRows = [];
+      try {
+        const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
+        const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
+        await primerSheet.loadHeaderRow();
+        primerRows = await primerSheet.getRows();
+      } catch (error) {
+        // Primer лист не существует или не настроен - это нормально
+      }
+      
+      const allRows = [...paymentsRows, ...lowPriceRows, ...primerRows];
       
       const now = new Date();
       const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);
@@ -377,7 +390,19 @@ Drop: ${drop}%
       
       const paymentsRows = await paymentsSheet.getRows();
       const lowPriceRows = await lowPriceSheet.getRows();
-      const allRows = [...paymentsRows, ...lowPriceRows];
+      
+      // Попытаемся получить данные из Primer листа (если он существует)
+      let primerRows = [];
+      try {
+        const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
+        const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
+        await primerSheet.loadHeaderRow();
+        primerRows = await primerSheet.getRows();
+      } catch (error) {
+        // Primer лист не существует или не настроен - это нормально
+      }
+      
+      const allRows = [...paymentsRows, ...lowPriceRows, ...primerRows];
       
       const now = new Date();
       const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000);

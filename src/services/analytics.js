@@ -1,6 +1,7 @@
 import { logInfo, logError } from '../utils/logging.js';
 import { formatWeeklyReport, formatCreativeAlert } from '../utils/formatting.js';
 import googleSheets from './googleSheets.js';
+import { ENV } from '../config/env.js';
 
 // Analytics service
 export class AnalyticsService {
@@ -133,7 +134,7 @@ ${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFi
     try {
       logInfo('📊 Генерирую часовой отчет...');
       
-      // Получаем данные из обоих листов
+      // Получаем данные из всех листов (payments, LowPrice, Primer)
       const paymentsSheet = await googleSheets.getSheetByName('payments');
       const lowPriceSheet = await googleSheets.getSheetByName('LowPrice');
       
@@ -143,13 +144,25 @@ ${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFi
       const paymentsRows = await paymentsSheet.getRows();
       const lowPriceRows = await lowPriceSheet.getRows();
       
+      // Попытаемся получить данные из Primer листа (если он существует)
+      let primerRows = [];
+      try {
+        const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
+        const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
+        await primerSheet.loadHeaderRow();
+        primerRows = await primerSheet.getRows();
+        logInfo(`✅ Primer sheet "${PRIMER_SHEET_NAME}" found with ${primerRows.length} rows`);
+      } catch (error) {
+        logInfo(`ℹ️ Primer sheet not found or not configured (${error.message})`);
+      }
+      
       // Получаем сегодняшнюю дату в UTC
       const today = new Date();
       const todayUTC = today.toISOString().split('T')[0]; // YYYY-MM-DD
       
       logInfo(`📅 Анализирую покупки за ${todayUTC} (UTC)`);
       
-      // Фильтруем покупки за сегодня по UTC (для обоих листов)
+      // Фильтруем покупки за сегодня по UTC (для всех листов)
       const todayPayments = paymentsRows.filter(row => {
         const createdUTC = row.get('Created UTC') || '';
         return createdUTC.includes(todayUTC);
@@ -160,9 +173,14 @@ ${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFi
         return createdUTC.includes(todayUTC);
       });
       
-      const allTodayPurchases = [...todayPayments, ...todayLowPrice];
+      const todayPrimer = primerRows.filter(row => {
+        const createdUTC = row.get('Created UTC') || '';
+        return createdUTC.includes(todayUTC);
+      });
       
-      logInfo(`📊 Найдено ${allTodayPurchases.length} покупок за сегодня (${todayPayments.length} из payments, ${todayLowPrice.length} из LowPrice)`);
+      const allTodayPurchases = [...todayPayments, ...todayLowPrice, ...todayPrimer];
+      
+      logInfo(`📊 Найдено ${allTodayPurchases.length} покупок за сегодня (${todayPayments.length} из payments, ${todayLowPrice.length} из LowPrice, ${todayPrimer.length} из Primer)`);
       
       if (allTodayPurchases.length === 0) {
         logInfo('📭 Нет покупок за сегодня - пропускаю часовой отчет');
@@ -649,7 +667,7 @@ ${isSignificantDrop ? '🔍 Check your campaigns!' : '🎉 Great performance!'}`
     try {
       logInfo('🎨 Анализирую креативы за сегодня...');
       
-      // ✅ Получаем данные из обоих листов
+      // ✅ Получаем данные из всех листов (payments, LowPrice, Primer)
       const paymentsSheet = await googleSheets.getSheetByName('payments');
       const lowPriceSheet = await googleSheets.getSheetByName('LowPrice');
       
@@ -659,10 +677,22 @@ ${isSignificantDrop ? '🔍 Check your campaigns!' : '🎉 Great performance!'}`
       const paymentsRows = await paymentsSheet.getRows();
       const lowPriceRows = await lowPriceSheet.getRows();
       
-      // Объединяем все покупки из обоих аккаунтов
-      const allRows = [...paymentsRows, ...lowPriceRows];
+      // Попытаемся получить данные из Primer листа (если он существует)
+      let primerRows = [];
+      try {
+        const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
+        const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
+        await primerSheet.loadHeaderRow();
+        primerRows = await primerSheet.getRows();
+        logInfo(`✅ Primer sheet "${PRIMER_SHEET_NAME}" found with ${primerRows.length} rows`);
+      } catch (error) {
+        logInfo(`ℹ️ Primer sheet not found or not configured (${error.message})`);
+      }
       
-      logInfo(`📊 Загружено ${paymentsRows.length} покупок из основного аккаунта, ${lowPriceRows.length} из LowPrice`);
+      // Объединяем все покупки из всех аккаунтов
+      const allRows = [...paymentsRows, ...lowPriceRows, ...primerRows];
+      
+      logInfo(`📊 Загружено ${paymentsRows.length} покупок из основного аккаунта, ${lowPriceRows.length} из LowPrice, ${primerRows.length} из Primer`);
       
       // Получаем сегодняшнюю дату в UTC+1
       const today = new Date();
@@ -725,8 +755,14 @@ ${isSignificantDrop ? '🔍 Check your campaigns!' : '🎉 Great performance!'}`
         minute: '2-digit'
       });
       
-      // Формируем сообщение
-      const alertText = `🎨 **TOP-5 Creative Performance for today (${todayStr})**\n\n${top5.join('\n')}\n\n📈 Total purchases: ${todayPurchases.length} (W2W + FL)\n⏰ Report time: ${timeStr} UTC+1`;
+      // Формируем сообщение (включает все источники: W2W, FL, Primer)
+      const sources = [];
+      if (paymentsRows.length > 0) sources.push('W2W');
+      if (lowPriceRows.length > 0) sources.push('FL');
+      if (primerRows.length > 0) sources.push('Primer');
+      const sourcesText = sources.length > 0 ? sources.join(' + ') : 'W2W + FL';
+      
+      const alertText = `🎨 **TOP-5 Creative Performance for today (${todayStr})**\n\n${top5.join('\n')}\n\n📈 Total purchases: ${todayPurchases.length} (${sourcesText})\n⏰ Report time: ${timeStr} UTC+1`;
       
       logInfo('📤 Отправляю креатив алерт:', { alertText });
       

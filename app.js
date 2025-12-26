@@ -18,7 +18,8 @@ import { performanceMonitor } from './src/services/performanceMonitor.js';
 import { notificationQueue } from './src/services/notificationQueue.js';
 import { campaignAnalyzer } from './src/services/campaignAnalyzer.js';
 import { duplicateChecker } from './src/services/duplicateChecker.js';
-import { formatPaymentForSheets, formatPaymentForSheetsLowPrice, formatTelegramNotification } from './src/utils/formatting.js';
+import { formatPaymentForSheets, formatPaymentForSheetsLowPrice, formatPaymentForSheetsPrimer, formatTelegramNotification } from './src/utils/formatting.js';
+import { getRecentPaymentsPrimer, getAllPaymentsPrimer, getCustomerPaymentsPrimer, getCustomerPrimer, normalizePrimerPayment, isPrimerConfigured } from './src/services/primer.js';
 import healthRoutes from './src/routes/health.js';
 import { google } from 'googleapis';
 
@@ -478,6 +479,33 @@ async function runSync() {
       }
     }).catch(error => {
       logger.error('Low Price sync failed', {
+        error: error.message,
+        stack: error.stack
+      });
+    });
+    
+    // ✅ Синхронизация Primer платежей (PayPal) - параллельно с LowPrice
+    performSyncLogicPrimer().then(async (primerResult) => {
+      // ✅ Проверяем оперативные алерты после успешной синхронизации Primer
+      if (primerResult && primerResult.success && (primerResult.newPurchases > 0 || primerResult.updatedPurchases > 0)) {
+        try {
+          const realTimeAlerts = await smartAlerts.checkAllRealTimeAlerts();
+          if (realTimeAlerts) {
+            await sendTextNotifications(realTimeAlerts);
+            logger.info('⚡ Real-time alerts sent after Primer sync', {
+              newPurchases: primerResult.newPurchases,
+              updatedPurchases: primerResult.updatedPurchases
+            });
+          }
+        } catch (alertError) {
+          logger.error('❌ Real-time alerts check failed after Primer sync', {
+            error: alertError.message
+          });
+          // Не прерываем синхронизацию из-за ошибки алертов
+        }
+      }
+    }).catch(error => {
+      logger.error('Primer sync failed', {
         error: error.message,
         stack: error.stack
       });
@@ -3502,6 +3530,63 @@ async function exportUpsellsToSeparateSheet(customerId, customer, allPayments, l
   }
 }
 
+// Helper function to add LA time formula to column G in Primer sheet (UTC-8)
+async function addLaTimeFormulaToPrimerSheet(rowNumber, utcColumnIndex = null) {
+  try {
+    const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
+    const sheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
+    await sheet.loadHeaderRow();
+    
+    // Find UTC column dynamically
+    if (utcColumnIndex === null) {
+      utcColumnIndex = sheet.headerValues.indexOf('Created UTC');
+      if (utcColumnIndex === -1) {
+        logger.warn('UTC column not found in Primer sheet headers');
+        return false;
+      }
+    }
+    
+    const utcColumnLetter = String.fromCharCode(65 + utcColumnIndex);
+    const columnGIndex = sheet.headerValues.indexOf('Created Local (UTC-8)');
+    if (columnGIndex === -1) {
+      logger.warn('Created Local (UTC-8) column not found in Primer sheet headers');
+      return false;
+    }
+    const columnGLetter = String.fromCharCode(65 + columnGIndex);
+    
+    // Formula to convert UTC to LA time (UTC-8) - формат как в других листах
+    const formula = `=IF(${utcColumnLetter}${rowNumber}="","",TEXT(DATEVALUE(LEFT(${utcColumnLetter}${rowNumber},10))+TIMEVALUE(MID(${utcColumnLetter}${rowNumber},12,8))-TIME(8,0,0),"YYYY-MM-DD HH:MM:SS.000")&" UTC-8")`;
+    
+    // Use googleapis to add formula
+    const { JWT } = await import('google-auth-library');
+    const serviceAccountAuth = new JWT({
+      email: ENV.GOOGLE_SERVICE_EMAIL,
+      key: ENV.GOOGLE_SERVICE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+      scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+    });
+    
+    const sheets = google.sheets({ version: 'v4', auth: serviceAccountAuth });
+    
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: ENV.GOOGLE_SHEETS_DOC_ID,
+      range: `${PRIMER_SHEET_NAME}!${columnGLetter}${rowNumber}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [[formula]]
+      }
+    });
+    
+    logger.debug(`Added LA time formula to ${PRIMER_SHEET_NAME} row ${rowNumber}, column ${columnGLetter}`);
+    return true;
+  } catch (error) {
+    logger.warn(`Failed to add LA time formula to Primer row ${rowNumber}`, {
+      error: error.message,
+      stack: error.stack
+    });
+    return false;
+  }
+}
+
 // Helper function to add LA time formula to column G in LowPrice sheet
 async function addLaTimeFormulaToLowPriceSheet(rowNumber, utcColumnIndex = null) {
   try {
@@ -4107,6 +4192,440 @@ async function performSyncLogicLowPrice(exportAll = false) {
   }
 }
 
+// Sync Primer payments (PayPal via Primer API)
+async function performSyncLogicPrimer(exportAll = false) {
+  // Skip if not configured
+  if (!isPrimerConfigured()) {
+    logger.info('Primer API not configured, skipping sync');
+    return { success: true, message: 'Primer API not configured', processed: 0 };
+  }
+
+  const startTime = Date.now();
+  const results = {
+    processed: 0,
+    failed: 0,
+    errors: [],
+    newPurchases: 0,
+    updatedPurchases: 0,
+    skipped: 0,
+    duplicatesAvoided: 0
+  };
+
+  const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
+  
+  try {
+    logger.info(`🔄 Starting Primer payment sync to sheet "${PRIMER_SHEET_NAME}"...`);
+    
+    // Get Primer sheet
+    const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
+    logger.info(`✅ Using Primer sheet: "${primerSheet.title}" (ID: ${primerSheet.sheetId})`);
+    
+    // Try to load headers
+    try {
+      await primerSheet.loadHeaderRow();
+      logger.info(`✅ Primer sheet headers loaded successfully`);
+    } catch (error) {
+      logger.warn(`⚠️ Could not load headers (may be due to sheet size), but headers already exist. Continuing... (error: ${error.message})`);
+    }
+    
+    // Load existing Payment IDs from Primer sheet
+    let existingRows;
+    try {
+      existingRows = await primerSheet.getRows();
+      logger.info(`✅ Loaded ${existingRows.length} existing rows from Primer sheet`);
+    } catch (error) {
+      logger.error('❌ Failed to load rows from Primer sheet', {
+        error: error.message,
+        stack: error.stack,
+        sheetName: PRIMER_SHEET_NAME
+      });
+      throw new Error(`Failed to load rows from Primer sheet: ${error.message}`);
+    }
+    
+    const existingPaymentIds = new Set();
+    
+    for (const row of existingRows) {
+      const paymentIdsField = row.get('Payment Intent IDs') || row.get('Payment ID') || '';
+      if (paymentIdsField) {
+        const ids = paymentIdsField.split(',').map(id => id.trim()).filter(Boolean);
+        ids.forEach(id => existingPaymentIds.add(id));
+      }
+    }
+    
+    logger.info(`📋 Found ${existingPaymentIds.size} existing payments in Primer sheet`);
+    
+    // Get payments from Primer API (all or recent)
+    const primerPayments = exportAll 
+      ? await getAllPaymentsPrimer()
+      : await getRecentPaymentsPrimer(100);
+    
+    // Normalize Primer payments to Stripe-like format
+    const normalizedPayments = primerPayments.map(normalizePrimerPayment);
+    
+    // Filter successful payments
+    const successfulPayments = normalizedPayments.filter(p => {
+      if (p.status !== 'succeeded' || !p.customer) return false;
+      // Exclude refunded/reversed payments
+      if (p.status === 'reversed' || p.status === 'refunded' || p.status === 'canceled') return false;
+      return true;
+    });
+    
+    logger.info(`📊 Found ${successfulPayments.length} successful payments from Primer API`);
+    
+    // Filter out existing payments by payment ID
+    const newPayments = successfulPayments.filter(p => {
+      if (existingPaymentIds.has(p.id)) {
+        results.duplicatesAvoided++;
+        logger.debug(`⏭️ Payment ${p.id} already exists in sheet, skipping`);
+        return false;
+      }
+      return true;
+    });
+    
+    logger.info(`🆕 Processing ${newPayments.length} new Primer payments (out of ${successfulPayments.length} total), avoided ${results.duplicatesAvoided} duplicates`);
+    
+    if (newPayments.length === 0) {
+      logger.info(`ℹ️ No new payments to process for Primer account`);
+      return {
+        success: true,
+        message: `No new payments to process`,
+        ...results,
+        duration: `${Date.now() - startTime}ms`,
+        sheetName: PRIMER_SHEET_NAME
+      };
+    }
+    
+    // Group payments by customer
+    const customerGroups = new Map();
+    for (const payment of newPayments) {
+      const customerId = payment.customer;
+      if (!customerId) {
+        logger.warn(`⚠️ Payment ${payment.id} has no customer ID, skipping`);
+        results.skipped++;
+        continue;
+      }
+      if (!customerGroups.has(customerId)) {
+        customerGroups.set(customerId, []);
+      }
+      customerGroups.get(customerId).push(payment);
+    }
+    
+    logger.info(`📦 Grouped ${newPayments.length} payments into ${customerGroups.size} customer groups`);
+    
+    // Process each customer group
+    for (const [customerId, payments] of customerGroups.entries()) {
+      // Get customer lock
+      const customerLockKey = `customer_primer_${customerId}`;
+      let customerLockId = null;
+      try {
+        customerLockId = await distributedLock.acquire(customerLockKey, 5, 100);
+        logger.debug(`🔒 Primer customer lock acquired for ${customerId}`, { customerLockId });
+      } catch (error) {
+        logger.warn(`⚠️ Failed to acquire customer lock for ${customerId}, skipping payment group`, {
+          error: error.message,
+          customerId,
+          paymentCount: payments.length
+        });
+        results.duplicatesAvoided += payments.length;
+        continue;
+      }
+      
+      try {
+        // Load customer and rows in parallel
+        const [customerResult, rowsResult] = await Promise.allSettled([
+          fetchWithRetry(() => getCustomerPrimer(customerId)),
+          primerSheet.getRows()
+        ]);
+        
+        if (customerResult.status === 'rejected') {
+          logger.error(`Failed to fetch Primer customer ${customerId}`, { error: customerResult.reason?.message });
+          results.failed++;
+          results.errors.push({ customerId, error: customerResult.reason?.message });
+          continue;
+        }
+        
+        if (rowsResult.status === 'rejected') {
+          logger.error(`Failed to fetch rows from Primer sheet`, { error: rowsResult.reason?.message });
+          results.failed++;
+          results.errors.push({ customerId, error: 'Failed to load Primer sheet rows' });
+          continue;
+        }
+        
+        let customer = customerResult.value;
+        const allPrimerRows = rowsResult.value;
+        
+        // Извлекаем email и GEO напрямую из payment объектов если customer не найден или неполный
+        const firstPayment = payments[0];
+        const originalPayment = firstPayment._original;
+        
+        let emailFromPayment = null;
+        let countryFromPayment = null;
+        
+        if (originalPayment) {
+          emailFromPayment = originalPayment.customer?.emailAddress 
+            || originalPayment.paymentMethod?.paymentMethodData?.externalPayerInfo?.email
+            || firstPayment.email
+            || null;
+          
+          countryFromPayment = originalPayment.order?.countryCode 
+            || originalPayment.paymentMethod?.paymentMethodData?.externalPayerInfo?.countryCode
+            || firstPayment.country
+            || null;
+        }
+        
+        if (!customer) {
+          // Создаем customer из payment данных
+          customer = {
+            id: customerId,
+            email: emailFromPayment || null,
+            country: countryFromPayment || null,
+            address: countryFromPayment ? { country: countryFromPayment } : null,
+            metadata: firstPayment.metadata || {}
+          };
+          logger.info(`✅ Создан customer из payment данных: ${customerId}, email=${customer.email || 'нет'}, country=${customer.country || 'нет'}`);
+        } else {
+          // Если API не вернул email/GEO, используем данные из payment
+          if (!customer.email && emailFromPayment) {
+            customer.email = emailFromPayment;
+            logger.info(`✅ Использован email из payment для ${customerId}: ${emailFromPayment}`);
+          }
+          if (!customer.country && countryFromPayment) {
+            customer.country = countryFromPayment;
+            customer.address = countryFromPayment ? { country: countryFromPayment } : null;
+            logger.info(`✅ Использован GEO из payment для ${customerId}: ${countryFromPayment}`);
+          }
+        }
+        
+        // Если все еще нет email/GEO, пробуем получить детальный payment
+        if ((!customer.email || !customer.country) && originalPayment?.id) {
+          try {
+            const paymentDetailResponse = await fetchWithRetry(() => 
+              fetch(`https://api.primer.io/payments/${originalPayment.id}`, {
+                headers: {
+                  'X-API-KEY': ENV.PRIMER_API_KEY,
+                  'X-API-VERSION': ENV.PRIMER_API_VERSION || '2.4',
+                  'Content-Type': 'application/json'
+                }
+              })
+            );
+            
+            if (paymentDetailResponse.ok) {
+              const paymentDetail = await paymentDetailResponse.json();
+              
+              if (!customer.email) {
+                customer.email = paymentDetail.customer?.emailAddress 
+                  || paymentDetail.paymentMethod?.paymentMethodData?.externalPayerInfo?.email
+                  || customer.email;
+              }
+              
+              if (!customer.country) {
+                customer.country = paymentDetail.order?.countryCode 
+                  || paymentDetail.paymentMethod?.paymentMethodData?.externalPayerInfo?.countryCode
+                  || customer.country;
+                customer.address = customer.country ? { country: customer.country } : null;
+              }
+              
+              if (customer.email || customer.country) {
+                logger.info(`✅ Получен детальный payment для ${customerId}: email=${customer.email || 'нет'}, country=${customer.country || 'нет'}`);
+              }
+            }
+          } catch (detailError) {
+            logger.debug(`Не удалось получить детальный payment для ${customerId}: ${detailError.message}`);
+          }
+        }
+        
+        // Sort payments by creation date
+        payments.sort((a, b) => a.created - b.created);
+        
+        // Check if customer exists
+        const existingCustomers = allPrimerRows.filter(row => {
+          const rowCustomerId = row.get('Customer ID');
+          return rowCustomerId === customerId;
+        });
+        
+        if (existingCustomers.length > 0) {
+          // Customer exists - UPDATE
+          logger.info(`Updating existing Primer customer ${customerId}`);
+          
+          // Load ALL payments for this customer
+          const allPayments = await fetchWithRetry(() => getCustomerPaymentsPrimer(customerId));
+          const normalizedAllPayments = allPayments.map(normalizePrimerPayment);
+          const allSuccessfulPayments = normalizedAllPayments.filter(p => {
+            if (p.status !== 'succeeded' || !p.customer) return false;
+            if (p.status === 'reversed' || p.status === 'refunded' || p.status === 'canceled') return false;
+            return true;
+          });
+          
+          let totalAmountAll = 0;
+          let paymentCountAll = 0;
+          const paymentIdsAll = [];
+          
+          for (const p of allSuccessfulPayments) {
+            totalAmountAll += p.amount;
+            paymentCountAll++;
+            paymentIdsAll.push(p.id);
+          }
+          
+          const latestPaymentForUpdate = allSuccessfulPayments[allSuccessfulPayments.length - 1];
+          const updatedRowData = formatPaymentForSheetsPrimer(latestPaymentForUpdate, customer, { accountSource: 'primer' });
+          
+          // ✅ Убеждаемся что email и GEO заполнены
+          if (!updatedRowData['Email'] || updatedRowData['Email'] === 'N/A') {
+            updatedRowData['Email'] = customer?.email || latestPaymentForUpdate.email || 'N/A';
+          }
+          if (!updatedRowData['GEO'] || updatedRowData['GEO'] === 'Unknown') {
+            updatedRowData['GEO'] = customer?.country || customer?.address?.country || latestPaymentForUpdate.country || 'Unknown';
+          }
+          
+          const existingRow = existingCustomers[0];
+          // Устанавливаем все поля перед сохранением
+          existingRow.set('Purchase ID', `purchase_${customerId}`);
+          existingRow.set('Total Amount', updatedRowData['Total Amount']);
+          existingRow.set('Payment Count', paymentCountAll.toString());
+          existingRow.set('Payment Intent IDs', paymentIdsAll.join(', '));
+          existingRow.set('Created UTC', updatedRowData['Created UTC']);
+          existingRow.set('Created Local (UTC-8)', updatedRowData['Created Local (UTC-8)']);
+          existingRow.set('Email', updatedRowData['Email']); // ✅ Сохраняем email при обновлении
+          existingRow.set('GEO', updatedRowData['GEO']); // ✅ Сохраняем GEO при обновлении
+          existingRow.set('Customer ID', customerId);
+          
+          logger.info(`🔄 Обновляю покупку Primer: Customer=${customerId}, Email=${updatedRowData['Email']}, GEO=${updatedRowData['GEO']}`); // ✅ Сохраняем Customer ID
+          
+          await fetchWithRetry(() => existingRow.save());
+          
+          logger.info(`✅ Updated existing Primer customer ${customerId} - no notification sent (to prevent spam)`);
+          
+          results.updatedPurchases++;
+          results.processed++;
+          
+        } else {
+          // ADD NEW customer
+          logger.info(`Adding new Primer customer ${customerId}`);
+          
+          // Load ALL payments for this customer
+          let allPayments;
+          try {
+            allPayments = await fetchWithRetry(() => getCustomerPaymentsPrimer(customerId));
+            const normalizedAllPayments = allPayments.map(normalizePrimerPayment);
+            const allSuccessfulPayments = normalizedAllPayments.filter(p => {
+              if (p.status !== 'succeeded' || !p.customer) return false;
+              if (p.status === 'reversed' || p.status === 'refunded' || p.status === 'canceled') return false;
+              return true;
+            });
+            
+            if (allSuccessfulPayments.length === 0) {
+              logger.warn(`⚠️ No successful payments for customer ${customerId}, skipping`);
+              results.skipped++;
+              continue;
+            }
+            
+            allSuccessfulPayments.sort((a, b) => a.created - b.created);
+            const firstPayment = allSuccessfulPayments[0];
+            
+            const rowData = formatPaymentForSheetsPrimer(firstPayment, customer, { accountSource: 'primer' });
+            
+            // Calculate total amount and payment count
+            let totalAmount = 0;
+            const paymentIds = [];
+            for (const p of allSuccessfulPayments) {
+              totalAmount += p.amount;
+              paymentIds.push(p.id);
+            }
+            
+            rowData['Purchase ID'] = `purchase_${customerId}_${firstPayment.created}`;
+            rowData['Total Amount'] = (totalAmount >= 1000 ? (totalAmount / 100).toFixed(2) : totalAmount.toFixed(2));
+            rowData['Payment Count'] = allSuccessfulPayments.length.toString();
+            rowData['Payment Intent IDs'] = paymentIds.join(', ');
+            
+            // ✅ Убеждаемся что email и GEO заполнены
+            if (!rowData['Email'] || rowData['Email'] === 'N/A') {
+              rowData['Email'] = customer?.email || firstPayment.email || 'N/A';
+            }
+            if (!rowData['GEO'] || rowData['GEO'] === 'Unknown') {
+              rowData['GEO'] = customer?.country || customer?.address?.country || firstPayment.country || 'Unknown';
+            }
+            
+            logger.info(`➕ Добавляю новую покупку Primer: Customer=${customerId}, Email=${rowData['Email']}, GEO=${rowData['GEO']}`);
+            
+            // Add new row
+            const addResult = await primerSheet.addRow(rowData);
+            
+            // Add LA time formula to Created Local (UTC-8) column
+            await addLaTimeFormulaToPrimerSheet(addResult.row.rowNumber);
+            
+            logger.info(`✅ Added new Primer customer ${customerId} to sheet`);
+            
+            // Send notification for NEW purchase
+            try {
+              await sendPurchaseNotification(firstPayment, customer, {
+                ...rowData,
+                accountSource: 'primer',
+                'Total Amount': rowData['Total Amount'],
+                'Payment Count': rowData['Payment Count']
+              });
+              logger.info(`📱 Notification sent for new Primer purchase: ${customerId}`);
+            } catch (notifError) {
+              logger.error(`❌ Failed to send notification for Primer purchase ${customerId}`, {
+                error: notifError.message
+              });
+              // Don't fail the sync if notification fails
+            }
+            
+            results.newPurchases++;
+            results.processed++;
+          } catch (paymentsError) {
+            logger.error(`❌ Failed to load payments for customer ${customerId}`, {
+              error: paymentsError.message,
+              customerId
+            });
+            results.failed++;
+            continue;
+          }
+        }
+        
+      } finally {
+        // Release customer lock
+        if (customerLockId) {
+          distributedLock.release(customerLockKey, customerLockId);
+        }
+      }
+    }
+    
+    const duration = Date.now() - startTime;
+    logger.info(`✅ Primer sync completed`, {
+      ...results,
+      duration: `${duration}ms`,
+      sheetName: PRIMER_SHEET_NAME
+    });
+    
+    return {
+      success: true,
+      message: `Primer sync completed successfully`,
+      ...results,
+      duration: `${duration}ms`,
+      sheetName: PRIMER_SHEET_NAME
+    };
+    
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    logger.error('❌ Primer sync failed', {
+      error: error.message,
+      stack: error.stack,
+      duration: `${duration}ms`
+    });
+    
+    return {
+      success: false,
+      message: `Critical Primer sync error: ${error.message}`,
+      error: error.message,
+      errorName: error.name,
+      partialResults: results,
+      duration: `${duration}ms`,
+      sheetName: PRIMER_SHEET_NAME
+    };
+  }
+}
+
 // Sync payments endpoint - MAXIMUM DUPLICATE PROTECTION
 app.post('/api/sync-payments', async (req, res) => {
   try {
@@ -4161,6 +4680,77 @@ app.post('/api/sync-payments-low-price', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Low Price sync endpoint error',
+      error: error.message
+    });
+  }
+});
+
+// Sync Primer payments endpoint (PayPal via Primer API)
+app.post('/api/sync-primer-payments', async (req, res) => {
+  try {
+    const result = await performSyncLogicPrimer();
+    
+    // ✅ Проверяем оперативные алерты после успешной синхронизации Primer
+    if (result.success && (result.newPurchases > 0 || result.updatedPurchases > 0)) {
+      try {
+        const realTimeAlerts = await smartAlerts.checkAllRealTimeAlerts();
+        if (realTimeAlerts) {
+          await sendTextNotifications(realTimeAlerts);
+          logger.info('⚡ Real-time alerts sent after Primer sync', {
+            newPurchases: result.newPurchases,
+            updatedPurchases: result.updatedPurchases
+          });
+        }
+      } catch (alertError) {
+        logger.error('❌ Real-time alerts check failed after Primer sync', {
+          error: alertError.message
+        });
+        // Не прерываем синхронизацию из-за ошибки алертов
+      }
+    }
+    
+    if (result.success) {
+      res.json(result);
+    } else {
+      res.status(500).json(result);
+    }
+  } catch (error) {
+    logger.error('Primer sync endpoint error', error);
+    res.status(500).json({
+      success: false,
+      message: 'Primer sync endpoint error',
+      error: error.message
+    });
+  }
+});
+
+// Export ALL historical payments from Primer (PayPal via Primer API)
+app.post('/api/export-all-primer-payments', async (req, res) => {
+  try {
+    logger.info('🚀 Starting mass export of ALL payments from Primer API...');
+    
+    if (!isPrimerConfigured()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Primer API not configured'
+      });
+    }
+    
+    // Call sync with exportAll=true to get ALL payments
+    const result = await performSyncLogicPrimer(true);
+    
+    logger.info('✅ Mass export completed', result);
+    res.json({
+      success: true,
+      message: 'Mass export completed!',
+      ...result
+    });
+    
+  } catch (error) {
+    logger.error('Error in mass export', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error exporting all payments',
       error: error.message
     });
   }
@@ -4375,6 +4965,61 @@ app.post('/api/export-all-lowprice-payments', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Error exporting all payments',
+      error: error.message
+    });
+  }
+});
+
+// Add LA time formula to all existing rows in Primer sheet
+app.post('/api/add-la-formula-all-primer', async (req, res) => {
+  try {
+    logger.info('Adding LA time formula to all rows in Primer sheet...');
+    
+    const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
+    const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
+    await primerSheet.loadHeaderRow();
+    
+    const rows = await primerSheet.getRows();
+    logger.info(`Found ${rows.length} rows in Primer sheet`);
+    
+    let updated = 0;
+    let failed = 0;
+    
+    for (const row of rows) {
+      try {
+        const success = await addLaTimeFormulaToPrimerSheet(row.rowNumber);
+        if (success) {
+          updated++;
+          if (updated % 10 === 0) {
+            logger.info(`Added formula to ${updated} rows...`);
+          }
+        } else {
+          failed++;
+        }
+      } catch (error) {
+        failed++;
+        logger.warn(`Failed to add formula to row ${row.rowNumber}`, {
+          error: error.message
+        });
+      }
+    }
+    
+    const result = {
+      success: true,
+      message: `LA time formula added to Primer sheet`,
+      totalRows: rows.length,
+      updated,
+      failed
+    };
+    
+    logger.info('LA time formula update completed', result);
+    res.json(result);
+    
+  } catch (error) {
+    logger.error('Error adding LA time formula to Primer sheet', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error adding LA time formula',
       error: error.message
     });
   }

@@ -5,6 +5,11 @@ export const ENV = {
   // Second Stripe account for low-price purchases
   STRIPE_SECRET_KEY_LOW_PRICE: process.env.STRIPE_SECRET_KEY_LOW_PRICE || null,
   STRIPE_LOW_PRICE_SHEET_NAME: process.env.STRIPE_LOW_PRICE_SHEET_NAME || 'LowPrice',
+  // Primer API for PayPal payments
+  PRIMER_API_KEY: process.env.PRIMER_API_KEY || null,
+  PRIMER_API_URL: process.env.PRIMER_API_URL || 'https://api.primer.io',
+  PRIMER_API_VERSION: process.env.PRIMER_API_VERSION || '2.4',
+  PRIMER_SHEET_NAME: process.env.PRIMER_SHEET_NAME || 'Primer',
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID,
   SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN,

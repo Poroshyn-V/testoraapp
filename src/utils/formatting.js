@@ -210,6 +210,108 @@ export function formatPaymentForSheetsLowPrice(payment, customer, metadata = {})
   };
 }
 
+// Format payment data for Primer sheet (PayPal payments)
+// ✅ Используем стандартные колонки таблицы
+export function formatPaymentForSheetsPrimer(payment, customer, metadata = {}) {
+  // Primer stores all data in metadata, merge everything
+  const m = { 
+    ...payment.metadata, 
+    ...(customer?.metadata || {}), 
+    ...metadata 
+  };
+  
+  // Extract GEO data from multiple sources (Primer API stores country in order.countryCode)
+  const geoCountry = m.geo_country 
+    || m.country_code 
+    || customer?.address?.country 
+    || customer?.country 
+    || payment._original?.order?.countryCode // Из оригинального Primer payment объекта
+    || payment._original?.paymentMethod?.paymentMethodData?.externalPayerInfo?.countryCode
+    || 'Unknown';
+  const geoCity = m.geo_city || customer?.address?.city || customer?.city || 'Unknown';
+  const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
+  
+  // Format UTM data from Primer metadata (utm_source, utm_campaign, etc.)
+  const utmSource = m.utm_source || 'N/A';
+  const utmMedium = m.utm_medium || 'N/A';
+  const utmCampaign = m.utm_campaign || 'N/A';
+  const utmContent = m.utm_content || 'N/A';
+  const utmTerm = m.utm_term || 'N/A';
+  
+  // Format ad data from Primer metadata (utm_ad_name, utm_adset_name)
+  const adName = m.utm_ad_name || m.ad_name || m['Ad Name'] || 'N/A';
+  const adsetName = m.utm_adset_name || m.adset_name || m['Adset Name'] || 'N/A';
+  
+  // Format customer data - извлекаем email из всех возможных источников
+  const customerEmail = customer?.email 
+    || m.email 
+    || payment.email 
+    || payment._original?.customer?.emailAddress // Из оригинального Primer payment объекта
+    || payment._original?.paymentMethod?.paymentMethodData?.externalPayerInfo?.email
+    || 'N/A';
+  const customerId = customer?.id || m.customer_id || payment.customer || 'N/A';
+  
+  // Format payment data
+  // Primer amounts are in cents (from normalizePrimerPayment)
+  const amount = payment.amount 
+    ? (payment.amount / 100).toFixed(2)
+    : '0.00';
+  const currency = (payment.currency || 'USD').toUpperCase();
+  const status = payment.status || 'N/A';
+  
+  // Format dates - UTC-8 (LA time, Pacific Time)
+  const createdDate = new Date(payment.created * 1000);
+  const createdUTC = createdDate.toISOString();
+  
+  // Convert to UTC-8 (America/Los_Angeles timezone)
+  const laFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  });
+  
+  const laParts = laFormatter.formatToParts(createdDate);
+  const year = laParts.find(p => p.type === 'year').value;
+  const month = laParts.find(p => p.type === 'month').value;
+  const day = laParts.find(p => p.type === 'day').value;
+  const hours = laParts.find(p => p.type === 'hour').value;
+  const minutes = laParts.find(p => p.type === 'minute').value;
+  const seconds = laParts.find(p => p.type === 'second').value;
+  
+  // Format as YYYY-MM-DD HH:MM:SS.000 UTC-8
+  const createdLocal = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')} ${hours.padStart(2, '0')}:${minutes.padStart(2, '0')}:${seconds.padStart(2, '0')}.000 UTC-8`;
+  
+  // Payment count (default 1 for new purchases)
+  const paymentCount = metadata['Payment Count'] || '1';
+  
+  // ✅ Используем ТОЛЬКО стандартные колонки таблицы
+  return {
+    'Payment Intent IDs': payment.id,
+    'Purchase ID': metadata['Purchase ID'] || `purchase_${customerId}`,
+    'Total Amount': amount,
+    'Currency': currency,
+    'Status': status,
+    'Created UTC': createdUTC,
+    'Created Local (UTC-8)': createdLocal,
+    'Customer ID': customerId,
+    'Email': customerEmail,
+    'GEO': geo,
+    'UTM Source': utmSource,
+    'UTM Medium': utmMedium,
+    'UTM Campaign': utmCampaign,
+    'UTM Content': utmContent,
+    'UTM Term': utmTerm,
+    'Ad Name': adName,
+    'Adset Name': adsetName,
+    'Payment Count': paymentCount
+  };
+}
+
 // Format notification message for Telegram (STRUCTURED FORMAT)
 export function formatTelegramNotification(payment, customer, metadata = {}) {
   const m = { ...payment.metadata, ...(customer?.metadata || {}), ...metadata };
@@ -223,9 +325,14 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
   const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
   const paymentCount = metadata['Payment Count'] || '1';
   
-  // Get account source (W2W for main sheet, FL for LowPrice sheet)
-  const accountSource = metadata.accountSource || metadata.account_source || 'W2W'; // Default to W2W for backward compatibility
-  const accountLabel = accountSource === 'FL' ? 'FL (LowPrice)' : 'W2W (payments)';
+  // Get account source (W2W for main sheet, FL for LowPrice sheet, Primer for PayPal)
+  const accountSource = metadata.accountSource || metadata.account_source || payment._source || 'W2W'; // Default to W2W for backward compatibility
+  let accountLabel = 'W2W (payments)';
+  if (accountSource === 'FL' || accountSource === 'lowprice') {
+    accountLabel = 'FL (LowPrice)';
+  } else if (accountSource === 'primer' || accountSource === 'PRIMER' || payment._primer) {
+    accountLabel = 'Primer (PayPal)';
+  }
   
   // Get UTM Source (Platform)
   const utmSource = (metadata['UTM Source'] && metadata['UTM Source'] !== 'N/A') 
@@ -357,9 +464,14 @@ export function formatSlackNotification(payment, customer, metadata = {}) {
   const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
   const paymentCount = metadata['Payment Count'] || '1';
   
-  // Get account source (W2W for main sheet, FL for LowPrice sheet)
-  const accountSource = metadata.accountSource || metadata.account_source || 'W2W'; // Default to W2W for backward compatibility
-  const accountLabel = accountSource === 'FL' ? 'FL (LowPrice)' : 'W2W (payments)';
+  // Get account source (W2W for main sheet, FL for LowPrice sheet, Primer for PayPal)
+  const accountSource = metadata.accountSource || metadata.account_source || payment._source || 'W2W'; // Default to W2W for backward compatibility
+  let accountLabel = 'W2W (payments)';
+  if (accountSource === 'FL' || accountSource === 'lowprice') {
+    accountLabel = 'FL (LowPrice)';
+  } else if (accountSource === 'primer' || accountSource === 'PRIMER' || payment._primer) {
+    accountLabel = 'Primer (PayPal)';
+  }
   
   // Get UTM Source (Platform)
   const utmSource = (metadata['UTM Source'] && metadata['UTM Source'] !== 'N/A') 
