@@ -4604,7 +4604,7 @@ async function performSyncLogicPrimer(exportAll = false) {
             
             logger.info(`✅ Added new Primer customer ${customerId} to sheet`);
             
-            // ✅ ОТПРАВЛЯЕМ УВЕДОМЛЕНИЕ ТОЛЬКО ЕСЛИ СТРОКА УСПЕШНО СОХРАНЕНА В ТАБЛИЦУ (как в Stripe и LowPrice)
+            // Send notification ONLY if successfully added (same as Stripe and LowPrice)
             const sheetData = {
               'Ad Name': rowData['Ad Name'] || 'N/A',
               'Adset Name': rowData['Adset Name'] || 'N/A',
@@ -4615,14 +4615,13 @@ async function performSyncLogicPrimer(exportAll = false) {
               'Payment Intent IDs': rowData['Payment Intent IDs']
             };
             
+            // Send notification via queue (VIP alert will be included if applicable)
             const notificationMessage = await formatTelegramNotification(firstPayment, customer, {
               ...sheetData,
               accountSource: 'primer' // Primer (PayPal) account
             });
             const amount = parseFloat(sheetData['Total Amount'] || 0);
             const isVip = amount >= alertConfig.vipPurchaseThreshold;
-            
-            logger.info(`📬 Sending notification for NEW Primer purchase: ${customerId} (${rowData['Total Amount']} USD)`);
             
             await notificationQueue.add({
               type: isVip ? 'vip_new_purchase' : 'new_purchase',

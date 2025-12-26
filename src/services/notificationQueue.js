@@ -17,14 +17,37 @@ class NotificationQueue {
     // Create unique key for duplicate detection
     const duplicateKey = this.createDuplicateKey(notification);
     
+    // ✅ Детальное логирование для Primer уведомлений при добавлении в очередь
+    const accountSource = notification.sheetData?.accountSource || notification.metadata?.accountSource || 'unknown';
+    const paymentId = notification.payment?.id || notification.metadata?.paymentId;
+    const customerId = notification.customer?.id || notification.metadata?.customerId;
+    
+    if (accountSource === 'primer' || accountSource === 'PRIMER') {
+      logInfo('📬 Adding Primer notification to queue', {
+        type: notification.type,
+        paymentId,
+        customerId,
+        duplicateKey,
+        accountSource,
+        hasPayment: !!notification.payment,
+        hasCustomer: !!notification.customer,
+        hasSheetData: !!notification.sheetData,
+        hasMessage: !!notification.message,
+        messageLength: notification.message?.length || 0,
+        sentNotificationsSize: this.sentNotifications.size
+      });
+    }
+    
     // Check if we already have this notification in queue or sent recently
     if (this.sentNotifications.has(duplicateKey)) {
       logWarn('🚫 Duplicate notification prevented (already sent)', {
         type: notification.type,
         duplicateKey,
-        paymentId: notification.metadata?.paymentId,
-        customerId: notification.metadata?.customerId,
-        queueSize: this.queue.length
+        paymentId,
+        customerId,
+        accountSource,
+        queueSize: this.queue.length,
+        sentNotificationsSize: this.sentNotifications.size
       });
       metrics.increment('notification_duplicate_prevented', 1, { type: notification.type, reason: 'already_sent' });
       return;
@@ -36,8 +59,9 @@ class NotificationQueue {
       logWarn('🚫 Duplicate notification prevented (already in queue)', {
         type: notification.type,
         duplicateKey,
-        paymentId: notification.metadata?.paymentId,
-        customerId: notification.metadata?.customerId,
+        paymentId,
+        customerId,
+        accountSource,
         queueSize: this.queue.length
       });
       metrics.increment('notification_duplicate_prevented', 1, { type: notification.type, reason: 'already_in_queue' });
@@ -57,7 +81,8 @@ class NotificationQueue {
     logInfo('📬 Notification queued', {
       queueSize: this.queue.length,
       type: notification.type,
-      id: queuedNotification.id
+      id: queuedNotification.id,
+      accountSource
     });
     
     metrics.increment('notification_queued', 1, { type: notification.type });
@@ -186,25 +211,65 @@ class NotificationQueue {
           ...(notification.metadata || {})
         };
         
+        // ✅ Детальное логирование для Primer уведомлений
+        const accountSource = sheetData.accountSource || notification.metadata?.accountSource || 'unknown';
+        if (accountSource === 'primer' || accountSource === 'PRIMER') {
+          logInfo('📬 Processing Primer notification', {
+            type: notification.type,
+            paymentId: payment.id,
+            customerId: customer.id,
+            customerEmail: customer.email,
+            accountSource,
+            hasPayment: !!notification.payment,
+            hasCustomer: !!notification.customer,
+            hasSheetData: !!notification.sheetData,
+            messageLength: notification.message?.length || 0
+          });
+        }
+        
         // Send to Telegram (only Telegram, not Slack - to avoid duplicates)
         try {
           await sendTelegram(notification.message);
+          if (accountSource === 'primer' || accountSource === 'PRIMER') {
+            logInfo('✅ Primer Telegram notification sent successfully', {
+              paymentId: payment.id,
+              customerId: customer.id,
+              accountSource
+            });
+          }
         } catch (telegramError) {
-          logWarn('Failed to send Telegram notification for purchase', {
+          logError('❌ Failed to send Telegram notification for purchase', telegramError, {
             error: telegramError.message,
-            paymentId: payment.id
+            stack: telegramError.stack,
+            paymentId: payment.id,
+            customerId: customer.id,
+            accountSource,
+            notificationType: notification.type
           });
+          // Don't throw - allow Slack to be sent even if Telegram fails
         }
         
         // Send to Slack (using proper formatting with account source)
         try {
           await sendSlack(payment, customer, sheetData);
+          if (accountSource === 'primer' || accountSource === 'PRIMER') {
+            logInfo('✅ Primer Slack notification sent successfully', {
+              paymentId: payment.id,
+              customerId: customer.id,
+              accountSource
+            });
+          }
         } catch (slackError) {
-          logWarn('Failed to send Slack notification for purchase', {
+          logError('❌ Failed to send Slack notification for purchase', slackError, {
             error: slackError.message,
-            paymentId: payment.id
+            stack: slackError.stack,
+            paymentId: payment.id,
+            customerId: customer.id,
+            accountSource,
+            notificationType: notification.type
           });
-          // Don't fail the whole notification if Slack fails
+          // Don't fail the whole notification if Slack fails (Slack is optional)
+          // But log it for debugging
         }
       } else {
         // For other notifications (alerts, reports), use simple text notifications
@@ -238,11 +303,18 @@ class NotificationQueue {
   createDuplicateKey(notification) {
     // Create a unique key based on payment/customer ID to prevent duplicates across all notification types
     // This ensures that the same purchase doesn't get multiple notifications regardless of type
-    const paymentId = notification.metadata?.paymentId;
-    const customerId = notification.metadata?.customerId;
+    // ✅ PRIORITY: Use paymentId first (each payment should have its own notification)
+    // ✅ Fallback to customerId only if paymentId is not available (for non-purchase notifications)
+    const paymentId = notification.payment?.id || notification.metadata?.paymentId;
+    const customerId = notification.customer?.id || notification.metadata?.customerId;
     
+    // ✅ For purchase notifications, always use paymentId to allow multiple purchases per customer
     if (paymentId) {
       return `payment_${paymentId}`;
+    } else if (customerId && (notification.type?.includes('purchase') || notification.type?.includes('upsell'))) {
+      // ✅ For purchase notifications without paymentId, use customerId + timestamp to allow multiple purchases
+      // This prevents duplicate notifications for the same purchase, but allows new purchases
+      return `customer_${customerId}_${Date.now()}`;
     } else if (customerId) {
       return `customer_${customerId}`;
     } else {
