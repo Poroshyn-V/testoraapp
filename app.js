@@ -4538,7 +4538,53 @@ async function performSyncLogicPrimer(exportAll = false) {
           
           await fetchWithRetry(() => existingRow.save());
           
-          logger.info(`✅ Обновлен существующий Primer клиент ${customerId} (добавлено ${trulyNewPayments.length} новых платежей) - уведомление не отправлено (чтобы избежать спама)`);
+          // ✅ Отправляем уведомление если есть действительно новые платежи (даже для существующего клиента)
+          if (trulyNewPayments.length > 0) {
+            try {
+              // Используем последний новый платеж для уведомления
+              const newestPayment = trulyNewPayments[trulyNewPayments.length - 1];
+              
+              // ✅ Убеждаемся что customer объект правильно заполнен перед отправкой уведомления
+              const notificationCustomer = {
+                id: customer?.id || customerId,
+                email: customer?.email || newestPayment.email || updatedRowData['Email'] || 'N/A',
+                address: customer?.address || (customer?.country ? { country: customer.country } : null),
+                country: customer?.country || newestPayment.country || null,
+                metadata: {
+                  ...(customer?.metadata || {}),
+                  ...newestPayment.metadata
+                }
+              };
+              
+              // ✅ Убеждаемся что payment имеет правильный формат для уведомления
+              const notificationPayment = {
+                ...newestPayment,
+                _primer: true,
+                _source: 'primer'
+              };
+              
+              logger.info(`📱 Отправляю уведомление для нового Primer платежа существующего клиента: Customer=${customerId}, Email=${notificationCustomer.email}, Amount=$${correctTotalAmount}`);
+              
+              await sendPurchaseNotification(notificationPayment, notificationCustomer, {
+                ...updatedRowData,
+                accountSource: 'primer',
+                'Total Amount': correctTotalAmount,
+                'Payment Count': paymentCountAll.toString(),
+                'Email': notificationCustomer.email,
+                'GEO': updatedRowData['GEO']
+              });
+              
+              logger.info(`✅ Уведомление отправлено для нового Primer платежа клиента ${customerId}`);
+            } catch (notifError) {
+              logger.error(`❌ Ошибка отправки уведомления для Primer покупки ${customerId}`, {
+                error: notifError.message,
+                stack: notifError.stack
+              });
+              // Don't fail the sync if notification fails
+            }
+          }
+          
+          logger.info(`✅ Обновлен существующий Primer клиент ${customerId} (добавлено ${trulyNewPayments.length} новых платежей)`);
           
           results.updatedPurchases++;
           results.processed++;
