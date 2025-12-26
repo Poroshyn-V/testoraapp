@@ -4538,53 +4538,9 @@ async function performSyncLogicPrimer(exportAll = false) {
           
           await fetchWithRetry(() => existingRow.save());
           
-          // ✅ Отправляем уведомление если есть действительно новые платежи (даже для существующего клиента)
-          if (trulyNewPayments.length > 0) {
-            try {
-              // Используем последний новый платеж для уведомления
-              const newestPayment = trulyNewPayments[trulyNewPayments.length - 1];
-              
-              // ✅ Убеждаемся что customer объект правильно заполнен перед отправкой уведомления
-              const notificationCustomer = {
-                id: customer?.id || customerId,
-                email: customer?.email || newestPayment.email || updatedRowData['Email'] || 'N/A',
-                address: customer?.address || (customer?.country ? { country: customer.country } : null),
-                country: customer?.country || newestPayment.country || null,
-                metadata: {
-                  ...(customer?.metadata || {}),
-                  ...newestPayment.metadata
-                }
-              };
-              
-              // ✅ Убеждаемся что payment имеет правильный формат для уведомления
-              const notificationPayment = {
-                ...newestPayment,
-                _primer: true,
-                _source: 'primer'
-              };
-              
-              logger.info(`📱 Отправляю уведомление для нового Primer платежа существующего клиента: Customer=${customerId}, Email=${notificationCustomer.email}, Amount=$${correctTotalAmount}`);
-              
-              await sendPurchaseNotification(notificationPayment, notificationCustomer, {
-                ...updatedRowData,
-                accountSource: 'primer',
-                'Total Amount': correctTotalAmount,
-                'Payment Count': paymentCountAll.toString(),
-                'Email': notificationCustomer.email,
-                'GEO': updatedRowData['GEO']
-              });
-              
-              logger.info(`✅ Уведомление отправлено для нового Primer платежа клиента ${customerId}`);
-            } catch (notifError) {
-              logger.error(`❌ Ошибка отправки уведомления для Primer покупки ${customerId}`, {
-                error: notifError.message,
-                stack: notifError.stack
-              });
-              // Don't fail the sync if notification fails
-            }
-          }
-          
-          logger.info(`✅ Обновлен существующий Primer клиент ${customerId} (добавлено ${trulyNewPayments.length} новых платежей)`);
+          // ❌ УБРАЛИ УВЕДОМЛЕНИЯ ПРИ ОБНОВЛЕНИИ - это вызывало спам! (как в Stripe и LowPrice)
+          // Уведомления отправляются ТОЛЬКО для новых покупок, не для обновлений существующих
+          logger.info(`✅ Обновлен существующий Primer клиент ${customerId} (добавлено ${trulyNewPayments.length} новых платежей) - уведомление не отправлено (чтобы избежать спама)`);
           
           results.updatedPurchases++;
           results.processed++;
@@ -4648,46 +4604,42 @@ async function performSyncLogicPrimer(exportAll = false) {
             
             logger.info(`✅ Added new Primer customer ${customerId} to sheet`);
             
-            // Send notification for NEW purchase
-            try {
-              // ✅ Убеждаемся что customer объект правильно заполнен перед отправкой уведомления
-              const notificationCustomer = {
-                id: customer?.id || customerId,
-                email: customer?.email || firstPayment.email || rowData['Email'] || 'N/A',
-                address: customer?.address || (customer?.country ? { country: customer.country } : null),
-                country: customer?.country || firstPayment.country || null,
-                metadata: {
-                  ...(customer?.metadata || {}),
-                  ...firstPayment.metadata
-                }
-              };
-              
-              // ✅ Убеждаемся что payment имеет правильный формат для уведомления
-              const notificationPayment = {
-                ...firstPayment,
-                _primer: true,
-                _source: 'primer'
-              };
-              
-              logger.info(`📱 Отправляю уведомление для Primer покупки: Customer=${customerId}, Email=${notificationCustomer.email}, Amount=$${rowData['Total Amount']}`);
-              
-              await sendPurchaseNotification(notificationPayment, notificationCustomer, {
-                ...rowData,
-                accountSource: 'primer',
-                'Total Amount': rowData['Total Amount'],
-                'Payment Count': rowData['Payment Count'],
-                'Email': notificationCustomer.email,
-                'GEO': rowData['GEO']
-              });
-              
-              logger.info(`✅ Уведомление отправлено для новой Primer покупки: ${customerId}`);
-            } catch (notifError) {
-              logger.error(`❌ Ошибка отправки уведомления для Primer покупки ${customerId}`, {
-                error: notifError.message,
-                stack: notifError.stack
-              });
-              // Don't fail the sync if notification fails
-            }
+            // ✅ ОТПРАВЛЯЕМ УВЕДОМЛЕНИЕ ТОЛЬКО ЕСЛИ СТРОКА УСПЕШНО СОХРАНЕНА В ТАБЛИЦУ (как в Stripe и LowPrice)
+            const sheetData = {
+              'Ad Name': rowData['Ad Name'] || 'N/A',
+              'Adset Name': rowData['Adset Name'] || 'N/A',
+              'Campaign Name': rowData['Campaign Name'] || 'N/A',
+              'Creative Link': rowData['Creative Link'] || 'N/A',
+              'Total Amount': rowData['Total Amount'],
+              'Payment Count': rowData['Payment Count'],
+              'Payment Intent IDs': rowData['Payment Intent IDs']
+            };
+            
+            const notificationMessage = await formatTelegramNotification(firstPayment, customer, {
+              ...sheetData,
+              accountSource: 'primer' // Primer (PayPal) account
+            });
+            const amount = parseFloat(sheetData['Total Amount'] || 0);
+            const isVip = amount >= alertConfig.vipPurchaseThreshold;
+            
+            logger.info(`📬 Sending notification for NEW Primer purchase: ${customerId} (${rowData['Total Amount']} USD)`);
+            
+            await notificationQueue.add({
+              type: isVip ? 'vip_new_purchase' : 'new_purchase',
+              channel: 'telegram',
+              message: notificationMessage,
+              payment: firstPayment,
+              customer: customer,
+              sheetData: sheetData,
+              metadata: {
+                paymentId: firstPayment.id,
+                customerId: customer.id,
+                amount: sheetData['Total Amount'],
+                type: 'new_purchase',
+                isVip: isVip,
+                accountSource: 'primer'
+              }
+            });
             
             results.newPurchases++;
             results.processed++;
