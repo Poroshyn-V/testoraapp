@@ -4587,12 +4587,24 @@ async function performSyncLogicPrimer(exportAll = false) {
           const trulyNewPayments = payments.filter(p => !existingPaymentIds.has(p.id));
           
           if (trulyNewPayments.length === 0) {
-            logger.info(`⏭️ Все платежи клиента ${customerId} уже есть в таблице, пропускаю обновление`);
+            logger.info(`⏭️ Все платежи клиента ${customerId} уже есть в таблице, пропускаю обновление`, {
+              customerId,
+              totalPayments: payments.length,
+              existingPaymentIds: Array.from(existingPaymentIds).slice(0, 5),
+              paymentIdsFromGroup: payments.slice(0, 5).map(p => p.id)
+            });
             results.duplicatesAvoided += payments.length;
             continue;
           }
           
-          logger.info(`🔄 Обновляю существующего Primer клиента ${customerId} (найдено ${trulyNewPayments.length} новых платежей из ${payments.length} всего)`);
+          logger.info(`🔄 Обновляю существующего Primer клиента ${customerId} (найдено ${trulyNewPayments.length} новых платежей из ${payments.length} всего)`, {
+            customerId,
+            trulyNewPayments: trulyNewPayments.map(p => ({
+              id: p.id,
+              amount: `${(p.amount / 100).toFixed(2)} ${p.currency.toUpperCase()}`,
+              created: new Date(p.created * 1000).toISOString()
+            }))
+          });
           
           // Load ALL payments for this customer
           const allPayments = await fetchWithRetry(() => getCustomerPaymentsPrimer(customerId));
@@ -4650,9 +4662,58 @@ async function performSyncLogicPrimer(exportAll = false) {
           
           await fetchWithRetry(() => existingRow.save());
           
-          // ❌ УБРАЛИ УВЕДОМЛЕНИЯ ПРИ ОБНОВЛЕНИИ - это вызывало спам! (как в Stripe и LowPrice)
-          // Уведомления отправляются ТОЛЬКО для новых покупок, не для обновлений существующих
-          logger.info(`✅ Обновлен существующий Primer клиент ${customerId} (добавлено ${trulyNewPayments.length} новых платежей) - уведомление не отправлено (чтобы избежать спама)`);
+          // ✅ ОТПРАВЛЯЕМ УВЕДОМЛЕНИЯ ДЛЯ НОВЫХ ПЛАТЕЖЕЙ СУЩЕСТВУЮЩИХ КЛИЕНТОВ (Primer)
+          // В отличие от Stripe/LowPrice, для Primer отправляем уведомления даже при обновлении существующих клиентов,
+          // если есть новые платежи, так как пользователь явно запросил это
+          if (trulyNewPayments.length > 0) {
+            // Используем последний новый платеж для уведомления
+            const latestNewPayment = trulyNewPayments[trulyNewPayments.length - 1];
+            
+            const sheetData = {
+              'Ad Name': updatedRowData['Ad Name'] || 'N/A',
+              'Adset Name': updatedRowData['Adset Name'] || 'N/A',
+              'Campaign Name': updatedRowData['Campaign Name'] || 'N/A',
+              'Creative Link': updatedRowData['Creative Link'] || 'N/A',
+              'Total Amount': correctTotalAmount,
+              'Payment Count': paymentCountAll.toString(),
+              'Payment Intent IDs': paymentIdsAll.join(', '),
+              accountSource: 'primer'
+            };
+            
+            const notificationMessage = formatTelegramNotification(latestNewPayment, customer, sheetData);
+            const amount = parseFloat(correctTotalAmount || 0);
+            const isVip = amount >= alertConfig.vipPurchaseThreshold;
+            
+            logger.info(`📬 Отправляю уведомление для обновленного Primer клиента ${customerId} (${trulyNewPayments.length} новых платежей)`, {
+              customerId: customer?.id,
+              paymentId: latestNewPayment.id,
+              amount: correctTotalAmount,
+              isVip,
+              newPaymentsCount: trulyNewPayments.length
+            });
+            
+            await notificationQueue.add({
+              type: isVip ? 'vip_new_purchase' : 'new_purchase',
+              channel: 'telegram',
+              message: notificationMessage,
+              payment: latestNewPayment,
+              customer: customer,
+              sheetData: sheetData,
+              metadata: {
+                paymentId: latestNewPayment.id,
+                customerId: customer?.id,
+                amount: correctTotalAmount,
+                type: 'new_purchase',
+                isVip: isVip,
+                accountSource: 'primer',
+                isUpdate: true // Помечаем что это обновление существующего клиента
+              }
+            });
+            
+            logger.info(`✅ Уведомление добавлено в очередь для обновленного Primer клиента ${customerId}`);
+          } else {
+            logger.info(`✅ Обновлен существующий Primer клиент ${customerId} - нет новых платежей для уведомления`);
+          }
           
           results.updatedPurchases++;
           results.processed++;
