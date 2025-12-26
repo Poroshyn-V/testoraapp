@@ -179,20 +179,46 @@ async function sendSlackText(message) {
 // Send purchase notification (wrapper function)
 export async function sendPurchaseNotification(payment, customer, sheetData, type) {
   try {
+    // ✅ Валидация входных данных
+    if (!payment || !payment.id) {
+      throw new Error('Payment object is required with id');
+    }
+    if (!customer || !customer.id) {
+      throw new Error('Customer object is required with id');
+    }
+    
     logInfo('Sending purchase notification', {
       paymentId: payment.id,
       customerId: customer.id,
+      customerEmail: customer.email || 'N/A',
+      accountSource: sheetData?.accountSource || payment._source || 'unknown',
       type,
       amount: payment.amount
     });
 
     // Format notification message
-    const message = await formatTelegramNotification(payment, customer, sheetData);
+    const message = formatTelegramNotification(payment, customer, sheetData || {});
+    
+    if (!message || message.trim().length === 0) {
+      throw new Error('Formatted message is empty');
+    }
     
     // Send to both Telegram and Slack
     await Promise.all([
-      sendTelegram(message),
-      sendSlack(payment, customer, sheetData)
+      sendTelegram(message).catch(err => {
+        logError('Failed to send Telegram notification', err, {
+          paymentId: payment.id,
+          customerId: customer.id
+        });
+        throw err;
+      }),
+      sendSlack(payment, customer, sheetData || {}).catch(err => {
+        logError('Failed to send Slack notification', err, {
+          paymentId: payment.id,
+          customerId: customer.id
+        });
+        throw err;
+      })
     ]);
 
     logInfo('Successfully sent purchase notification', {
@@ -202,9 +228,11 @@ export async function sendPurchaseNotification(payment, customer, sheetData, typ
     });
   } catch (error) {
     logError('Error sending purchase notification', error, {
-      paymentId: payment.id,
-      customerId: customer.id,
-      type
+      paymentId: payment?.id,
+      customerId: customer?.id,
+      type,
+      errorMessage: error.message,
+      errorStack: error.stack
     });
     throw error;
   }

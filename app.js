@@ -4562,16 +4562,41 @@ async function performSyncLogicPrimer(exportAll = false) {
             
             // Send notification for NEW purchase
             try {
-              await sendPurchaseNotification(firstPayment, customer, {
+              // ✅ Убеждаемся что customer объект правильно заполнен перед отправкой уведомления
+              const notificationCustomer = {
+                id: customer?.id || customerId,
+                email: customer?.email || firstPayment.email || rowData['Email'] || 'N/A',
+                address: customer?.address || (customer?.country ? { country: customer.country } : null),
+                country: customer?.country || firstPayment.country || null,
+                metadata: {
+                  ...(customer?.metadata || {}),
+                  ...firstPayment.metadata
+                }
+              };
+              
+              // ✅ Убеждаемся что payment имеет правильный формат для уведомления
+              const notificationPayment = {
+                ...firstPayment,
+                _primer: true,
+                _source: 'primer'
+              };
+              
+              logger.info(`📱 Отправляю уведомление для Primer покупки: Customer=${customerId}, Email=${notificationCustomer.email}, Amount=$${rowData['Total Amount']}`);
+              
+              await sendPurchaseNotification(notificationPayment, notificationCustomer, {
                 ...rowData,
                 accountSource: 'primer',
                 'Total Amount': rowData['Total Amount'],
-                'Payment Count': rowData['Payment Count']
+                'Payment Count': rowData['Payment Count'],
+                'Email': notificationCustomer.email,
+                'GEO': rowData['GEO']
               });
-              logger.info(`📱 Notification sent for new Primer purchase: ${customerId}`);
+              
+              logger.info(`✅ Уведомление отправлено для новой Primer покупки: ${customerId}`);
             } catch (notifError) {
-              logger.error(`❌ Failed to send notification for Primer purchase ${customerId}`, {
-                error: notifError.message
+              logger.error(`❌ Ошибка отправки уведомления для Primer покупки ${customerId}`, {
+                error: notifError.message,
+                stack: notifError.stack
               });
               // Don't fail the sync if notification fails
             }

@@ -317,9 +317,15 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
   const m = { ...payment.metadata, ...(customer?.metadata || {}), ...metadata };
   
   // Extract data
-  const amount = metadata['Total Amount'] || (payment.amount / 100).toFixed(2);
+  const amount = metadata['Total Amount'] || (payment.amount ? (payment.amount / 100).toFixed(2) : '0.00');
   const currency = payment.currency?.toUpperCase() || 'USD';
-  const email = customer?.email || 'N/A';
+  // ✅ Для Primer: проверяем email из разных источников
+  const email = customer?.email 
+    || metadata['Email'] 
+    || payment.email 
+    || (payment._original?.customer?.emailAddress)
+    || (payment._original?.paymentMethod?.paymentMethodData?.externalPayerInfo?.email)
+    || 'N/A';
   const geoCountry = m.geo_country || customer?.address?.country || 'Unknown';
   const geoCity = m.geo_city || customer?.address?.city || 'Unknown';
   const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
