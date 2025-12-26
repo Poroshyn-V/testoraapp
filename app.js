@@ -4534,11 +4534,11 @@ async function performSyncLogicPrimer(exportAll = false) {
           existingRow.set('GEO', updatedRowData['GEO']); // ✅ Сохраняем GEO при обновлении
           existingRow.set('Customer ID', customerId);
           
-          logger.info(`🔄 Обновляю покупку Primer: Customer=${customerId}, Email=${updatedRowData['Email']}, GEO=${updatedRowData['GEO']}, Amount=$${correctTotalAmount}`);
+          logger.info(`💾 Сохраняю обновление Primer покупки: Customer=${customerId}, Email=${updatedRowData['Email']}, GEO=${updatedRowData['GEO']}, Amount=$${correctTotalAmount}, Payment IDs=${paymentIdsAll.join(', ')}`);
           
           await fetchWithRetry(() => existingRow.save());
           
-          logger.info(`✅ Updated existing Primer customer ${customerId} - no notification sent (to prevent spam)`);
+          logger.info(`✅ Обновлен существующий Primer клиент ${customerId} (добавлено ${trulyNewPayments.length} новых платежей) - уведомление не отправлено (чтобы избежать спама)`);
           
           results.updatedPurchases++;
           results.processed++;
