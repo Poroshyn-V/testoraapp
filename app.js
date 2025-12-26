@@ -4471,7 +4471,16 @@ async function performSyncLogicPrimer(exportAll = false) {
         
         if (existingCustomers.length > 0) {
           // Customer exists - UPDATE
-          logger.info(`Updating existing Primer customer ${customerId}`);
+          // ✅ Проверяем какие платежи действительно новые (не были в existingPaymentIds)
+          const trulyNewPayments = payments.filter(p => !existingPaymentIds.has(p.id));
+          
+          if (trulyNewPayments.length === 0) {
+            logger.info(`⏭️ Все платежи клиента ${customerId} уже есть в таблице, пропускаю обновление`);
+            results.duplicatesAvoided += payments.length;
+            continue;
+          }
+          
+          logger.info(`🔄 Обновляю существующего Primer клиента ${customerId} (найдено ${trulyNewPayments.length} новых платежей из ${payments.length} всего)`);
           
           // Load ALL payments for this customer
           const allPayments = await fetchWithRetry(() => getCustomerPaymentsPrimer(customerId));
@@ -4481,6 +4490,12 @@ async function performSyncLogicPrimer(exportAll = false) {
             if (p.status === 'reversed' || p.status === 'refunded' || p.status === 'canceled') return false;
             return true;
           });
+          
+          if (allSuccessfulPayments.length === 0) {
+            logger.warn(`⚠️ No successful payments for existing customer ${customerId}, skipping update`);
+            results.skipped++;
+            continue;
+          }
           
           let totalAmountAll = 0;
           let paymentCountAll = 0;
