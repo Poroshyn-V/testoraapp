@@ -4359,11 +4359,26 @@ async function performSyncLogicPrimer(exportAll = false) {
     
     logger.info(`📊 Найдено ${successfulPayments.length} успешных платежей из ${normalizedPayments.length} нормализованных (после фильтрации по статусу)`);
     
+    // ✅ Детальное логирование для диагностики дубликатов
+    if (successfulPayments.length > 0) {
+      logger.info(`🔍 Детальная проверка платежей на дубликаты:`, {
+        totalSuccessfulPayments: successfulPayments.length,
+        existingPaymentIdsCount: existingPaymentIds.size,
+        paymentIdsFromAPI: successfulPayments.slice(0, 5).map(p => ({
+          id: p.id,
+          customer: p.customer,
+          amount: `${(p.amount / 100).toFixed(2)} ${p.currency.toUpperCase()}`,
+          created: new Date(p.created * 1000).toISOString(),
+          isDuplicate: existingPaymentIds.has(p.id)
+        }))
+      });
+    }
+    
     // Filter out existing payments by payment ID
     const newPayments = successfulPayments.filter(p => {
       if (existingPaymentIds.has(p.id)) {
         results.duplicatesAvoided++;
-        logger.debug(`⏭️ Payment ${p.id} already exists in sheet, skipping`);
+        logger.info(`⏭️ Payment ${p.id} (customer: ${p.customer}, amount: ${(p.amount / 100).toFixed(2)} ${p.currency.toUpperCase()}) already exists in sheet, skipping`);
         return false;
       }
       return true;
@@ -4371,8 +4386,44 @@ async function performSyncLogicPrimer(exportAll = false) {
     
     logger.info(`🆕 Processing ${newPayments.length} new Primer payments (out of ${successfulPayments.length} total), avoided ${results.duplicatesAvoided} duplicates`);
     
+    // ✅ Если есть новые платежи, логируем их детально
+    if (newPayments.length > 0) {
+      logger.info(`📋 Детали новых платежей для обработки:`, {
+        newPaymentsCount: newPayments.length,
+        paymentDetails: newPayments.slice(0, 10).map(p => ({
+          id: p.id,
+          customer: p.customer,
+          amount: `${(p.amount / 100).toFixed(2)} ${p.currency.toUpperCase()}`,
+          created: new Date(p.created * 1000).toISOString(),
+          email: p.email || 'N/A',
+          country: p.country || 'N/A'
+        }))
+      });
+    }
+    
     if (newPayments.length === 0) {
-      logger.info(`ℹ️ No new payments to process for Primer account`);
+      logger.info(`ℹ️ No new payments to process for Primer account`, {
+        totalPaymentsFromAPI: primerPayments.length,
+        normalizedPayments: normalizedPayments.length,
+        successfulPayments: successfulPayments.length,
+        existingPaymentIds: existingPaymentIds.size,
+        duplicatesAvoided: results.duplicatesAvoided,
+        message: 'All payments from API already exist in sheet. If you expect notifications, check if payments were added manually or via another process.'
+      });
+      
+      // ✅ Если платежи уже есть в таблице, но были добавлены недавно (за последние 5 минут),
+      // возможно они были добавлены вручную и уведомления не были отправлены
+      // В этом случае мы не можем отправить уведомления, так как не знаем, были ли они уже отправлены
+      // Но логируем это для диагностики
+      if (successfulPayments.length > 0) {
+        logger.info(`💡 Все ${successfulPayments.length} платежей из API уже есть в таблице. Если вы ожидали уведомления, проверьте:`, {
+          suggestion1: 'Платежи были добавлены вручную в таблицу?',
+          suggestion2: 'Платежи были добавлены через другой скрипт?',
+          suggestion3: 'Уведомления отправляются только при добавлении НОВЫХ клиентов (новых строк)',
+          note: 'Если платежи были добавлены как обновление существующего клиента, уведомления не отправляются (чтобы избежать спама)'
+        });
+      }
+      
       return {
         success: true,
         message: `No new payments to process`,
