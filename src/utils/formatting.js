@@ -363,10 +363,16 @@ export function formatTelegramNotification(payment, customer, metadata = {}) {
   // Check if this is a VIP purchase
   const isVip = metadata.isVip || parseFloat(amount) >= 100; // VIP threshold
   
+  // Определяем Payment Method в зависимости от источника
+  let paymentMethodLabel = 'Card';
+  if (accountSource === 'primer' || accountSource === 'PRIMER' || payment._primer) {
+    paymentMethodLabel = 'PayPal';
+  }
+  
   // Create STRUCTURED notification message
   let message = `${isVip ? '💎 VIP ' : ''}🟢 Purchase purchase_${customer?.id || 'unknown'} was processed!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-💳 Payment Method: Card
+💳 Payment Method: ${paymentMethodLabel}
 💰 Amount: ${amount} ${currency}${isVip ? ' 💎' : ''}
 🏷️ Payments: ${paymentCount}
 📋 Account: ${accountLabel}
