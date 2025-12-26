@@ -4721,71 +4721,135 @@ async function performSyncLogicPrimer(exportAll = false) {
             
             logger.info(`➕ Добавляю новую покупку Primer: Customer=${customerId}, Email=${rowData['Email']}, GEO=${rowData['GEO']}, Amount=$${rowData['Total Amount']}, Payments=${allSuccessfulPayments.length}, PaymentID=${firstPayment.id}`);
             
-            // ✅ КРИТИЧЕСКИ ВАЖНО: Добавляем НАПРЯМУЮ в primerSheet (как в Stripe логике)
-            const addResult = await primerSheet.addRow(rowData);
-            
-            // Add LA time formula to Created Local (UTC-8) column
-            await addLaTimeFormulaToPrimerSheet(addResult.row.rowNumber);
-            
-            logger.info(`✅ Added new Primer customer ${customerId} to sheet (row ${addResult.row.rowNumber})`);
-            
-            // Send notification ONLY if successfully added (same as Stripe and LowPrice)
-            const sheetData = {
-              'Ad Name': rowData['Ad Name'] || 'N/A',
-              'Adset Name': rowData['Adset Name'] || 'N/A',
-              'Campaign Name': rowData['Campaign Name'] || 'N/A',
-              'Creative Link': rowData['Creative Link'] || 'N/A',
-              'Total Amount': rowData['Total Amount'],
-              'Payment Count': rowData['Payment Count'],
-              'Payment Intent IDs': rowData['Payment Intent IDs'],
-              accountSource: 'primer' // ✅ Убеждаемся что accountSource в sheetData
-            };
-            
-            // Send notification via queue (VIP alert will be included if applicable)
-            // ✅ formatTelegramNotification is synchronous, no await needed
-            const notificationMessage = formatTelegramNotification(firstPayment, customer, sheetData);
-            const amount = parseFloat(sheetData['Total Amount'] || 0);
-            const isVip = amount >= alertConfig.vipPurchaseThreshold;
-            
-            // ✅ Детальное логирование перед добавлением уведомления в очередь
-            logger.info(`📬 Подготовка уведомления для Primer покупки`, {
-              customerId: customer?.id,
-              paymentId: firstPayment.id,
-              amount: sheetData['Total Amount'],
-              isVip,
-              hasPayment: !!firstPayment,
-              hasCustomer: !!customer,
-              hasMessage: !!notificationMessage,
-              messageLength: notificationMessage?.length || 0,
-              accountSource: 'primer'
+            // ✅ КРИТИЧЕСКИ ВАЖНО: Проверяем существование ПЕРЕД добавлением (как в Stripe и LowPrice логике)
+            // Проверяем существование напрямую в primerSheet
+            const existingInPrimer = allPrimerRows.filter(row => {
+              const rowCustomerId = row.get('Customer ID');
+              return rowCustomerId === customerId;
             });
             
-            await notificationQueue.add({
-              type: isVip ? 'vip_new_purchase' : 'new_purchase',
-              channel: 'telegram',
-              message: notificationMessage,
-              payment: firstPayment,
-              customer: customer,
-              sheetData: sheetData,
-              metadata: {
-                paymentId: firstPayment.id, // ✅ Используем firstPayment.id напрямую
-                customerId: customer?.id,
-                amount: sheetData['Total Amount'],
-                type: 'new_purchase',
-                isVip: isVip,
-                accountSource: 'primer' // ✅ Убеждаемся что accountSource в metadata
+            let addResult;
+            if (existingInPrimer.length > 0) {
+              // Клиент уже существует - обновляем (но НЕ отправляем уведомление)
+              addResult = {
+                success: false,
+                exists: true,
+                action: 'skipped',
+                row: existingInPrimer[0]
+              };
+              logger.info(`📊 Customer ${customerId} already exists in Primer sheet (row ${existingInPrimer[0].rowNumber}) - converting to update`);
+              
+              // Обновляем существующую строку
+              const existingRow = existingInPrimer[0];
+              existingRow.set('Purchase ID', rowData['Purchase ID']);
+              existingRow.set('Total Amount', rowData['Total Amount']);
+              existingRow.set('Payment Count', rowData['Payment Count']);
+              existingRow.set('Payment Intent IDs', rowData['Payment Intent IDs']);
+              existingRow.set('Created UTC', rowData['Created UTC']);
+              existingRow.set('Created Local (UTC-8)', rowData['Created Local (UTC-8)']);
+              existingRow.set('Email', rowData['Email']);
+              existingRow.set('GEO', rowData['GEO']);
+              
+              await fetchWithRetry(() => existingRow.save());
+              
+              results.updatedPurchases++;
+              results.processed++;
+              // ❌ НЕ отправляем уведомление для существующих клиентов (чтобы избежать спама)
+              continue;
+            } else {
+              // Добавляем новую строку НАПРЯМУЮ в primerSheet
+              try {
+                const newRow = await primerSheet.addRow(rowData);
+                addResult = {
+                  success: true,
+                  exists: false,
+                  action: 'added',
+                  row: newRow
+                };
+                logger.info(`📊 Successfully added customer ${customerId} to Primer sheet (row ${newRow.rowNumber})`);
+                
+                // Add LA time formula to Created Local (UTC-8) column
+                await addLaTimeFormulaToPrimerSheet(newRow.rowNumber);
+              } catch (addError) {
+                logger.error(`❌ CRITICAL: Failed to add Primer customer ${customerId} to sheet`, {
+                  error: addError.message,
+                  stack: addError.stack,
+                  customerId,
+                  sheetName: primerSheet.title
+                });
+                results.failed++;
+                continue; // Пропускаем этого клиента, НЕ отправляем уведомление
               }
-            });
+            }
             
-            logger.info(`✅ Уведомление добавлено в очередь для Primer покупки`, {
-              customerId: customer?.id,
-              paymentId: firstPayment.id,
-              type: isVip ? 'vip_new_purchase' : 'new_purchase',
-              duplicateKey: `payment_${firstPayment.id}`
-            });
-            
-            results.newPurchases++;
-            results.processed++;
+            // ✅ КРИТИЧЕСКИ ВАЖНО: Проверяем успешность операции
+            if (!addResult.success || addResult.exists) {
+              // Ошибка при добавлении или строка уже существовала - НЕ отправляем уведомление
+              logger.warn(`⚠️ Not sending notification for Primer customer ${customerId}`, {
+                exists: addResult.exists,
+                action: addResult.action,
+                reason: addResult.reason
+              });
+              // Уже обработано выше (continue или results.updatedPurchases++)
+            } else {
+              // Успешно добавили - ТОЛЬКО ТЕПЕРЬ отправляем уведомление
+              const sheetData = {
+                'Ad Name': rowData['Ad Name'] || 'N/A',
+                'Adset Name': rowData['Adset Name'] || 'N/A',
+                'Campaign Name': rowData['Campaign Name'] || 'N/A',
+                'Creative Link': rowData['Creative Link'] || 'N/A',
+                'Total Amount': rowData['Total Amount'],
+                'Payment Count': rowData['Payment Count'],
+                'Payment Intent IDs': rowData['Payment Intent IDs'],
+                accountSource: 'primer' // ✅ Убеждаемся что accountSource в sheetData
+              };
+              
+              // Send notification via queue (VIP alert will be included if applicable)
+              // ✅ formatTelegramNotification is synchronous, no await needed
+              const notificationMessage = formatTelegramNotification(firstPayment, customer, sheetData);
+              const amount = parseFloat(sheetData['Total Amount'] || 0);
+              const isVip = amount >= alertConfig.vipPurchaseThreshold;
+              
+              // ✅ Детальное логирование перед добавлением уведомления в очередь
+              logger.info(`📬 Подготовка уведомления для Primer покупки`, {
+                customerId: customer?.id,
+                paymentId: firstPayment.id,
+                amount: sheetData['Total Amount'],
+                isVip,
+                hasPayment: !!firstPayment,
+                hasCustomer: !!customer,
+                hasMessage: !!notificationMessage,
+                messageLength: notificationMessage?.length || 0,
+                accountSource: 'primer'
+              });
+              
+              await notificationQueue.add({
+                type: isVip ? 'vip_new_purchase' : 'new_purchase',
+                channel: 'telegram',
+                message: notificationMessage,
+                payment: firstPayment,
+                customer: customer,
+                sheetData: sheetData,
+                metadata: {
+                  paymentId: firstPayment.id, // ✅ Используем firstPayment.id напрямую
+                  customerId: customer?.id,
+                  amount: sheetData['Total Amount'],
+                  type: 'new_purchase',
+                  isVip: isVip,
+                  accountSource: 'primer' // ✅ Убеждаемся что accountSource в metadata
+                }
+              });
+              
+              logger.info(`✅ Уведомление добавлено в очередь для Primer покупки`, {
+                customerId: customer?.id,
+                paymentId: firstPayment.id,
+                type: isVip ? 'vip_new_purchase' : 'new_purchase',
+                duplicateKey: `payment_${firstPayment.id}`
+              });
+              
+              results.newPurchases++;
+              results.processed++;
+            }
             
           } catch (paymentsError) {
             logger.error(`❌ Failed to load payments for customer ${customerId}`, {
