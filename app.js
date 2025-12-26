@@ -268,28 +268,41 @@ async function fetchWithRetry(fn, retries = 3, delay = 1000) {
       
       return result;
     } catch (error) {
+      // ✅ Проверяем, является ли это ошибкой 429 (quota exceeded)
+      const isQuotaError = error.message && (
+        error.message.includes('429') || 
+        error.message.includes('Quota exceeded') ||
+        error.message.includes('quota metric')
+      );
+      
       if (i === retries - 1) {
         const duration = Date.now() - startTime;
         metrics.endTimer(timerId);
-        metrics.increment('api_error', 1, { operation: operationName, error: error.message });
+        metrics.increment('api_error', 1, { operation: operationName, error: error.message, quotaError: isQuotaError });
         metrics.histogram('api_response_time', duration, { operation: operationName, error: true });
         
         logger.error(`❌ ${operationName} failed after ${retries} attempts`, {
           error: error.message,
           retries: retries,
           duration: `${duration}ms`,
+          isQuotaError,
           timestamp: new Date().toISOString()
         });
         throw error;
       }
       
-      const retryDelay = delay * (i + 1);
-      metrics.increment('api_retry_attempt', 1, { operation: operationName, attempt: i + 1 });
+      // ✅ Для ошибок 429 используем более длинную задержку (экспоненциальная с большим базовым значением)
+      // Для других ошибок - обычная экспоненциальная задержка
+      const baseDelay = isQuotaError ? 10000 : delay; // 10 секунд для quota errors, иначе исходная задержка
+      const retryDelay = baseDelay * Math.pow(2, i); // Экспоненциальная задержка
+      
+      metrics.increment('api_retry_attempt', 1, { operation: operationName, attempt: i + 1, quotaError: isQuotaError });
       
       logger.warn(`Retry ${i + 1}/${retries} after error:`, {
         operation: operationName,
         error: error.message,
         retryDelay: `${retryDelay}ms`,
+        isQuotaError,
         timestamp: new Date().toISOString()
       });
       
@@ -309,10 +322,8 @@ async function loadExistingPurchases() {
       startTime: startTime
     });
     
+    // ✅ Только загружаем purchase cache, duplicate checker будет загружен отдельно с задержкой
     await purchaseCache.reload();
-    
-    // Also refresh duplicate checker cache
-    await duplicateChecker.refreshCache();
     
     const duration = Date.now() - startTime;
     metrics.endTimer(timerId);
@@ -349,6 +360,13 @@ async function loadExistingPurchases() {
       duration: `${duration}ms`,
       timestamp: new Date().toISOString()
     });
+    
+    // ✅ Если ошибка 429 (quota exceeded), логируем и продолжаем работу
+    if (error.message && error.message.includes('429')) {
+      logger.warn('⚠️ Google Sheets API quota exceeded, will retry later', {
+        error: error.message
+      });
+    }
   }
 }
 
@@ -6841,7 +6859,7 @@ app.listen(ENV.PORT, () => {
   console.log(`💾 Cache system: Google Sheets caching enabled`);
   console.log(`📝 Structured logging: JSON format with timestamps`);
   
-  // Load existing purchases on startup
+  // ✅ Load existing purchases on startup with delay to avoid API quota issues
   setTimeout(async () => {
     try {
       console.log('📋 Loading existing purchases...');
@@ -6849,26 +6867,40 @@ app.listen(ENV.PORT, () => {
       console.log(`✅ Loaded ${purchaseCache.size()} existing purchases into memory`);
     } catch (error) {
       console.error('❌ Failed to load existing purchases:', error.message);
+      // ✅ Если ошибка 429, логируем но не падаем
+      if (error.message && error.message.includes('429')) {
+        logger.warn('⚠️ Google Sheets API quota exceeded on startup, will retry later');
+      }
     }
-  }, 5000); // Load after 5 seconds
+  }, 10000); // ✅ Увеличена задержка до 10 секунд для избежания конфликтов
 
-  // Загрузка кэша дубликатов при старте
+  // ✅ Загрузка кэша дубликатов при старте с увеличенной задержкой
   setTimeout(async () => {
     try {
+      // ✅ Дополнительная задержка перед запросом к API
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      
       console.log('🔍 Initializing duplicate checker cache...');
       await duplicateChecker.refreshCache();
       console.log(`✅ Duplicate checker ready with ${duplicateChecker.getStats().customersInCache} customers`);
     } catch (error) {
       console.error('❌ Failed to initialize duplicate checker:', error.message);
+      // ✅ Если ошибка 429, логируем но не падаем
+      if (error.message && error.message.includes('429')) {
+        logger.warn('⚠️ Google Sheets API quota exceeded for duplicate checker, will retry later');
+      }
     }
-  }, 7000); // После загрузки existing purchases
+  }, 20000); // ✅ Увеличена задержка до 20 секунд после загрузки purchases
 
-  // Автоматическая массовая выгрузка для LowPrice при старте (если мало записей)
+  // ✅ Автоматическая массовая выгрузка для LowPrice при старте (если мало записей) с увеличенной задержкой
   setTimeout(async () => {
     try {
       if (!stripeLowPrice || !ENV.STRIPE_SECRET_KEY_LOW_PRICE) {
         return; // Skip if Low Price account not configured
       }
+
+      // ✅ Дополнительная задержка перед запросом к API
+      await new Promise(resolve => setTimeout(resolve, 5000));
 
       const LOW_PRICE_SHEET_NAME = ENV.STRIPE_LOW_PRICE_SHEET_NAME || 'LowPrice';
       const lowPriceSheet = await googleSheets.getSheetByName(LOW_PRICE_SHEET_NAME);
