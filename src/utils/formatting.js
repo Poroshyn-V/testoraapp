@@ -505,10 +505,16 @@ export function formatSlackNotification(payment, customer, metadata = {}) {
   const adsetName = rawAdsetName ? formatCampaignName(rawAdsetName) : null;
   const campaignName = rawCampaignName ? formatCampaignName(rawCampaignName) : null;
   
+  // Определяем Payment Method в зависимости от источника
+  let paymentMethodLabel = 'Card';
+  if (accountSource === 'primer' || accountSource === 'PRIMER' || payment._primer) {
+    paymentMethodLabel = 'PayPal';
+  }
+  
   // Create STRUCTURED notification message (SAME AS TELEGRAM)
   let message = `🟢 Purchase purchase_cus_${customer?.id || 'unknown'} was processed!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-💳 Payment Method: Card
+💳 Payment Method: ${paymentMethodLabel}
 💰 Amount: ${amount} ${currency}
 🏷️ Payments: ${paymentCount}
 📋 Account: ${accountLabel}
