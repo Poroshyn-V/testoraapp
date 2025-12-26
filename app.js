@@ -485,15 +485,20 @@ async function runSync() {
     });
     
     // ✅ Синхронизация Primer платежей (PayPal) - параллельно с LowPrice
-    logger.info('🔄 Attempting Primer sync...', {
+    logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    logger.info('🔄 PRIMER SYNC: Starting Primer payment sync check...', {
       isPrimerConfigured: isPrimerConfigured(),
       hasApiKey: !!ENV.PRIMER_API_KEY,
-      primerSheetName: ENV.PRIMER_SHEET_NAME || 'Primer'
+      apiKeyPrefix: ENV.PRIMER_API_KEY ? `${ENV.PRIMER_API_KEY.substring(0, 10)}...` : 'NOT SET',
+      primerSheetName: ENV.PRIMER_SHEET_NAME || 'Primer',
+      timestamp: new Date().toISOString()
     });
+    logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
     
     // ✅ Явное логирование запуска синхронизации Primer
-    logger.info('🔄 Запускаю синхронизацию Primer...');
-    performSyncLogicPrimer().then(async (primerResult) => {
+    if (isPrimerConfigured()) {
+      logger.info('✅ PRIMER SYNC: Primer API is configured, proceeding with sync...');
+      performSyncLogicPrimer().then(async (primerResult) => {
       logger.info('✅ Primer sync completed', {
         success: primerResult?.success,
         processed: primerResult?.processed || 0,
@@ -520,11 +525,17 @@ async function runSync() {
         }
       }
     }).catch(error => {
-      logger.error('❌ Primer sync failed', {
+      logger.error('❌ PRIMER SYNC: Primer sync failed', {
         error: error.message,
         stack: error.stack
       });
     });
+    } else {
+      logger.warn('⚠️ PRIMER SYNC: Primer API not configured, skipping sync', {
+        hasApiKey: !!ENV.PRIMER_API_KEY,
+        primerApiKey: ENV.PRIMER_API_KEY ? `${ENV.PRIMER_API_KEY.substring(0, 10)}...` : 'null'
+      });
+    }
     
     // Record performance metrics
     const syncDuration = Date.now() - startTime;
