@@ -4478,9 +4478,13 @@ async function performSyncLogicPrimer(exportAll = false) {
           }
           
           const existingRow = existingCustomers[0];
+          
+          // ✅ Пересчитываем Total Amount правильно (всегда делим на 100, так как amounts в центах)
+          const correctTotalAmount = (totalAmountAll / 100).toFixed(2);
+          
           // Устанавливаем все поля перед сохранением
           existingRow.set('Purchase ID', `purchase_${customerId}`);
-          existingRow.set('Total Amount', updatedRowData['Total Amount']);
+          existingRow.set('Total Amount', correctTotalAmount);
           existingRow.set('Payment Count', paymentCountAll.toString());
           existingRow.set('Payment Intent IDs', paymentIdsAll.join(', '));
           existingRow.set('Created UTC', updatedRowData['Created UTC']);
@@ -4489,7 +4493,7 @@ async function performSyncLogicPrimer(exportAll = false) {
           existingRow.set('GEO', updatedRowData['GEO']); // ✅ Сохраняем GEO при обновлении
           existingRow.set('Customer ID', customerId);
           
-          logger.info(`🔄 Обновляю покупку Primer: Customer=${customerId}, Email=${updatedRowData['Email']}, GEO=${updatedRowData['GEO']}`); // ✅ Сохраняем Customer ID
+          logger.info(`🔄 Обновляю покупку Primer: Customer=${customerId}, Email=${updatedRowData['Email']}, GEO=${updatedRowData['GEO']}, Amount=$${correctTotalAmount}`);
           
           await fetchWithRetry(() => existingRow.save());
           
