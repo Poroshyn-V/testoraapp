@@ -4255,22 +4255,48 @@ async function performSyncLogicPrimer(exportAll = false) {
     logger.info(`📋 Found ${existingPaymentIds.size} existing payments in Primer sheet`);
     
     // Get payments from Primer API (all or recent)
+    // ✅ Увеличиваем период до 30 дней для getRecentPaymentsPrimer чтобы не пропустить покупки
     const primerPayments = exportAll 
       ? await getAllPaymentsPrimer()
-      : await getRecentPaymentsPrimer(100);
+      : await getRecentPaymentsPrimer(100, 30); // 30 дней вместо 7 по умолчанию
+    
+    logger.info(`📥 Получено ${primerPayments.length} платежей из Primer API (после фильтрации по application: "testora")`);
     
     // Normalize Primer payments to Stripe-like format
     const normalizedPayments = primerPayments.map(normalizePrimerPayment);
     
+    // ✅ Детальное логирование для диагностики
+    if (normalizedPayments.length > 0) {
+      logger.info(`📋 Пример нормализованного платежа:`, {
+        id: normalizedPayments[0].id,
+        status: normalizedPayments[0].status,
+        customer: normalizedPayments[0].customer,
+        amount: normalizedPayments[0].amount,
+        currency: normalizedPayments[0].currency,
+        created: normalizedPayments[0].created,
+        metadata: normalizedPayments[0].metadata
+      });
+    }
+    
     // Filter successful payments
     const successfulPayments = normalizedPayments.filter(p => {
-      if (p.status !== 'succeeded' || !p.customer) return false;
+      if (p.status !== 'succeeded') {
+        logger.debug(`⏭️ Платеж ${p.id} пропущен: status=${p.status} (не succeeded)`);
+        return false;
+      }
+      if (!p.customer) {
+        logger.debug(`⏭️ Платеж ${p.id} пропущен: нет customer ID`);
+        return false;
+      }
       // Exclude refunded/reversed payments
-      if (p.status === 'reversed' || p.status === 'refunded' || p.status === 'canceled') return false;
+      if (p.status === 'reversed' || p.status === 'refunded' || p.status === 'canceled') {
+        logger.debug(`⏭️ Платеж ${p.id} пропущен: status=${p.status} (reversed/refunded/canceled)`);
+        return false;
+      }
       return true;
     });
     
-    logger.info(`📊 Found ${successfulPayments.length} successful payments from Primer API`);
+    logger.info(`📊 Найдено ${successfulPayments.length} успешных платежей из ${normalizedPayments.length} нормализованных (после фильтрации по статусу)`);
     
     // Filter out existing payments by payment ID
     const newPayments = successfulPayments.filter(p => {
