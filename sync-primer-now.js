@@ -6,22 +6,20 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-// Импортируем все необходимые модули
-const { ENV } = await import('./src/config/env.js');
-const { logger } = await import('./src/utils/logging.js');
-const googleSheetsModule = await import('./src/services/googleSheets.js');
-const googleSheets = googleSheetsModule.default;
-const { getRecentPaymentsPrimer, getAllPaymentsPrimer, normalizePrimerPayment, getCustomerPaymentsPrimer, getCustomerPrimer, isPrimerConfigured } = await import('./src/services/primer.js');
-const { formatPaymentForSheetsPrimer } = await import('./src/utils/formatting.js');
-const { sendPurchaseNotification } = await import('./src/services/notifications.js');
-const { fetchWithRetry } = await import('./src/utils/retry.js');
-
-const { distributedLock } = await import('./src/services/distributedLock.js');
-
-// Импортируем функцию addLaTimeFormulaToPrimerSheet из app.js
-const appModule = await import('./app.js');
-
 async function syncPrimerNow() {
+  // Импортируем все необходимые модули
+  const { ENV } = await import('./src/config/env.js');
+  const { logger } = await import('./src/utils/logging.js');
+  const googleSheetsModule = await import('./src/services/googleSheets.js');
+  const googleSheets = googleSheetsModule.default;
+  const { getRecentPaymentsPrimer, getAllPaymentsPrimer, normalizePrimerPayment, getCustomerPaymentsPrimer, getCustomerPrimer, isPrimerConfigured } = await import('./src/services/primer.js');
+  const { formatPaymentForSheetsPrimer } = await import('./src/utils/formatting.js');
+  const { sendPurchaseNotification } = await import('./src/services/notifications.js');
+  const { fetchWithRetry } = await import('./src/utils/retry.js');
+  const { distributedLock } = await import('./src/services/distributedLock.js');
+  
+  // Импортируем функцию addLaTimeFormulaToPrimerSheet из app.js
+  const appModule = await import('./app.js');
   try {
     console.log('🔄 Запускаю синхронизацию Primer...\n');
     

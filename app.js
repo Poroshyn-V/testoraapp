@@ -4655,8 +4655,13 @@ async function performSyncLogicPrimer(exportAll = false) {
             continue;
           }
         }
-        }
         
+      } catch (error) {
+        logger.error(`❌ Error processing Primer customer ${customerId}`, {
+          error: error.message,
+          customerId
+        });
+        results.failed++;
       } finally {
         // Release customer lock
         if (customerLockId) {
