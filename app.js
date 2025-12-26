@@ -485,7 +485,22 @@ async function runSync() {
     });
     
     // ✅ Синхронизация Primer платежей (PayPal) - параллельно с LowPrice
+    logger.info('🔄 Attempting Primer sync...', {
+      isPrimerConfigured: isPrimerConfigured(),
+      hasApiKey: !!ENV.PRIMER_API_KEY,
+      primerSheetName: ENV.PRIMER_SHEET_NAME || 'Primer'
+    });
+    
+    // ✅ Явное логирование запуска синхронизации Primer
+    logger.info('🔄 Запускаю синхронизацию Primer...');
     performSyncLogicPrimer().then(async (primerResult) => {
+      logger.info('✅ Primer sync completed', {
+        success: primerResult?.success,
+        processed: primerResult?.processed || 0,
+        newPurchases: primerResult?.newPurchases || 0,
+        updatedPurchases: primerResult?.updatedPurchases || 0,
+        message: primerResult?.message
+      });
       // ✅ Проверяем оперативные алерты после успешной синхронизации Primer
       if (primerResult && primerResult.success && (primerResult.newPurchases > 0 || primerResult.updatedPurchases > 0)) {
         try {
@@ -505,7 +520,7 @@ async function runSync() {
         }
       }
     }).catch(error => {
-      logger.error('Primer sync failed', {
+      logger.error('❌ Primer sync failed', {
         error: error.message,
         stack: error.stack
       });
@@ -4194,11 +4209,29 @@ async function performSyncLogicLowPrice(exportAll = false) {
 
 // Sync Primer payments (PayPal via Primer API)
 async function performSyncLogicPrimer(exportAll = false) {
+  // ✅ Явное логирование начала синхронизации Primer
+  logger.info('🔄 Starting Primer sync check...', {
+    exportAll,
+    timestamp: new Date().toISOString()
+  });
+  
   // Skip if not configured
+  logger.info('🔍 Checking Primer configuration...', {
+    hasApiKey: !!ENV.PRIMER_API_KEY,
+    apiKeyLength: ENV.PRIMER_API_KEY ? ENV.PRIMER_API_KEY.length : 0,
+    isConfigured: isPrimerConfigured(),
+    primerSheetName: ENV.PRIMER_SHEET_NAME || 'Primer'
+  });
+  
   if (!isPrimerConfigured()) {
-    logger.info('Primer API not configured, skipping sync');
+    logger.warn('⚠️ Primer API not configured, skipping sync', {
+      hasApiKey: !!ENV.PRIMER_API_KEY,
+      primerApiKey: ENV.PRIMER_API_KEY ? `${ENV.PRIMER_API_KEY.substring(0, 10)}...` : 'null'
+    });
     return { success: true, message: 'Primer API not configured', processed: 0 };
   }
+  
+  logger.info('✅ Primer API is configured, proceeding with sync...');
 
   const startTime = Date.now();
   const results = {
@@ -4214,11 +4247,28 @@ async function performSyncLogicPrimer(exportAll = false) {
   const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
   
   try {
-    logger.info(`🔄 Starting Primer payment sync to sheet "${PRIMER_SHEET_NAME}"...`);
+    logger.info(`🔄 Starting Primer payment sync to sheet "${PRIMER_SHEET_NAME}"...`, {
+      sheetName: PRIMER_SHEET_NAME,
+      googleSheetsDocId: ENV.GOOGLE_SHEETS_DOC_ID ? `${ENV.GOOGLE_SHEETS_DOC_ID.substring(0, 10)}...` : 'not configured'
+    });
     
     // Get Primer sheet
-    const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
-    logger.info(`✅ Using Primer sheet: "${primerSheet.title}" (ID: ${primerSheet.sheetId})`);
+    logger.info(`📋 Attempting to get Primer sheet "${PRIMER_SHEET_NAME}"...`);
+    let primerSheet;
+    try {
+      primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
+      logger.info(`✅ Using Primer sheet: "${primerSheet.title}" (ID: ${primerSheet.sheetId})`, {
+        sheetTitle: primerSheet.title,
+        sheetId: primerSheet.sheetId
+      });
+    } catch (sheetError) {
+      logger.error(`❌ Failed to get Primer sheet "${PRIMER_SHEET_NAME}"`, {
+        error: sheetError.message,
+        stack: sheetError.stack,
+        sheetName: PRIMER_SHEET_NAME
+      });
+      throw sheetError;
+    }
     
     // Try to load headers
     try {
@@ -4570,6 +4620,18 @@ async function performSyncLogicPrimer(exportAll = false) {
             allSuccessfulPayments.sort((a, b) => a.created - b.created);
             const firstPayment = allSuccessfulPayments[0];
             
+            // ✅ Проверяем что firstPayment существует и имеет id
+            if (!firstPayment || !firstPayment.id) {
+              logger.error(`❌ First payment is missing or has no ID for customer ${customerId}`, {
+                customerId,
+                allSuccessfulPaymentsCount: allSuccessfulPayments.length,
+                firstPaymentExists: !!firstPayment,
+                firstPaymentId: firstPayment?.id
+              });
+              results.failed++;
+              continue;
+            }
+            
             const rowData = formatPaymentForSheetsPrimer(firstPayment, customer, { accountSource: 'primer' });
             
             // ✅ Суммируем ВСЕ платежи клиента (как в Stripe логике)
@@ -4577,7 +4639,9 @@ async function performSyncLogicPrimer(exportAll = false) {
             const paymentIds = [];
             for (const p of allSuccessfulPayments) {
               totalAmount += p.amount;
-              paymentIds.push(p.id);
+              if (p.id) {
+                paymentIds.push(p.id);
+              }
             }
             
             rowData['Purchase ID'] = `purchase_${customerId}_${firstPayment.created}`;
@@ -4594,7 +4658,7 @@ async function performSyncLogicPrimer(exportAll = false) {
               rowData['GEO'] = customer?.country || customer?.address?.country || firstPayment.country || 'Unknown';
             }
             
-            logger.info(`➕ Добавляю новую покупку Primer: Customer=${customerId}, Email=${rowData['Email']}, GEO=${rowData['GEO']}, Amount=$${rowData['Total Amount']}, Payments=${allSuccessfulPayments.length}`);
+            logger.info(`➕ Добавляю новую покупку Primer: Customer=${customerId}, Email=${rowData['Email']}, GEO=${rowData['GEO']}, Amount=$${rowData['Total Amount']}, Payments=${allSuccessfulPayments.length}, PaymentID=${firstPayment.id}`);
             
             // ✅ КРИТИЧЕСКИ ВАЖНО: Добавляем НАПРЯМУЮ в primerSheet (как в Stripe логике)
             const addResult = await primerSheet.addRow(rowData);
@@ -4602,7 +4666,7 @@ async function performSyncLogicPrimer(exportAll = false) {
             // Add LA time formula to Created Local (UTC-8) column
             await addLaTimeFormulaToPrimerSheet(addResult.row.rowNumber);
             
-            logger.info(`✅ Added new Primer customer ${customerId} to sheet`);
+            logger.info(`✅ Added new Primer customer ${customerId} to sheet (row ${addResult.row.rowNumber})`);
             
             // Send notification ONLY if successfully added (same as Stripe and LowPrice)
             const sheetData = {
@@ -4612,16 +4676,28 @@ async function performSyncLogicPrimer(exportAll = false) {
               'Creative Link': rowData['Creative Link'] || 'N/A',
               'Total Amount': rowData['Total Amount'],
               'Payment Count': rowData['Payment Count'],
-              'Payment Intent IDs': rowData['Payment Intent IDs']
+              'Payment Intent IDs': rowData['Payment Intent IDs'],
+              accountSource: 'primer' // ✅ Убеждаемся что accountSource в sheetData
             };
             
             // Send notification via queue (VIP alert will be included if applicable)
-            const notificationMessage = await formatTelegramNotification(firstPayment, customer, {
-              ...sheetData,
-              accountSource: 'primer' // Primer (PayPal) account
-            });
+            // ✅ formatTelegramNotification is synchronous, no await needed
+            const notificationMessage = formatTelegramNotification(firstPayment, customer, sheetData);
             const amount = parseFloat(sheetData['Total Amount'] || 0);
             const isVip = amount >= alertConfig.vipPurchaseThreshold;
+            
+            // ✅ Детальное логирование перед добавлением уведомления в очередь
+            logger.info(`📬 Подготовка уведомления для Primer покупки`, {
+              customerId: customer?.id,
+              paymentId: firstPayment.id,
+              amount: sheetData['Total Amount'],
+              isVip,
+              hasPayment: !!firstPayment,
+              hasCustomer: !!customer,
+              hasMessage: !!notificationMessage,
+              messageLength: notificationMessage?.length || 0,
+              accountSource: 'primer'
+            });
             
             await notificationQueue.add({
               type: isVip ? 'vip_new_purchase' : 'new_purchase',
@@ -4631,13 +4707,20 @@ async function performSyncLogicPrimer(exportAll = false) {
               customer: customer,
               sheetData: sheetData,
               metadata: {
-                paymentId: firstPayment.id,
-                customerId: customer.id,
+                paymentId: firstPayment.id, // ✅ Используем firstPayment.id напрямую
+                customerId: customer?.id,
                 amount: sheetData['Total Amount'],
                 type: 'new_purchase',
                 isVip: isVip,
-                accountSource: 'primer'
+                accountSource: 'primer' // ✅ Убеждаемся что accountSource в metadata
               }
+            });
+            
+            logger.info(`✅ Уведомление добавлено в очередь для Primer покупки`, {
+              customerId: customer?.id,
+              paymentId: firstPayment.id,
+              type: isVip ? 'vip_new_purchase' : 'new_purchase',
+              duplicateKey: `payment_${firstPayment.id}`
             });
             
             results.newPurchases++;
