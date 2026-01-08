@@ -3062,12 +3062,42 @@ async function performSyncLogic() {
       // Get recent payments from Stripe (ПЕРВЫЙ аккаунт - W2W)
       const payments = await fetchWithRetry(() => getRecentPayments(100));
       
-      // Filter successful payments
+      // Filter successful payments (exclude subscription updates that are NOT upsells)
+      // Subscription updates are included ONLY if they are upsells (have creation on same day)
       const successfulPayments = payments.filter(p => {
         if (p.status !== 'succeeded' || !p.customer) return false;
-        if (p.description && p.description.toLowerCase().includes('subscription update')) {
-          return false;
+        
+        // ✅ ПРОВЕРКА subscription update: включаем ТОЛЬКО если это апселл (есть creation в тот же день)
+        // Исключаем subscription update через несколько дней (переход с триала на полную подписку)
+        const isSubscriptionUpdate = p.description && p.description.toLowerCase().includes('subscription update');
+        if (isSubscriptionUpdate) {
+          const paymentDate = new Date(p.created * 1000);
+          const dateKey = paymentDate.toISOString().split('T')[0];
+          
+          // Проверяем, есть ли subscription creation в тот же день
+          const hasCreationSameDay = payments.some(otherPayment => {
+            if (otherPayment.id === p.id) return false;
+            const otherDate = new Date(otherPayment.created * 1000);
+            const otherDateKey = otherDate.toISOString().split('T')[0];
+            
+            if (otherDateKey !== dateKey) return false;
+            
+            const isCreation = otherPayment.description && (
+              otherPayment.description.toLowerCase().includes('subscription creation') ||
+              otherPayment.description.toLowerCase().includes('w2w:stripe: subscription creation')
+            );
+            
+            return isCreation && otherPayment.status === 'succeeded' && otherPayment.customer === p.customer;
+          });
+          
+          if (!hasCreationSameDay) {
+            logger.info(`⏭️ Skipping subscription update ${p.id} - no creation on same day (trial to paid transition)`);
+            return false;
+          } else {
+            logger.info(`✅ Including subscription update ${p.id} - upsell (has creation on same day)`);
+          }
         }
+        
         return true;
       });
       
@@ -3183,9 +3213,38 @@ async function performSyncLogic() {
             const allPayments = await fetchWithRetry(() => getCustomerPayments(customerId));
             const allSuccessfulPayments = allPayments.filter(p => {
               if (p.status !== 'succeeded' || !p.customer) return false;
-              if (p.description && p.description.toLowerCase().includes('subscription update')) {
-                return false;
+              
+              // ✅ ПРОВЕРКА subscription update: включаем ТОЛЬКО если это апселл (есть creation в тот же день)
+              // Исключаем subscription update через несколько дней (переход с триала на полную подписку)
+              const isSubscriptionUpdate = p.description && p.description.toLowerCase().includes('subscription update');
+              if (isSubscriptionUpdate) {
+                const paymentDate = new Date(p.created * 1000);
+                const dateKey = paymentDate.toISOString().split('T')[0];
+                
+                // Проверяем, есть ли subscription creation в тот же день
+                const hasCreationSameDay = allPayments.some(otherPayment => {
+                  if (otherPayment.id === p.id) return false;
+                  const otherDate = new Date(otherPayment.created * 1000);
+                  const otherDateKey = otherDate.toISOString().split('T')[0];
+                  
+                  if (otherDateKey !== dateKey) return false;
+                  
+                  const isCreation = otherPayment.description && (
+                    otherPayment.description.toLowerCase().includes('subscription creation') ||
+                    otherPayment.description.toLowerCase().includes('w2w:stripe: subscription creation')
+                  );
+                  
+                  return isCreation && otherPayment.status === 'succeeded' && otherPayment.customer === p.customer;
+                });
+                
+                if (!hasCreationSameDay) {
+                  logger.info(`⏭️ Skipping subscription update ${p.id} for customer ${customerId} - no creation on same day (trial to paid transition)`);
+                  return false;
+                } else {
+                  logger.info(`✅ Including subscription update ${p.id} for customer ${customerId} - upsell (has creation on same day)`);
+                }
               }
+              
               return true;
             });
             
@@ -3247,11 +3306,47 @@ async function performSyncLogic() {
             const allPayments = await fetchWithRetry(() => getCustomerPayments(customerId));
             const allSuccessfulPayments = allPayments.filter(p => {
               if (p.status !== 'succeeded' || !p.customer) return false;
-              if (p.description && p.description.toLowerCase().includes('subscription update')) {
-                return false;
+              
+              // ✅ ПРОВЕРКА subscription update: включаем ТОЛЬКО если это апселл (есть creation в тот же день)
+              // Исключаем subscription update через несколько дней (переход с триала на полную подписку)
+              const isSubscriptionUpdate = p.description && p.description.toLowerCase().includes('subscription update');
+              if (isSubscriptionUpdate) {
+                const paymentDate = new Date(p.created * 1000);
+                const dateKey = paymentDate.toISOString().split('T')[0];
+                
+                // Проверяем, есть ли subscription creation в тот же день
+                const hasCreationSameDay = allPayments.some(otherPayment => {
+                  if (otherPayment.id === p.id) return false;
+                  const otherDate = new Date(otherPayment.created * 1000);
+                  const otherDateKey = otherDate.toISOString().split('T')[0];
+                  
+                  if (otherDateKey !== dateKey) return false;
+                  
+                  const isCreation = otherPayment.description && (
+                    otherPayment.description.toLowerCase().includes('subscription creation') ||
+                    otherPayment.description.toLowerCase().includes('w2w:stripe: subscription creation')
+                  );
+                  
+                  return isCreation && otherPayment.status === 'succeeded' && otherPayment.customer === p.customer;
+                });
+                
+                if (!hasCreationSameDay) {
+                  logger.info(`⏭️ Skipping subscription update ${p.id} for customer ${customerId} - no creation on same day (trial to paid transition)`);
+                  return false;
+                } else {
+                  logger.info(`✅ Including subscription update ${p.id} for customer ${customerId} - upsell (has creation on same day)`);
+                }
               }
+              
               return true;
             });
+            
+            // ✅ ПРОВЕРКА: Если нет валидных платежей, пропускаем этого клиента
+            if (allSuccessfulPayments.length === 0) {
+              logger.warn(`⚠️ No valid payments for customer ${customerId}, skipping`);
+              results.skipped += payments.length;
+              continue;
+            }
             
             // Сортируем по дате создания (первая покупка)
             allSuccessfulPayments.sort((a, b) => a.created - b.created);

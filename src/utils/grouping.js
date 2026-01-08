@@ -81,16 +81,77 @@ export function extractCustomerId(payment) {
 }
 
 /**
- * Filter successful payments
+ * Check if payment is a subscription update
+ * @param {Object} payment - Payment object
+ * @returns {boolean} - True if payment is a subscription update
+ */
+export function isSubscriptionUpdate(payment) {
+  if (!payment || !payment.description) return false;
+  
+  const description = payment.description.toLowerCase().trim();
+  
+  // Check for various subscription update patterns
+  const updatePatterns = [
+    'subscription update',
+    'subscription_update',
+    'sub update',
+    'sub_update',
+    'update subscription',
+    'update_subscription'
+  ];
+  
+  return updatePatterns.some(pattern => description.includes(pattern));
+}
+
+/**
+ * Check if subscription update is an upsell (has creation on the same day)
+ * @param {Object} updatePayment - Subscription update payment
+ * @param {Array} allPayments - All payments for the customer
+ * @returns {boolean} - True if this is an upsell (has creation same day)
+ */
+export function isSubscriptionUpdateUpsell(updatePayment, allPayments) {
+  if (!isSubscriptionUpdate(updatePayment)) return false;
+  
+  const paymentDate = new Date(updatePayment.created * 1000);
+  const dateKey = paymentDate.toISOString().split('T')[0];
+  
+  // Check if there's a subscription creation on the same day
+  const hasCreationSameDay = allPayments.some(otherPayment => {
+    if (otherPayment.id === updatePayment.id) return false;
+    
+    const otherDate = new Date(otherPayment.created * 1000);
+    const otherDateKey = otherDate.toISOString().split('T')[0];
+    
+    if (otherDateKey !== dateKey) return false;
+    
+    // Check if it's a subscription creation
+    const isCreation = otherPayment.description && (
+      otherPayment.description.toLowerCase().includes('subscription creation') ||
+      otherPayment.description.toLowerCase().includes('w2w:stripe: subscription creation')
+    );
+    
+    return isCreation && otherPayment.status === 'succeeded';
+  });
+  
+  return hasCreationSameDay;
+}
+
+/**
+ * Filter successful payments (exclude subscription updates that are NOT upsells)
+ * Subscription updates are included ONLY if they are upsells (have creation on same day)
  * @param {Array} payments - Array of payment objects
- * @returns {Array} - Array of successful payments
+ * @returns {Array} - Array of successful payments (excluding non-upsell subscription updates)
  */
 export function filterSuccessfulPayments(payments) {
   return payments.filter(payment => {
     if (payment.status !== 'succeeded' || !payment.customer) return false;
-    if (payment.description && payment.description.toLowerCase().includes('subscription update')) {
-      return false;
+    
+    // If it's a subscription update, check if it's an upsell
+    if (isSubscriptionUpdate(payment)) {
+      // Only include if it's an upsell (has creation on same day)
+      return isSubscriptionUpdateUpsell(payment, payments);
     }
+    
     return true;
   });
 }
