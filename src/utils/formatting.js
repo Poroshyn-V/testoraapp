@@ -220,13 +220,17 @@ export function formatPaymentForSheetsPrimer(payment, customer, metadata = {}) {
     ...metadata 
   };
   
-  // Extract GEO data from multiple sources (Primer API stores country in order.countryCode)
-  const geoCountry = m.geo_country 
+  // ✅ КРИТИЧЕСКИ ВАЖНО: Extract GEO data from ALL possible sources
+  // Primer API может хранить country в разных местах, проверяем все
+  const geoCountry = customer?.country
+    || customer?.address?.country
+    || payment.country
+    || m.geo_country 
     || m.country_code 
-    || customer?.address?.country 
-    || customer?.country 
     || payment._original?.order?.countryCode // Из оригинального Primer payment объекта
     || payment._original?.paymentMethod?.paymentMethodData?.externalPayerInfo?.countryCode
+    || payment._original?.metadata?.geo_country
+    || payment._original?.metadata?.country_code
     || 'Unknown';
   const geoCity = m.geo_city || customer?.address?.city || customer?.city || 'Unknown';
   const geo = geoCity !== 'Unknown' ? `${geoCountry}, ${geoCity}` : geoCountry;
@@ -242,12 +246,14 @@ export function formatPaymentForSheetsPrimer(payment, customer, metadata = {}) {
   const adName = m.utm_ad_name || m.ad_name || m['Ad Name'] || 'N/A';
   const adsetName = m.utm_adset_name || m.adset_name || m['Adset Name'] || 'N/A';
   
-  // Format customer data - извлекаем email из всех возможных источников
+  // ✅ КРИТИЧЕСКИ ВАЖНО: Format customer data - извлекаем email из ВСЕХ возможных источников
+  // Приоритет: customer.email > payment.email > metadata.email > _original объект
   const customerEmail = customer?.email 
+    || payment.email
     || m.email 
-    || payment.email 
     || payment._original?.customer?.emailAddress // Из оригинального Primer payment объекта
     || payment._original?.paymentMethod?.paymentMethodData?.externalPayerInfo?.email
+    || payment._original?.metadata?.email
     || 'N/A';
   const customerId = customer?.id || m.customer_id || payment.customer || 'N/A';
   

@@ -4622,27 +4622,38 @@ async function performSyncLogicPrimer(exportAll = false) {
         let customer = customerResult.value;
         const allPrimerRows = rowsResult.value;
         
-        // Извлекаем email и GEO напрямую из payment объектов если customer не найден или неполный
+        // ✅ КРИТИЧЕСКИ ВАЖНО: Извлекаем email и GEO из всех возможных источников
         const firstPayment = payments[0];
         const originalPayment = firstPayment._original;
         
-        let emailFromPayment = null;
-        let countryFromPayment = null;
+        // Сначала пробуем извлечь из нормализованного payment
+        let emailFromPayment = firstPayment.email 
+          || firstPayment.metadata?.email
+          || null;
         
+        let countryFromPayment = firstPayment.country 
+          || firstPayment.metadata?.geo_country
+          || firstPayment.metadata?.country_code
+          || null;
+        
+        // Затем пробуем из оригинального объекта (если есть)
         if (originalPayment) {
-          emailFromPayment = originalPayment.customer?.emailAddress 
+          emailFromPayment = emailFromPayment
+            || originalPayment.customer?.emailAddress 
             || originalPayment.paymentMethod?.paymentMethodData?.externalPayerInfo?.email
-            || firstPayment.email
+            || originalPayment.metadata?.email
             || null;
           
-          countryFromPayment = originalPayment.order?.countryCode 
+          countryFromPayment = countryFromPayment
+            || originalPayment.order?.countryCode 
             || originalPayment.paymentMethod?.paymentMethodData?.externalPayerInfo?.countryCode
-            || firstPayment.country
+            || originalPayment.metadata?.geo_country
+            || originalPayment.metadata?.country_code
             || null;
         }
         
+        // Если customer не получен или неполный, создаем из payment данных
         if (!customer) {
-          // Создаем customer из payment данных
           customer = {
             id: customerId,
             email: emailFromPayment || null,
@@ -4664,11 +4675,14 @@ async function performSyncLogicPrimer(exportAll = false) {
           }
         }
         
-        // Если все еще нет email/GEO, пробуем получить детальный payment
-        if ((!customer.email || !customer.country) && originalPayment?.id) {
+        // ✅ ОБЯЗАТЕЛЬНО: Если все еще нет email/GEO, делаем детальный запрос payment
+        // Это критически важно, так как список платежей может не содержать полных данных
+        const paymentIdToFetch = originalPayment?.id || firstPayment.id;
+        if ((!customer.email || !customer.country) && paymentIdToFetch) {
           try {
+            logger.info(`🔍 Fetching detailed payment ${paymentIdToFetch} for email/GEO extraction...`);
             const paymentDetailResponse = await fetchWithRetry(() => 
-              fetch(`https://api.primer.io/payments/${originalPayment.id}`, {
+              fetch(`https://api.primer.io/payments/${paymentIdToFetch}`, {
                 headers: {
                   'X-API-KEY': ENV.PRIMER_API_KEY,
                   'X-API-VERSION': ENV.PRIMER_API_VERSION || '2.4',
@@ -4680,26 +4694,48 @@ async function performSyncLogicPrimer(exportAll = false) {
             if (paymentDetailResponse.ok) {
               const paymentDetail = await paymentDetailResponse.json();
               
+              // Извлекаем email из всех возможных мест в детальном payment
               if (!customer.email) {
                 customer.email = paymentDetail.customer?.emailAddress 
                   || paymentDetail.paymentMethod?.paymentMethodData?.externalPayerInfo?.email
+                  || paymentDetail.metadata?.email
                   || customer.email;
               }
               
+              // Извлекаем country из всех возможных мест в детальном payment
               if (!customer.country) {
                 customer.country = paymentDetail.order?.countryCode 
                   || paymentDetail.paymentMethod?.paymentMethodData?.externalPayerInfo?.countryCode
+                  || paymentDetail.metadata?.geo_country
+                  || paymentDetail.metadata?.country_code
                   || customer.country;
                 customer.address = customer.country ? { country: customer.country } : null;
               }
               
               if (customer.email || customer.country) {
                 logger.info(`✅ Получен детальный payment для ${customerId}: email=${customer.email || 'нет'}, country=${customer.country || 'нет'}`);
+              } else {
+                logger.warn(`⚠️ Детальный payment не содержит email/GEO для ${customerId} (payment ${paymentIdToFetch})`);
               }
+            } else {
+              logger.warn(`⚠️ Failed to fetch payment detail: ${paymentDetailResponse.status} ${paymentDetailResponse.statusText}`);
             }
           } catch (detailError) {
-            logger.debug(`Не удалось получить детальный payment для ${customerId}: ${detailError.message}`);
+            logger.error(`❌ Не удалось получить детальный payment для ${customerId}: ${detailError.message}`, {
+              paymentId: paymentIdToFetch,
+              error: detailError.message
+            });
           }
+        }
+        
+        // ✅ ФИНАЛЬНАЯ ПРОВЕРКА: Если все еще нет данных, логируем предупреждение
+        if (!customer.email || !customer.country) {
+          logger.warn(`⚠️ Customer ${customerId} missing data: email=${customer.email || 'N/A'}, country=${customer.country || 'Unknown'}`, {
+            customerId,
+            paymentId: firstPayment.id,
+            hasOriginal: !!originalPayment,
+            paymentMetadata: firstPayment.metadata ? Object.keys(firstPayment.metadata) : []
+          });
         }
         
         // Sort payments by creation date
