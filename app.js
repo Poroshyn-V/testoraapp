@@ -2765,71 +2765,14 @@ app.post('/api/clean-primer-recurring', async (req, res) => {
     }
 
     let deletedCount = 0;
-    let updatedCount = 0;
     let errorCount = 0;
     const errors = [];
 
-    // Process each customer
+    // Process each customer - просто удаляем рекурентные записи, не обновляем данные
     for (const { customerId, firstRow, recurringRows } of customersWithDuplicates) {
       try {
-        // Get all payments for this customer from Primer API
-        const allPayments = await fetchWithRetry(() => getCustomerPaymentsPrimer(customerId));
-        const normalizedPayments = allPayments.map(normalizePrimerPayment);
-        
-        // Filter only successful payments
-        const successfulPayments = normalizedPayments.filter(p => {
-          if (p.status !== 'succeeded' || !p.customer) return false;
-          if (p.status === 'reversed' || p.status === 'refunded' || p.status === 'canceled') return false;
-          return true;
-        });
-
-        if (successfulPayments.length === 0) {
-          logger.warn(`No successful payments for customer ${customerId}, skipping`);
-          continue;
-        }
-
-        // Find ONLY first payment (earliest by date)
-        successfulPayments.sort((a, b) => a.created - b.created);
-        const firstPayment = successfulPayments[0];
-        
-        logger.info(`Processing customer ${customerId}: first payment ${firstPayment.id}, skipping ${successfulPayments.length - 1} recurring payments`);
-
-        // Get customer data
-        let customer;
-        try {
-          customer = await fetchWithRetry(() => getCustomerPrimer(customerId));
-        } catch (error) {
-          logger.warn(`Failed to get customer ${customerId}, using payment data`);
-          customer = {
-            id: customerId,
-            email: firstPayment.email || null,
-            country: firstPayment.country || null,
-            address: firstPayment.country ? { country: firstPayment.country } : null,
-            metadata: firstPayment.metadata || {}
-          };
-        }
-
-        // Format data for updating first row
-        const rowData = formatPaymentForSheetsPrimer(firstPayment, customer, { accountSource: 'primer' });
-        
-        // Update first row with correct data (only first payment)
-        rowData['Purchase ID'] = `purchase_${customerId}_${firstPayment.created}`;
-        rowData['Total Amount'] = (firstPayment.amount / 100).toFixed(2);
-        rowData['Payment Count'] = '1';
-        rowData['Payment Intent IDs'] = firstPayment.id;
-
-        // Ensure email and GEO are filled
-        if (!rowData['Email'] || rowData['Email'] === 'N/A') {
-          rowData['Email'] = customer?.email || firstPayment.email || 'N/A';
-        }
-        if (!rowData['GEO'] || rowData['GEO'] === 'Unknown') {
-          rowData['GEO'] = customer?.country || customer?.address?.country || firstPayment.country || 'Unknown';
-        }
-
-        // Update first row
-        await fetchWithRetry(() => firstRow.save(rowData));
-        updatedCount++;
-        logger.info(`Updated first row ${firstRow.rowNumber} for customer ${customerId}`);
+        const firstRowDate = new Date(firstRow.get('Created UTC') || 0);
+        logger.info(`Processing customer ${customerId}: keeping first row ${firstRow.rowNumber} (${firstRowDate.toISOString()}), deleting ${recurringRows.length} recurring rows`);
 
         // Delete recurring rows (from bottom to avoid row number shifts)
         recurringRows.sort((a, b) => b.rowNumber - a.rowNumber);
@@ -2854,12 +2797,11 @@ app.post('/api/clean-primer-recurring', async (req, res) => {
       }
     }
 
-    logger.info(`✅ Primer recurring cleanup completed: updated ${updatedCount}, deleted ${deletedCount}, errors ${errorCount}`);
+    logger.info(`✅ Primer recurring cleanup completed: deleted ${deletedCount} recurring payments, errors ${errorCount}`);
 
     res.json({
       success: true,
-      message: `Primer recurring cleanup completed! Updated ${updatedCount} rows, deleted ${deletedCount} recurring payments`,
-      updatedCount,
+      message: `Primer recurring cleanup completed! Deleted ${deletedCount} recurring payments`,
       deletedCount,
       errorCount,
       errors: errors.slice(0, 10) // Show first 10 errors

@@ -28,10 +28,7 @@ const logger = pino({
 
 const { ENV } = await import('./src/config/env.js');
 const { googleSheets } = await import('./src/services/googleSheets.js');
-const { getCustomerPaymentsPrimer, getCustomerPrimer } = await import('./src/services/primer.js');
-const { normalizePrimerPayment } = await import('./src/services/primer.js');
 const { fetchWithRetry } = await import('./src/utils/retry.js');
-const { formatPaymentForSheetsPrimer } = await import('./src/utils/formatting.js');
 
 async function cleanPrimerRecurring() {
   console.log('🚀 Запускаем очистку таблицы Primer от рекурентных платежей...\n');
@@ -89,7 +86,6 @@ async function cleanPrimerRecurring() {
     }
 
     let deletedCount = 0;
-    let updatedCount = 0;
     let errorCount = 0;
     const errors = [];
 
@@ -97,76 +93,20 @@ async function cleanPrimerRecurring() {
     for (const { customerId, firstRow, recurringRows } of customersWithDuplicates) {
       try {
         console.log(`\n📋 Обрабатываю клиента ${customerId}:`);
-        console.log(`   - Первая запись (строка ${firstRow.rowNumber}): ${firstRow.get('Created UTC')}`);
-        console.log(`   - Рекурентных записей: ${recurringRows.length}`);
-
-        // Получаем все платежи клиента из Primer API
-        const allPayments = await fetchWithRetry(() => getCustomerPaymentsPrimer(customerId));
-        const normalizedPayments = allPayments.map(normalizePrimerPayment);
-        
-        // Фильтруем только успешные платежи
-        const successfulPayments = normalizedPayments.filter(p => {
-          if (p.status !== 'succeeded' || !p.customer) return false;
-          if (p.status === 'reversed' || p.status === 'refunded' || p.status === 'canceled') return false;
-          return true;
-        });
-
-        if (successfulPayments.length === 0) {
-          console.log(`   ⚠️ Нет успешных платежей для клиента ${customerId}, пропускаю`);
-          continue;
-        }
-
-        // ✅ КРИТИЧЕСКИ ВАЖНО: Находим ТОЛЬКО первый платеж (самый ранний по дате)
-        successfulPayments.sort((a, b) => a.created - b.created);
-        const firstPayment = successfulPayments[0];
-        
-        console.log(`   ✅ Первый платеж: ${firstPayment.id} (${new Date(firstPayment.created * 1000).toISOString()})`);
-        console.log(`   ⏭️ Пропускаем ${successfulPayments.length - 1} рекурентных платежей`);
-
-        // Получаем customer данные
-        let customer;
-        try {
-          customer = await fetchWithRetry(() => getCustomerPrimer(customerId));
-        } catch (error) {
-          logger.warn(`Не удалось получить customer ${customerId}, используем данные из payment`);
-          customer = {
-            id: customerId,
-            email: firstPayment.email || null,
-            country: firstPayment.country || null,
-            address: firstPayment.country ? { country: firstPayment.country } : null,
-            metadata: firstPayment.metadata || {}
-          };
-        }
-
-        // Форматируем данные для обновления первой строки
-        const rowData = formatPaymentForSheetsPrimer(firstPayment, customer, { accountSource: 'primer' });
-        
-        // Обновляем первую строку с правильными данными (только первый платеж)
-        rowData['Purchase ID'] = `purchase_${customerId}_${firstPayment.created}`;
-        rowData['Total Amount'] = (firstPayment.amount / 100).toFixed(2);
-        rowData['Payment Count'] = '1';
-        rowData['Payment Intent IDs'] = firstPayment.id;
-
-        // Убеждаемся что email и GEO заполнены
-        if (!rowData['Email'] || rowData['Email'] === 'N/A') {
-          rowData['Email'] = customer?.email || firstPayment.email || 'N/A';
-        }
-        if (!rowData['GEO'] || rowData['GEO'] === 'Unknown') {
-          rowData['GEO'] = customer?.country || customer?.address?.country || firstPayment.country || 'Unknown';
-        }
-
-        // Обновляем первую строку
-        await fetchWithRetry(() => firstRow.save(rowData));
-        updatedCount++;
-        console.log(`   ✅ Обновлена первая запись (строка ${firstRow.rowNumber})`);
+        const firstRowDate = new Date(firstRow.get('Created UTC') || 0);
+        console.log(`   ✅ Первая запись (строка ${firstRow.rowNumber}): ${firstRowDate.toISOString()}`);
+        console.log(`   🗑️ Рекурентных записей для удаления: ${recurringRows.length}`);
 
         // Удаляем рекурентные строки (с конца, чтобы не сбить номера строк)
         recurringRows.sort((a, b) => b.rowNumber - a.rowNumber);
         for (const row of recurringRows) {
           try {
+            const rowDate = new Date(row.get('Created UTC') || 0);
+            const rowPaymentIds = (row.get('Payment Intent IDs') || '').split(',').map(id => id.trim()).filter(Boolean);
+            
             await fetchWithRetry(() => row.delete());
             deletedCount++;
-            console.log(`   🗑️ Удалена рекурентная запись (строка ${row.rowNumber})`);
+            console.log(`   🗑️ Удалена рекурентная запись (строка ${row.rowNumber}, дата: ${rowDate.toISOString()}, Payment: ${rowPaymentIds[0] || 'N/A'})`);
             // Небольшая задержка чтобы не превысить лимиты API
             await new Promise(resolve => setTimeout(resolve, 200));
           } catch (error) {
@@ -184,7 +124,6 @@ async function cleanPrimerRecurring() {
     }
 
     console.log(`\n✅ Очистка завершена!`);
-    console.log(`   - Обновлено записей: ${updatedCount}`);
     console.log(`   - Удалено рекурентных записей: ${deletedCount}`);
     console.log(`   - Ошибок: ${errorCount}`);
     
