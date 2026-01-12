@@ -4472,12 +4472,42 @@ async function performSyncLogicPrimer(exportAll = false) {
     
     logger.info(`📊 Найдено ${successfulPayments.length} успешных платежей из ${normalizedPayments.length} нормализованных (после фильтрации по статусу)`);
     
+    // ✅ КРИТИЧЕСКИ ВАЖНО: Фильтруем рекурентные платежи - включаем ТОЛЬКО первый платеж каждого клиента
+    // Логика: человек покупает подписку на 7 дней, потом списывают за месяц - это рекурент, не нужен
+    // Нужны только платежи в день оплаты нового юзера
+    const firstPaymentsOnly = [];
+    const customerFirstPaymentMap = new Map(); // customerId -> first payment
+    
+    // Сортируем все платежи по дате создания (старые первыми)
+    const sortedPayments = [...successfulPayments].sort((a, b) => a.created - b.created);
+    
+    // Находим первый платеж для каждого клиента
+    for (const payment of sortedPayments) {
+      const customerId = payment.customer;
+      if (!customerId) continue;
+      
+      // Если это первый платеж клиента - добавляем
+      if (!customerFirstPaymentMap.has(customerId)) {
+        customerFirstPaymentMap.set(customerId, payment);
+        firstPaymentsOnly.push(payment);
+        logger.info(`✅ First payment for customer ${customerId}: ${payment.id} (${new Date(payment.created * 1000).toISOString()})`);
+      } else {
+        // Это рекурентный платеж - исключаем
+        const firstPayment = customerFirstPaymentMap.get(customerId);
+        const daysDiff = Math.floor((payment.created - firstPayment.created) / (24 * 60 * 60));
+        logger.info(`⏭️ Skipping recurring payment ${payment.id} for customer ${customerId} (first payment: ${firstPayment.id}, ${daysDiff} days later)`);
+        results.skipped++;
+      }
+    }
+    
+    logger.info(`🔄 Filtered recurring payments: ${firstPaymentsOnly.length} first payments (out of ${successfulPayments.length} total), skipped ${successfulPayments.length - firstPaymentsOnly.length} recurring payments`);
+    
     // ✅ Детальное логирование для диагностики дубликатов
-    if (successfulPayments.length > 0) {
+    if (firstPaymentsOnly.length > 0) {
       logger.info(`🔍 Детальная проверка платежей на дубликаты:`, {
-        totalSuccessfulPayments: successfulPayments.length,
+        totalFirstPayments: firstPaymentsOnly.length,
         existingPaymentIdsCount: existingPaymentIds.size,
-        paymentIdsFromAPI: successfulPayments.slice(0, 5).map(p => ({
+        paymentIdsFromAPI: firstPaymentsOnly.slice(0, 5).map(p => ({
           id: p.id,
           customer: p.customer,
           amount: `${(p.amount / 100).toFixed(2)} ${p.currency.toUpperCase()}`,
@@ -4488,7 +4518,7 @@ async function performSyncLogicPrimer(exportAll = false) {
     }
     
     // Filter out existing payments by payment ID
-    const newPayments = successfulPayments.filter(p => {
+    const newPayments = firstPaymentsOnly.filter(p => {
       if (existingPaymentIds.has(p.id)) {
         results.duplicatesAvoided++;
         logger.info(`⏭️ Payment ${p.id} (customer: ${p.customer}, amount: ${(p.amount / 100).toFixed(2)} ${p.currency.toUpperCase()}) already exists in sheet, skipping`);
