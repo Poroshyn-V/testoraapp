@@ -2708,6 +2708,173 @@ app.post('/api/full-resync', async (req, res) => {
   }
 });
 
+// Clean Primer recurring payments endpoint
+app.post('/api/clean-primer-recurring', async (req, res) => {
+  try {
+    logger.info('🧹 Starting Primer recurring payments cleanup...');
+    
+    const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
+    const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
+    await primerSheet.loadHeaderRow();
+    
+    const allRows = await primerSheet.getRows();
+    logger.info(`📋 Found ${allRows.length} rows in Primer sheet`);
+
+    // Group rows by Customer ID
+    const customerGroups = new Map();
+    for (const row of allRows) {
+      const customerId = row.get('Customer ID');
+      if (!customerId || customerId === 'N/A') continue;
+      
+      if (!customerGroups.has(customerId)) {
+        customerGroups.set(customerId, []);
+      }
+      customerGroups.get(customerId).push(row);
+    }
+
+    // Find customers with multiple entries (recurring payments)
+    const customersWithDuplicates = [];
+    for (const [customerId, rows] of customerGroups.entries()) {
+      if (rows.length > 1) {
+        // Sort by creation date (oldest first)
+        rows.sort((a, b) => {
+          const dateA = new Date(a.get('Created UTC') || 0);
+          const dateB = new Date(b.get('Created UTC') || 0);
+          return dateA - dateB;
+        });
+        
+        customersWithDuplicates.push({
+          customerId,
+          rows,
+          firstRow: rows[0],
+          recurringRows: rows.slice(1),
+          count: rows.length
+        });
+      }
+    }
+
+    logger.info(`🔍 Found ${customersWithDuplicates.length} customers with recurring payments`);
+
+    if (customersWithDuplicates.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No recurring payments found',
+        deletedCount: 0,
+        updatedCount: 0
+      });
+    }
+
+    let deletedCount = 0;
+    let updatedCount = 0;
+    let errorCount = 0;
+    const errors = [];
+
+    // Process each customer
+    for (const { customerId, firstRow, recurringRows } of customersWithDuplicates) {
+      try {
+        // Get all payments for this customer from Primer API
+        const allPayments = await fetchWithRetry(() => getCustomerPaymentsPrimer(customerId));
+        const normalizedPayments = allPayments.map(normalizePrimerPayment);
+        
+        // Filter only successful payments
+        const successfulPayments = normalizedPayments.filter(p => {
+          if (p.status !== 'succeeded' || !p.customer) return false;
+          if (p.status === 'reversed' || p.status === 'refunded' || p.status === 'canceled') return false;
+          return true;
+        });
+
+        if (successfulPayments.length === 0) {
+          logger.warn(`No successful payments for customer ${customerId}, skipping`);
+          continue;
+        }
+
+        // Find ONLY first payment (earliest by date)
+        successfulPayments.sort((a, b) => a.created - b.created);
+        const firstPayment = successfulPayments[0];
+        
+        logger.info(`Processing customer ${customerId}: first payment ${firstPayment.id}, skipping ${successfulPayments.length - 1} recurring payments`);
+
+        // Get customer data
+        let customer;
+        try {
+          customer = await fetchWithRetry(() => getCustomerPrimer(customerId));
+        } catch (error) {
+          logger.warn(`Failed to get customer ${customerId}, using payment data`);
+          customer = {
+            id: customerId,
+            email: firstPayment.email || null,
+            country: firstPayment.country || null,
+            address: firstPayment.country ? { country: firstPayment.country } : null,
+            metadata: firstPayment.metadata || {}
+          };
+        }
+
+        // Format data for updating first row
+        const rowData = formatPaymentForSheetsPrimer(firstPayment, customer, { accountSource: 'primer' });
+        
+        // Update first row with correct data (only first payment)
+        rowData['Purchase ID'] = `purchase_${customerId}_${firstPayment.created}`;
+        rowData['Total Amount'] = (firstPayment.amount / 100).toFixed(2);
+        rowData['Payment Count'] = '1';
+        rowData['Payment Intent IDs'] = firstPayment.id;
+
+        // Ensure email and GEO are filled
+        if (!rowData['Email'] || rowData['Email'] === 'N/A') {
+          rowData['Email'] = customer?.email || firstPayment.email || 'N/A';
+        }
+        if (!rowData['GEO'] || rowData['GEO'] === 'Unknown') {
+          rowData['GEO'] = customer?.country || customer?.address?.country || firstPayment.country || 'Unknown';
+        }
+
+        // Update first row
+        await fetchWithRetry(() => firstRow.save(rowData));
+        updatedCount++;
+        logger.info(`Updated first row ${firstRow.rowNumber} for customer ${customerId}`);
+
+        // Delete recurring rows (from bottom to avoid row number shifts)
+        recurringRows.sort((a, b) => b.rowNumber - a.rowNumber);
+        for (const row of recurringRows) {
+          try {
+            await fetchWithRetry(() => row.delete());
+            deletedCount++;
+            logger.info(`Deleted recurring row ${row.rowNumber} for customer ${customerId}`);
+            // Small delay to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 200));
+          } catch (error) {
+            errorCount++;
+            errors.push({ customerId, rowNumber: row.rowNumber, error: error.message });
+            logger.warn(`Failed to delete row ${row.rowNumber}: ${error.message}`);
+          }
+        }
+
+      } catch (error) {
+        errorCount++;
+        errors.push({ customerId, error: error.message });
+        logger.error(`Error processing customer ${customerId}:`, error);
+      }
+    }
+
+    logger.info(`✅ Primer recurring cleanup completed: updated ${updatedCount}, deleted ${deletedCount}, errors ${errorCount}`);
+
+    res.json({
+      success: true,
+      message: `Primer recurring cleanup completed! Updated ${updatedCount} rows, deleted ${deletedCount} recurring payments`,
+      updatedCount,
+      deletedCount,
+      errorCount,
+      errors: errors.slice(0, 10) // Show first 10 errors
+    });
+    
+  } catch (error) {
+    logger.error('Error cleaning Primer recurring payments', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error cleaning Primer recurring payments',
+      error: error.message
+    });
+  }
+});
+
 // Clean duplicates endpoint
 app.post('/api/clean-duplicates', async (req, res) => {
   try {
