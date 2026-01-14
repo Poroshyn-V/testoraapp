@@ -172,8 +172,8 @@ class GoogleSheetsService {
     try {
       logInfo('Adding new row to Google Sheets', { rowData: Object.keys(rowData) });
       
-      // Add delay to avoid API limits
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Add delay to avoid API limits (increased for quota protection)
+      await new Promise(resolve => setTimeout(resolve, 2000)); // 2 seconds instead of 1
       
       const newRow = await this.sheet.addRow(rowData);
       

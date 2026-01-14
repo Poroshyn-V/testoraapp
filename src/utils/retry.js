@@ -55,6 +55,8 @@ function isRetryableError(error) {
 }
 
 export async function fetchWithRetry(fn, maxRetries = 3, delay = 1000) {
+  // For Google Sheets operations, increase retries for quota errors
+  // This will be handled dynamically based on error type
   let lastError;
   
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -79,21 +81,42 @@ export async function fetchWithRetry(fn, maxRetries = 3, delay = 1000) {
         throw error;
       }
       
+      // Check for quota/rate limit errors (429)
+      const statusCode = error.response?.status || error.status || error.code;
+      const isQuotaError = statusCode === 429 || 
+                          errorMessage.includes('429') || 
+                          errorMessage.includes('Quota exceeded') ||
+                          errorMessage.includes('rateLimitExceeded');
+      
       // For timeout errors, use longer delays
       const isTimeoutError = error.code === 'ETIMEDOUT' || 
-                             error.message?.includes('ETIMEDOUT') ||
-                             error.reason?.includes('ETIMEDOUT');
-      const baseDelay = isTimeoutError ? 2000 : delay; // 2 seconds for timeouts
+                             errorMessage?.includes('ETIMEDOUT') ||
+                             errorReason?.includes('ETIMEDOUT');
+      
+      // For quota errors, use much longer delays (Google recommends exponential backoff with longer base)
+      // For timeout errors, use medium delays
+      // For other errors, use standard delays
+      let baseDelay;
+      if (isQuotaError) {
+        baseDelay = 30000; // 30 seconds for quota errors (Google API rate limit)
+      } else if (isTimeoutError) {
+        baseDelay = 2000; // 2 seconds for timeouts
+      } else {
+        baseDelay = delay; // Standard delay
+      }
+      
       const retryDelay = baseDelay * Math.pow(2, attempt - 1); // Exponential backoff
       
       logger.warn(`Attempt ${attempt} failed, retrying in ${retryDelay}ms`, {
         error: error.message,
         errorCode: error.code,
+        statusCode,
         errorReason: error.reason,
         attempt,
         maxRetries,
+        isQuotaError,
         isTimeoutError,
-        retryDelay
+        retryDelay: `${retryDelay}ms (${Math.round(retryDelay / 1000)}s)`
       });
       
       await new Promise(resolve => setTimeout(resolve, retryDelay));

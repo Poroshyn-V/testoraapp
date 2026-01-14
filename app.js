@@ -4115,9 +4115,19 @@ async function performSyncLogicLowPrice(exportAll = false) {
         // ✅ ОПТИМИЗАЦИЯ: Загружаем customer и rows параллельно (они независимы)
         logger.info(`🔍 Checking if customer ${customerId} exists in LowPrice sheet "${lowPriceSheet.title}"...`);
         // Используем Promise.allSettled для надежности - если один запрос упадет, другой все равно выполнится
+        // Обертываем getRows в retry логику с обработкой 429 ошибок
         const [customerResult, rowsResult] = await Promise.allSettled([
           fetchWithRetry(() => getCustomerLowPrice(customerId)),
-          lowPriceSheet.getRows()
+          fetchWithRetryUtil(
+            async () => {
+              return await handleGoogleSheetsOperation(
+                () => lowPriceSheet.getRows(),
+                LOW_PRICE_SHEET_NAME
+              );
+            },
+            5, // maxRetries - больше попыток для quota errors
+            2000 // initial delay
+          )
         ]);
         
         // Проверяем результаты
@@ -4129,7 +4139,21 @@ async function performSyncLogicLowPrice(exportAll = false) {
         }
         
         if (rowsResult.status === 'rejected') {
-          logger.error(`Failed to fetch rows from LowPrice sheet`, { error: rowsResult.reason?.message });
+          const error = rowsResult.reason;
+          const isQuotaError = error?.message?.includes('429') || error?.message?.includes('Quota exceeded');
+          logger.error(`Failed to fetch rows from LowPrice sheet`, { 
+            error: error?.message,
+            isQuotaError,
+            customerId
+          });
+          
+          // Если это quota error, не считаем это критической ошибкой - просто пропускаем этого клиента
+          if (isQuotaError) {
+            logger.warn(`⚠️ Google Sheets quota exceeded, skipping customer ${customerId} for now`);
+            results.skipped += payments.length;
+            continue;
+          }
+          
           results.failed++;
           results.errors.push({ customerId, error: 'Failed to load LowPrice sheet rows' });
           continue;
@@ -4795,10 +4819,19 @@ async function performSyncLogicPrimer(exportAll = false) {
       }
       
       try {
-        // Load customer and rows in parallel
+        // Load customer and rows in parallel with retry logic for quota errors
         const [customerResult, rowsResult] = await Promise.allSettled([
           fetchWithRetry(() => getCustomerPrimer(customerId)),
-          primerSheet.getRows()
+          fetchWithRetryUtil(
+            async () => {
+              return await handleGoogleSheetsOperation(
+                () => primerSheet.getRows(),
+                PRIMER_SHEET_NAME
+              );
+            },
+            5, // maxRetries - больше попыток для quota errors
+            2000 // initial delay
+          )
         ]);
         
         if (customerResult.status === 'rejected') {
@@ -4809,7 +4842,21 @@ async function performSyncLogicPrimer(exportAll = false) {
         }
         
         if (rowsResult.status === 'rejected') {
-          logger.error(`Failed to fetch rows from Primer sheet`, { error: rowsResult.reason?.message });
+          const error = rowsResult.reason;
+          const isQuotaError = error?.message?.includes('429') || error?.message?.includes('Quota exceeded');
+          logger.error(`Failed to fetch rows from Primer sheet`, { 
+            error: error?.message,
+            isQuotaError,
+            customerId
+          });
+          
+          // Если это quota error, не считаем это критической ошибкой - просто пропускаем этого клиента
+          if (isQuotaError) {
+            logger.warn(`⚠️ Google Sheets quota exceeded, skipping customer ${customerId} for now`);
+            results.skipped += payments.length;
+            continue;
+          }
+          
           results.failed++;
           results.errors.push({ customerId, error: 'Failed to load Primer sheet rows' });
           continue;
