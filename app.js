@@ -4112,14 +4112,27 @@ async function performSyncLogicLowPrice(exportAll = false) {
       const customerLockKey = `customer_lowprice_${customerId}`;
       let customerLockId = null;
       try {
-        customerLockId = await distributedLock.acquire(customerLockKey, 5, 100);
+        // Увеличиваем количество попыток и задержку для более надежного получения блокировки
+        customerLockId = await distributedLock.acquire(customerLockKey, 30, 200);
         logger.debug(`🔒 Low Price customer lock acquired for ${customerId}`, { customerLockId });
       } catch (error) {
-        logger.warn(`⚠️ Failed to acquire customer lock for ${customerId}, skipping payment group`, {
-          error: error.message,
-          customerId,
-          paymentCount: payments.length
-        });
+        // Проверяем, не зависла ли блокировка
+        const activeLock = distributedLock.getActiveLocks().find(l => l.key === customerLockKey);
+        if (activeLock) {
+          logger.warn(`⚠️ Failed to acquire customer lock for ${customerId} - lock held by ${activeLock.pid} for ${activeLock.age}`, {
+            error: error.message,
+            customerId,
+            paymentCount: payments.length,
+            lockAge: activeLock.age,
+            lockHolder: activeLock.pid
+          });
+        } else {
+          logger.warn(`⚠️ Failed to acquire customer lock for ${customerId}, skipping payment group`, {
+            error: error.message,
+            customerId,
+            paymentCount: payments.length
+          });
+        }
         results.duplicatesAvoided += payments.length;
         continue;
       }
