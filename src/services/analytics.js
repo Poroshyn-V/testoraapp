@@ -2,6 +2,7 @@ import { logInfo, logError } from '../utils/logging.js';
 import { formatWeeklyReport, formatCreativeAlert } from '../utils/formatting.js';
 import googleSheets from './googleSheets.js';
 import { ENV } from '../config/env.js';
+import { fetchWithRetry } from '../utils/retry.js';
 
 // Analytics service
 export class AnalyticsService {
@@ -138,19 +139,19 @@ ${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFi
       const paymentsSheet = await googleSheets.getSheetByName('payments');
       const lowPriceSheet = await googleSheets.getSheetByName('LowPrice');
       
-      await paymentsSheet.loadHeaderRow();
-      await lowPriceSheet.loadHeaderRow();
+      await fetchWithRetry(() => paymentsSheet.loadHeaderRow(), 5, 2000);
+      await fetchWithRetry(() => lowPriceSheet.loadHeaderRow(), 5, 2000);
       
-      const paymentsRows = await paymentsSheet.getRows();
-      const lowPriceRows = await lowPriceSheet.getRows();
+      const paymentsRows = await fetchWithRetry(() => paymentsSheet.getRows(), 5, 2000);
+      const lowPriceRows = await fetchWithRetry(() => lowPriceSheet.getRows(), 5, 2000);
       
       // Попытаемся получить данные из Primer листа (если он существует)
       let primerRows = [];
       try {
         const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
         const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
-        await primerSheet.loadHeaderRow();
-        primerRows = await primerSheet.getRows();
+        await fetchWithRetry(() => primerSheet.loadHeaderRow(), 5, 2000);
+        primerRows = await fetchWithRetry(() => primerSheet.getRows(), 5, 2000);
         logInfo(`✅ Primer sheet "${PRIMER_SHEET_NAME}" found with ${primerRows.length} rows`);
       } catch (error) {
         logInfo(`ℹ️ Primer sheet not found or not configured (${error.message})`);
@@ -671,19 +672,19 @@ ${isSignificantDrop ? '🔍 Check your campaigns!' : '🎉 Great performance!'}`
       const paymentsSheet = await googleSheets.getSheetByName('payments');
       const lowPriceSheet = await googleSheets.getSheetByName('LowPrice');
       
-      await paymentsSheet.loadHeaderRow();
-      await lowPriceSheet.loadHeaderRow();
+      await fetchWithRetry(() => paymentsSheet.loadHeaderRow(), 5, 2000);
+      await fetchWithRetry(() => lowPriceSheet.loadHeaderRow(), 5, 2000);
       
-      const paymentsRows = await paymentsSheet.getRows();
-      const lowPriceRows = await lowPriceSheet.getRows();
+      const paymentsRows = await fetchWithRetry(() => paymentsSheet.getRows(), 5, 2000);
+      const lowPriceRows = await fetchWithRetry(() => lowPriceSheet.getRows(), 5, 2000);
       
       // Попытаемся получить данные из Primer листа (если он существует)
       let primerRows = [];
       try {
         const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
         const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
-        await primerSheet.loadHeaderRow();
-        primerRows = await primerSheet.getRows();
+        await fetchWithRetry(() => primerSheet.loadHeaderRow(), 5, 2000);
+        primerRows = await fetchWithRetry(() => primerSheet.getRows(), 5, 2000);
         logInfo(`✅ Primer sheet "${PRIMER_SHEET_NAME}" found with ${primerRows.length} rows`);
       } catch (error) {
         logInfo(`ℹ️ Primer sheet not found or not configured (${error.message})`);

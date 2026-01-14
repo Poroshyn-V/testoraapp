@@ -4,6 +4,7 @@ import { metrics } from './metrics.js';
 import AlertPriority from './alertPriority.js';
 import { alertConfig } from '../config/alertConfig.js';
 import { ENV } from '../config/env.js';
+import { fetchWithRetry } from '../utils/retry.js';
 
 // Smart alerts service
 export class SmartAlerts {
@@ -385,19 +386,19 @@ Drop: ${drop}%
       const paymentsSheet = await googleSheets.getSheetByName('payments');
       const lowPriceSheet = await googleSheets.getSheetByName('LowPrice');
       
-      await paymentsSheet.loadHeaderRow();
-      await lowPriceSheet.loadHeaderRow();
+      await fetchWithRetry(() => paymentsSheet.loadHeaderRow(), 5, 2000);
+      await fetchWithRetry(() => lowPriceSheet.loadHeaderRow(), 5, 2000);
       
-      const paymentsRows = await paymentsSheet.getRows();
-      const lowPriceRows = await lowPriceSheet.getRows();
+      const paymentsRows = await fetchWithRetry(() => paymentsSheet.getRows(), 5, 2000);
+      const lowPriceRows = await fetchWithRetry(() => lowPriceSheet.getRows(), 5, 2000);
       
       // Попытаемся получить данные из Primer листа (если он существует)
       let primerRows = [];
       try {
         const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
         const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
-        await primerSheet.loadHeaderRow();
-        primerRows = await primerSheet.getRows();
+        await fetchWithRetry(() => primerSheet.loadHeaderRow(), 5, 2000);
+        primerRows = await fetchWithRetry(() => primerSheet.getRows(), 5, 2000);
       } catch (error) {
         // Primer лист не существует или не настроен - это нормально
       }

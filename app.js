@@ -22,6 +22,7 @@ import { formatPaymentForSheets, formatPaymentForSheetsLowPrice, formatPaymentFo
 import { getRecentPaymentsPrimer, getAllPaymentsPrimer, getCustomerPaymentsPrimer, getCustomerPrimer, normalizePrimerPayment, isPrimerConfigured } from './src/services/primer.js';
 import healthRoutes from './src/routes/health.js';
 import { google } from 'googleapis';
+import { fetchWithRetry as fetchWithRetryUtil } from './src/utils/retry.js';
 
 // Глобальные переменные для locks
 const syncLock = new Map(); // customerId -> timestamp
@@ -240,6 +241,60 @@ function cleanOldAlerts() {
     totalCleaned: cleaned.dailyStats + cleaned.creativeAlert + cleaned.weeklyReport + cleaned.campaignAnalysis + cleaned.duplicateCheck,
     timestamp: new Date().toISOString()
   });
+}
+
+// Helper function to check if error is a token expiration error
+function isTokenError(error) {
+  if (!error) return false;
+  
+  const errorMessage = error.message || '';
+  const statusCode = error.response?.status || error.status || error.code;
+  
+  // 401 Unauthorized - token expired or invalid
+  if (statusCode === 401 || errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
+    return true;
+  }
+  
+  // Token expiration errors
+  if (errorMessage.includes('token') && (
+      errorMessage.includes('expired') ||
+      errorMessage.includes('invalid') ||
+      errorMessage.includes('Invalid Credentials')
+  )) {
+    return true;
+  }
+  
+  // Google API authentication errors
+  if (errorMessage.includes('invalid_grant') || 
+      errorMessage.includes('invalid_token') ||
+      errorMessage.includes('Request had invalid authentication credentials')) {
+    return true;
+  }
+  
+  return false;
+}
+
+// Helper function to handle Google Sheets operations with token refresh
+async function handleGoogleSheetsOperation(operation, sheetName) {
+  try {
+    return await operation();
+  } catch (error) {
+    // If token error, reset Google Sheets initialization and retry
+    if (isTokenError(error)) {
+      logger.warn('Token error detected in Google Sheets operation, resetting and retrying', {
+        error: error.message,
+        sheetName,
+        statusCode: error.response?.status || error.status
+      });
+      
+      // Reset Google Sheets initialization to force token refresh
+      googleSheets.resetInitialization();
+      
+      // Retry the operation
+      return await operation();
+    }
+    throw error;
+  }
 }
 
 // Retry logic for external APIs
@@ -3919,7 +3974,11 @@ async function performSyncLogicLowPrice(exportAll = false) {
     // ✅ Заголовки уже созданы - просто пытаемся загрузить их
     // Если не получается - продолжаем работу без заголовков (они уже есть в таблице)
     try {
-      await lowPriceSheet.loadHeaderRow();
+      await fetchWithRetryUtil(
+        () => lowPriceSheet.loadHeaderRow(),
+        5, // maxRetries
+        2000 // initial delay for timeout errors
+      );
       logger.info(`✅ LowPrice sheet headers loaded successfully`);
     } catch (error) {
       // Заголовки могут не загрузиться из-за размера листа, но они уже есть
@@ -3927,16 +3986,28 @@ async function performSyncLogicLowPrice(exportAll = false) {
       logger.warn(`⚠️ Could not load headers (may be due to sheet size), but headers already exist. Continuing... (error: ${error.message})`);
     }
     
-    // Load existing Payment Intent IDs from LowPrice sheet
+    // Load existing Payment Intent IDs from LowPrice sheet with retry logic and token error handling
     let existingRows;
     try {
-      existingRows = await lowPriceSheet.getRows();
+      existingRows = await fetchWithRetryUtil(
+        async () => {
+          return await handleGoogleSheetsOperation(
+            () => lowPriceSheet.getRows(),
+            LOW_PRICE_SHEET_NAME
+          );
+        },
+        5, // maxRetries for timeout errors
+        2000 // initial delay (2 seconds)
+      );
       logger.info(`✅ Loaded ${existingRows.length} existing rows from LowPrice sheet`);
     } catch (error) {
-      logger.error('❌ Failed to load rows from LowPrice sheet', {
+      logger.error('❌ Failed to load rows from LowPrice sheet after retries', {
         error: error.message,
+        errorCode: error.code,
+        errorReason: error.reason,
         stack: error.stack,
-        sheetName: LOW_PRICE_SHEET_NAME
+        sheetName: LOW_PRICE_SHEET_NAME,
+        isTokenError: isTokenError(error)
       });
       throw new Error(`Failed to load rows from LowPrice sheet: ${error.message}`);
     }
@@ -4503,24 +4574,40 @@ async function performSyncLogicPrimer(exportAll = false) {
       throw sheetError;
     }
     
-    // Try to load headers
+    // Try to load headers with retry logic
     try {
-      await primerSheet.loadHeaderRow();
+      await fetchWithRetryUtil(
+        () => primerSheet.loadHeaderRow(),
+        5, // maxRetries
+        2000 // initial delay for timeout errors
+      );
       logger.info(`✅ Primer sheet headers loaded successfully`);
     } catch (error) {
       logger.warn(`⚠️ Could not load headers (may be due to sheet size), but headers already exist. Continuing... (error: ${error.message})`);
     }
     
-    // Load existing Payment IDs from Primer sheet
+    // Load existing Payment IDs from Primer sheet with retry logic and token error handling
     let existingRows;
     try {
-      existingRows = await primerSheet.getRows();
+      existingRows = await fetchWithRetryUtil(
+        async () => {
+          return await handleGoogleSheetsOperation(
+            () => primerSheet.getRows(),
+            PRIMER_SHEET_NAME
+          );
+        },
+        5, // maxRetries for timeout errors
+        2000 // initial delay (2 seconds)
+      );
       logger.info(`✅ Loaded ${existingRows.length} existing rows from Primer sheet`);
     } catch (error) {
-      logger.error('❌ Failed to load rows from Primer sheet', {
+      logger.error('❌ Failed to load rows from Primer sheet after retries', {
         error: error.message,
+        errorCode: error.code,
+        errorReason: error.reason,
         stack: error.stack,
-        sheetName: PRIMER_SHEET_NAME
+        sheetName: PRIMER_SHEET_NAME,
+        isTokenError: isTokenError(error)
       });
       throw new Error(`Failed to load rows from Primer sheet: ${error.message}`);
     }
@@ -6780,13 +6867,54 @@ app.get('/api/debug-geo', async (req, res) => {
   }
 });
 
-// Sync diagnostics endpoint
+// Sync diagnostics endpoint - расширенная диагностика
 app.get('/api/sync-diagnostics', async (req, res) => {
   try {
     const now = Date.now();
+    const lastSync = global.lastSyncTime || 0;
+    const timeSinceLastSync = now - lastSync;
     const lockStats = distributedLock.getStats();
     const activeSyncLock = distributedLock.getActiveLocks()
       .find(lock => lock.key === 'sync_operation');
+    
+    // Проверяем конфигурацию
+    const configIssues = [];
+    if (ENV.AUTO_SYNC_DISABLED) {
+      configIssues.push('AUTO_SYNC_DISABLED is set to true');
+    }
+    if (!ENV.STRIPE_SECRET_KEY) {
+      configIssues.push('STRIPE_SECRET_KEY is not configured');
+    }
+    if (!ENV.GOOGLE_SHEETS_DOC_ID) {
+      configIssues.push('GOOGLE_SHEETS_DOC_ID is not configured');
+    }
+    if (!ENV.GOOGLE_SERVICE_EMAIL) {
+      configIssues.push('GOOGLE_SERVICE_EMAIL is not configured');
+    }
+    if (!ENV.GOOGLE_SERVICE_PRIVATE_KEY) {
+      configIssues.push('GOOGLE_SERVICE_PRIVATE_KEY is not configured');
+    }
+    
+    // Проверяем возможные проблемы
+    const problems = [];
+    if (emergencyStop) {
+      problems.push('🚨 EMERGENCY STOP is active - sync is blocked');
+    }
+    if (isSyncing && timeSinceLastSync > 10 * 60 * 1000) {
+      problems.push('⚠️ Sync appears to be stuck (isSyncing=true for more than 10 minutes)');
+    }
+    if (!syncInterval) {
+      problems.push('❌ Sync interval is not set - automatic sync is not running');
+    }
+    if (activeSyncLock && timeSinceLastSync > 10 * 60 * 1000) {
+      problems.push('⚠️ Sync lock is held but no sync activity detected');
+    }
+    if (timeSinceLastSync > alertConfig.syncInterval * 60 * 1000 + 60000) {
+      problems.push(`⚠️ Last sync was ${Math.round(timeSinceLastSync / 60000)} minutes ago (expected every ${alertConfig.syncInterval} minutes)`);
+    }
+    if (purchaseCache.size() === 0) {
+      problems.push('⚠️ Purchase cache is empty - may indicate initialization issues');
+    }
     
     res.json({
       success: true,
@@ -6794,7 +6922,13 @@ app.get('/api/sync-diagnostics', async (req, res) => {
       sync: {
         isSyncing: isSyncing,
         syncInterval: syncInterval ? 'active' : 'inactive',
-        emergencyStop: emergencyStop
+        emergencyStop: emergencyStop,
+        autoSyncDisabled: ENV.AUTO_SYNC_DISABLED || false,
+        lastSyncTime: lastSync ? new Date(lastSync).toISOString() : null,
+        timeSinceLastSync: timeSinceLastSync,
+        timeSinceLastSyncMinutes: Math.round(timeSinceLastSync / 60000),
+        syncIntervalMinutes: alertConfig.syncInterval,
+        shouldHaveRun: timeSinceLastSync > (alertConfig.syncInterval * 60 * 1000)
       },
       locks: {
         activeLocks: lockStats.activeLocks,
@@ -6812,12 +6946,28 @@ app.get('/api/sync-diagnostics', async (req, res) => {
       cache: {
         purchases: purchaseCache.size(),
         duplicateChecker: duplicateChecker.getStats()
-      }
+      },
+      configuration: {
+        stripeConfigured: !!ENV.STRIPE_SECRET_KEY,
+        googleSheetsConfigured: !!(ENV.GOOGLE_SHEETS_DOC_ID && ENV.GOOGLE_SERVICE_EMAIL && ENV.GOOGLE_SERVICE_PRIVATE_KEY),
+        lowPriceConfigured: !!ENV.STRIPE_SECRET_KEY_LOW_PRICE,
+        primerConfigured: !!ENV.PRIMER_API_KEY,
+        issues: configIssues
+      },
+      problems: problems,
+      recommendations: problems.length > 0 ? [
+        'Check logs for detailed error messages',
+        'Verify environment variables are set correctly',
+        'Check if emergency stop is needed',
+        'Verify Google Sheets API credentials',
+        'Check network connectivity to Google OAuth2 servers'
+      ] : ['✅ No issues detected - sync should be working normally']
     });
   } catch (error) {
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
+      stack: error.stack
     });
   }
 });

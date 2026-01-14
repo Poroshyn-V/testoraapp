@@ -1,9 +1,10 @@
 import { GoogleSpreadsheet } from 'google-spreadsheet';
 import { JWT } from 'google-auth-library';
 import { ENV } from '../config/env.js';
-import { logInfo, logError } from '../utils/logging.js';
+import { logInfo, logError, logWarn } from '../utils/logging.js';
 import { getCachedSheetsData } from '../utils/cache.js';
 import { distributedLock } from './distributedLock.js';
+import { fetchWithRetry } from '../utils/retry.js';
 
 // Google Sheets service
 class GoogleSheetsService {
@@ -11,11 +12,52 @@ class GoogleSheetsService {
     this.doc = null;
     this.sheet = null;
     this.isInitialized = false;
+    this.serviceAccountAuth = null;
+  }
+
+  // Reset initialization to force token refresh
+  resetInitialization() {
+    logInfo('Resetting Google Sheets initialization to force token refresh');
+    this.isInitialized = false;
+    this.doc = null;
+    this.sheet = null;
+    this.serviceAccountAuth = null;
+  }
+
+  // Check if error is related to expired/invalid token
+  isTokenError(error) {
+    if (!error) return false;
+    
+    const errorMessage = error.message || '';
+    const statusCode = error.response?.status || error.status || error.code;
+    
+    // 401 Unauthorized - token expired or invalid
+    if (statusCode === 401 || errorMessage.includes('401') || errorMessage.includes('Unauthorized')) {
+      return true;
+    }
+    
+    // Token expiration errors
+    if (errorMessage.includes('token') && (
+        errorMessage.includes('expired') ||
+        errorMessage.includes('invalid') ||
+        errorMessage.includes('Invalid Credentials')
+    )) {
+      return true;
+    }
+    
+    // Google API authentication errors
+    if (errorMessage.includes('invalid_grant') || 
+        errorMessage.includes('invalid_token') ||
+        errorMessage.includes('Request had invalid authentication credentials')) {
+      return true;
+    }
+    
+    return false;
   }
 
   // Initialize Google Sheets connection
-  async initialize() {
-    if (this.isInitialized) {
+  async initialize(forceRefresh = false) {
+    if (this.isInitialized && !forceRefresh) {
       return;
     }
 
@@ -30,24 +72,51 @@ class GoogleSheetsService {
 
     try {
       const privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY;
-      const serviceAccountAuth = new JWT({
+      
+      // Create new JWT auth instance (this will generate a fresh token)
+      this.serviceAccountAuth = new JWT({
         email: ENV.GOOGLE_SERVICE_EMAIL,
         key: privateKey,
         scopes: ['https://www.googleapis.com/auth/spreadsheets'],
       });
 
-      this.doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, serviceAccountAuth);
-      await this.doc.loadInfo();
-      this.sheet = this.doc.sheetsByIndex[0];
-      this.isInitialized = true;
+      this.doc = new GoogleSpreadsheet(ENV.GOOGLE_SHEETS_DOC_ID, this.serviceAccountAuth);
+      
+      // Use retry logic for initialization to handle connection timeouts
+      await fetchWithRetry(
+        async () => {
+          await this.doc.loadInfo();
+          this.sheet = this.doc.sheetsByIndex[0];
+          this.isInitialized = true;
+        },
+        5, // maxRetries
+        2000 // initial delay for timeout errors
+      );
 
       logInfo('Google Sheets initialized successfully', {
         title: this.doc.title,
         sheetCount: this.doc.sheetCount,
-        sheetTitle: this.sheet.title
+        sheetTitle: this.sheet.title,
+        forceRefresh
       });
     } catch (error) {
-      logError('Failed to initialize Google Sheets', error);
+      // If it's a token error, reset and try once more
+      if (this.isTokenError(error) && !forceRefresh) {
+        logWarn('Token error detected, resetting and retrying initialization', {
+          error: error.message,
+          errorCode: error.code,
+          statusCode: error.response?.status || error.status
+        });
+        this.resetInitialization();
+        return this.initialize(true); // Force refresh
+      }
+      
+      logError('Failed to initialize Google Sheets after retries', error, {
+        errorCode: error.code,
+        errorReason: error.reason,
+        statusCode: error.response?.status || error.status,
+        isTokenError: this.isTokenError(error)
+      });
       throw error;
     }
   }
@@ -66,7 +135,7 @@ class GoogleSheetsService {
     return targetSheet;
   }
 
-  // Get all rows from the sheet
+  // Get all rows from the sheet with token error handling
   async getAllRows() {
     await this.initialize();
     
@@ -74,13 +143,29 @@ class GoogleSheetsService {
     const cacheKey = `all-rows-${this.sheet?.title || 'default'}`;
     return getCachedSheetsData(cacheKey, async () => {
       logInfo('Fetching all rows from Google Sheets', { sheetTitle: this.sheet?.title });
-      const rows = await this.sheet.getRows();
-      logInfo('Successfully fetched rows from Google Sheets', { count: rows.length, sheetTitle: this.sheet?.title });
-      return rows;
+      try {
+        const rows = await this.sheet.getRows();
+        logInfo('Successfully fetched rows from Google Sheets', { count: rows.length, sheetTitle: this.sheet?.title });
+        return rows;
+      } catch (error) {
+        // If token error, reset and retry once
+        if (this.isTokenError(error)) {
+          logWarn('Token error in getRows, resetting and retrying', {
+            error: error.message,
+            sheetTitle: this.sheet?.title
+          });
+          this.resetInitialization();
+          await this.initialize(true);
+          const rows = await this.sheet.getRows();
+          logInfo('Successfully fetched rows after token refresh', { count: rows.length, sheetTitle: this.sheet?.title });
+          return rows;
+        }
+        throw error;
+      }
     });
   }
 
-  // Add a new row to the sheet
+  // Add a new row to the sheet with token error handling
   async addRow(rowData) {
     await this.initialize();
     
@@ -98,12 +183,26 @@ class GoogleSheetsService {
       
       return newRow;
     } catch (error) {
+      // If token error, reset and retry once
+      if (this.isTokenError(error)) {
+        logWarn('Token error in addRow, resetting and retrying', {
+          error: error.message
+        });
+        this.resetInitialization();
+        await this.initialize(true);
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        const newRow = await this.sheet.addRow(rowData);
+        logInfo('Successfully added row after token refresh', { 
+          rowNumber: newRow.rowNumber 
+        });
+        return newRow;
+      }
       logError('Failed to add row to Google Sheets', error, { rowData });
       throw error;
     }
   }
 
-  // Update an existing row
+  // Update an existing row with token error handling
   async updateRow(row, updateData) {
     try {
       logInfo('Updating row in Google Sheets', { 
@@ -124,6 +223,29 @@ class GoogleSheetsService {
       
       return row;
     } catch (error) {
+      // If token error, reset and retry once (need to reload row)
+      if (this.isTokenError(error)) {
+        logWarn('Token error in updateRow, resetting and retrying', {
+          error: error.message,
+          rowNumber: row.rowNumber
+        });
+        this.resetInitialization();
+        await this.initialize(true);
+        // Reload the row after reinitialization
+        const rows = await this.sheet.getRows();
+        const rowToUpdate = rows.find(r => r.rowNumber === row.rowNumber);
+        if (!rowToUpdate) {
+          throw new Error(`Row ${row.rowNumber} not found after token refresh`);
+        }
+        Object.entries(updateData).forEach(([key, value]) => {
+          rowToUpdate.set(key, value);
+        });
+        await rowToUpdate.save();
+        logInfo('Successfully updated row after token refresh', { 
+          rowNumber: rowToUpdate.rowNumber 
+        });
+        return rowToUpdate;
+      }
       logError('Failed to update row in Google Sheets', error, { 
         rowNumber: row.rowNumber,
         updateData 
