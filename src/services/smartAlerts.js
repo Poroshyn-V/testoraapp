@@ -261,24 +261,36 @@ Drop: ${drop}%
     try {
       logInfo('⚡ Проверяю оперативные алерты по кампаниям...');
       
+      // ✅ Последовательная загрузка с задержками для избежания quota errors
       const paymentsSheet = await googleSheets.getSheetByName('payments');
+      await fetchWithRetry(() => paymentsSheet.loadHeaderRow(), 3, 2000);
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Задержка между запросами
+      
+      const paymentsRows = await fetchWithRetry(() => paymentsSheet.getRows(), 3, 2000);
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Задержка между запросами
+      
       const lowPriceSheet = await googleSheets.getSheetByName('LowPrice');
+      await fetchWithRetry(() => lowPriceSheet.loadHeaderRow(), 3, 2000);
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Задержка между запросами
       
-      await paymentsSheet.loadHeaderRow();
-      await lowPriceSheet.loadHeaderRow();
-      
-      const paymentsRows = await paymentsSheet.getRows();
-      const lowPriceRows = await lowPriceSheet.getRows();
+      const lowPriceRows = await fetchWithRetry(() => lowPriceSheet.getRows(), 3, 2000);
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Задержка между запросами
       
       // Попытаемся получить данные из Primer листа (если он существует)
       let primerRows = [];
       try {
         const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
         const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
-        await primerSheet.loadHeaderRow();
-        primerRows = await primerSheet.getRows();
+        await fetchWithRetry(() => primerSheet.loadHeaderRow(), 3, 2000);
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Задержка между запросами
+        primerRows = await fetchWithRetry(() => primerSheet.getRows(), 3, 2000);
       } catch (error) {
-        // Primer лист не существует или не настроен - это нормально
+        // Если это quota error, просто пропускаем Primer лист
+        if (error.message?.includes('429') || error.message?.includes('Quota exceeded')) {
+          logWarn('⚠️ Google Sheets quota exceeded for Primer sheet, skipping');
+        } else {
+          // Primer лист не существует или не настроен - это нормально
+        }
       }
       
       const allRows = [...paymentsRows, ...lowPriceRows, ...primerRows];
@@ -370,6 +382,13 @@ Drop: ${drop}%
       return alertText;
       
     } catch (error) {
+      // Если это quota error, не логируем как ошибку - просто пропускаем алерт
+      if (error.message?.includes('429') || error.message?.includes('Quota exceeded')) {
+        logWarn('⚠️ Google Sheets quota exceeded, skipping real-time campaign alert', {
+          error: error.message
+        });
+        return null;
+      }
       logError('Error checking real-time campaign alert', error);
       return null; // Не бросаем ошибку, чтобы не ломать синхронизацию
     }
@@ -383,24 +402,36 @@ Drop: ${drop}%
     try {
       logInfo('⚡ Проверяю оперативные алерты по креативам...');
       
+      // ✅ Последовательная загрузка с задержками для избежания quota errors
       const paymentsSheet = await googleSheets.getSheetByName('payments');
+      await fetchWithRetry(() => paymentsSheet.loadHeaderRow(), 3, 2000);
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Задержка между запросами
+      
+      const paymentsRows = await fetchWithRetry(() => paymentsSheet.getRows(), 3, 2000);
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Задержка между запросами
+      
       const lowPriceSheet = await googleSheets.getSheetByName('LowPrice');
+      await fetchWithRetry(() => lowPriceSheet.loadHeaderRow(), 3, 2000);
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Задержка между запросами
       
-      await fetchWithRetry(() => paymentsSheet.loadHeaderRow(), 5, 2000);
-      await fetchWithRetry(() => lowPriceSheet.loadHeaderRow(), 5, 2000);
-      
-      const paymentsRows = await fetchWithRetry(() => paymentsSheet.getRows(), 5, 2000);
-      const lowPriceRows = await fetchWithRetry(() => lowPriceSheet.getRows(), 5, 2000);
+      const lowPriceRows = await fetchWithRetry(() => lowPriceSheet.getRows(), 3, 2000);
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Задержка между запросами
       
       // Попытаемся получить данные из Primer листа (если он существует)
       let primerRows = [];
       try {
         const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
         const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
-        await fetchWithRetry(() => primerSheet.loadHeaderRow(), 5, 2000);
-        primerRows = await fetchWithRetry(() => primerSheet.getRows(), 5, 2000);
+        await fetchWithRetry(() => primerSheet.loadHeaderRow(), 3, 2000);
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Задержка между запросами
+        primerRows = await fetchWithRetry(() => primerSheet.getRows(), 3, 2000);
       } catch (error) {
-        // Primer лист не существует или не настроен - это нормально
+        // Если это quota error, просто пропускаем Primer лист
+        if (error.message?.includes('429') || error.message?.includes('Quota exceeded')) {
+          logWarn('⚠️ Google Sheets quota exceeded for Primer sheet, skipping');
+        } else {
+          // Primer лист не существует или не настроен - это нормально
+        }
       }
       
       const allRows = [...paymentsRows, ...lowPriceRows, ...primerRows];
@@ -500,6 +531,13 @@ Drop: ${drop}%
       return alertText;
       
     } catch (error) {
+      // Если это quota error, не логируем как ошибку - просто пропускаем алерт
+      if (error.message?.includes('429') || error.message?.includes('Quota exceeded')) {
+        logWarn('⚠️ Google Sheets quota exceeded, skipping real-time creative alert', {
+          error: error.message
+        });
+        return null;
+      }
       logError('Error checking real-time creative alert', error);
       return null; // Не бросаем ошибку, чтобы не ломать синхронизацию
     }
