@@ -70,6 +70,7 @@ export async function fetchWithRetry(fn, maxRetries = 3, delay = 1000) {
       
       // Check for quota/rate limit errors (429) - нужно проверить ДО логирования
       const errorMessage = error?.message || '';
+      const errorReason = error?.reason || '';
       const statusCode = error.response?.status || error.status || error.code;
       const isQuotaError = statusCode === 429 || 
                           errorMessage.includes('429') || 
@@ -91,7 +92,7 @@ export async function fetchWithRetry(fn, maxRetries = 3, delay = 1000) {
           logger.error(`Failed after ${attempt} attempt(s)`, {
             error: errorMessage,
             errorCode: error.code,
-            errorReason: error.reason,
+            errorReason: errorReason,
             statusCode,
             attempts: attempt,
             maxRetries,
@@ -122,10 +123,10 @@ export async function fetchWithRetry(fn, maxRetries = 3, delay = 1000) {
       const retryDelay = baseDelay * Math.pow(2, attempt - 1); // Exponential backoff
       
       logger.warn(`Attempt ${attempt} failed, retrying in ${retryDelay}ms`, {
-        error: error.message,
+        error: errorMessage,
         errorCode: error.code,
         statusCode,
-        errorReason: error.reason,
+        errorReason: errorReason,
         attempt,
         maxRetries,
         isQuotaError,
