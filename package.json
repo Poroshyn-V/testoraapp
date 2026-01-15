@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "node index.js",
     "start": "node index.js",
-    "build": "echo 'No build step required'"
+    "build": "echo 'No build step required'",
+    "verify-sync": "node verify-and-sync-recent.js"
   },
   "dependencies": {
     "body-parser": "^1.20.2",
