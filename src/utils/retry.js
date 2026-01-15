@@ -68,25 +68,39 @@ export async function fetchWithRetry(fn, maxRetries = 3, delay = 1000) {
       // Check if error is retryable
       const isRetryable = isRetryableError(error);
       
-      if (attempt === maxRetries || !isRetryable) {
-        logger.error(`Failed after ${attempt} attempt(s)`, {
-          error: error.message,
-          errorCode: error.code,
-          errorReason: error.reason,
-          attempts: attempt,
-          maxRetries,
-          isRetryable,
-          stack: error.stack
-        });
-        throw error;
-      }
-      
-      // Check for quota/rate limit errors (429)
+      // Check for quota/rate limit errors (429) - нужно проверить ДО логирования
+      const errorMessage = error?.message || '';
       const statusCode = error.response?.status || error.status || error.code;
       const isQuotaError = statusCode === 429 || 
                           errorMessage.includes('429') || 
                           errorMessage.includes('Quota exceeded') ||
                           errorMessage.includes('rateLimitExceeded');
+      
+      if (attempt === maxRetries || !isRetryable) {
+        // Если это quota error, логируем как предупреждение, а не ошибку
+        if (isQuotaError) {
+          logger.warn(`⚠️ Failed after ${attempt} attempt(s) (quota exceeded)`, {
+            error: errorMessage,
+            errorCode: error.code,
+            statusCode,
+            attempts: attempt,
+            maxRetries,
+            isRetryable
+          });
+        } else {
+          logger.error(`Failed after ${attempt} attempt(s)`, {
+            error: errorMessage,
+            errorCode: error.code,
+            errorReason: error.reason,
+            statusCode,
+            attempts: attempt,
+            maxRetries,
+            isRetryable,
+            stack: error.stack
+          });
+        }
+        throw error;
+      }
       
       // For timeout errors, use longer delays
       const isTimeoutError = error.code === 'ETIMEDOUT' || 
