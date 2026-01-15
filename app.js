@@ -863,6 +863,15 @@ async function checkTelegramConnection() {
 }
 
 // Endpoint для внешних систем мониторинга (UptimeRobot, Pingdom)
+// Get last verification status
+app.get('/api/verification-status', async (_req, res) => {
+  res.json({
+    success: true,
+    verification: lastVerificationStatus,
+    autoVerifyEnabled: process.env.AUTO_VERIFY_ON_STARTUP === 'true'
+  });
+});
+
 app.get('/api/status', async (_req, res) => {
   const isHealthy = !isSyncing && syncInterval && purchaseCache.size() > 0;
   
@@ -8084,11 +8093,31 @@ app.use(errorHandler);
 app.use(notFoundHandler);
 
 // Start server
+// Store last verification status
+let lastVerificationStatus = {
+  running: false,
+  completed: false,
+  startTime: null,
+  endTime: null,
+  results: null,
+  error: null
+};
+
 // Auto-run verification on startup if env var is set
 if (process.env.AUTO_VERIFY_ON_STARTUP === 'true') {
   setTimeout(async () => {
     try {
-      logger.info('🚀 Auto-running verification and sync on startup...');
+      lastVerificationStatus.running = true;
+      lastVerificationStatus.startTime = new Date().toISOString();
+      lastVerificationStatus.completed = false;
+      lastVerificationStatus.error = null;
+      
+      logger.info('🚀 ========================================');
+      logger.info('🚀 AUTO-RUNNING VERIFICATION AND SYNC');
+      logger.info('🚀 ========================================');
+      logger.info('📅 Date range: Yesterday and Today');
+      logger.info('⏰ Started at:', lastVerificationStatus.startTime);
+      
       // Call the function directly instead of HTTP request
       const verifyFunction = async () => {
         const startTime = Date.now();
@@ -8099,6 +8128,11 @@ if (process.env.AUTO_VERIFY_ON_STARTUP === 'true') {
         const yesterdayStart = Math.floor(yesterday.getTime() / 1000);
         const todayEnd = Math.floor((today.getTime() + 24 * 60 * 60 * 1000 - 1) / 1000);
         
+        logger.info('📊 Starting verification for date range:', {
+          yesterday: yesterday.toISOString(),
+          today: today.toISOString()
+        });
+        
         const results = {
           stripe: { found: 0, missing: 0, synced: 0 },
           lowPrice: { found: 0, missing: 0, synced: 0 },
@@ -8107,33 +8141,64 @@ if (process.env.AUTO_VERIFY_ON_STARTUP === 'true') {
         };
         
         // Run syncs directly
+        logger.info('💳 Starting Stripe (main) sync...');
         try {
           const syncResult = await performSyncLogic(false);
           results.stripe.synced = syncResult.processed || 0;
+          results.stripe.found = syncResult.processed || 0;
+          logger.info(`✅ Stripe sync completed: ${results.stripe.synced} synced`);
         } catch (error) {
+          logger.error('❌ Stripe sync failed:', error.message);
           results.errors.push({ source: 'stripe', error: error.message });
         }
         
+        logger.info('💰 Starting LowPrice sync...');
         try {
           const syncResult = await performSyncLogicLowPrice(false);
           results.lowPrice.synced = syncResult.processed || 0;
+          results.lowPrice.found = syncResult.processed || 0;
+          logger.info(`✅ LowPrice sync completed: ${results.lowPrice.synced} synced`);
         } catch (error) {
+          logger.error('❌ LowPrice sync failed:', error.message);
           results.errors.push({ source: 'lowPrice', error: error.message });
         }
         
+        logger.info('🔷 Starting Primer sync...');
         try {
           const syncResult = await performSyncLogicPrimer(false);
           results.primer.synced = syncResult.processed || 0;
+          results.primer.found = syncResult.processed || 0;
+          logger.info(`✅ Primer sync completed: ${results.primer.synced} synced`);
         } catch (error) {
+          logger.error('❌ Primer sync failed:', error.message);
           results.errors.push({ source: 'primer', error: error.message });
         }
         
-        logger.info('✅ Auto-verification completed', { results, duration: `${Date.now() - startTime}ms` });
+        const duration = Date.now() - startTime;
+        const totalSynced = results.stripe.synced + results.lowPrice.synced + results.primer.synced;
+        
+        logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        logger.info('✅ AUTO-VERIFICATION COMPLETED');
+        logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        logger.info(`📊 Total synced: ${totalSynced} purchases`);
+        logger.info(`⏱️  Duration: ${duration}ms`);
+        logger.info('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        
+        return { results, duration };
       };
       
-      await verifyFunction();
+      const verificationResult = await verifyFunction();
+      lastVerificationStatus.running = false;
+      lastVerificationStatus.completed = true;
+      lastVerificationStatus.endTime = new Date().toISOString();
+      lastVerificationStatus.results = verificationResult.results;
+      
     } catch (error) {
-      logger.error('Error in auto-verification', error);
+      logger.error('❌ Error in auto-verification:', error);
+      lastVerificationStatus.running = false;
+      lastVerificationStatus.completed = false;
+      lastVerificationStatus.endTime = new Date().toISOString();
+      lastVerificationStatus.error = error.message;
     }
   }, 30000); // Wait 30 seconds for server to be ready and load existing purchases
 }
