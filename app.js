@@ -23,6 +23,7 @@ import { getRecentPaymentsPrimer, getAllPaymentsPrimer, getCustomerPaymentsPrime
 import healthRoutes from './src/routes/health.js';
 import { google } from 'googleapis';
 import { fetchWithRetry as fetchWithRetryUtil } from './src/utils/retry.js';
+import fetch from 'node-fetch';
 
 // Глобальные переменные для locks
 const syncLock = new Map(); // customerId -> timestamp
@@ -8088,15 +8089,53 @@ if (process.env.AUTO_VERIFY_ON_STARTUP === 'true') {
   setTimeout(async () => {
     try {
       logger.info('🚀 Auto-running verification and sync on startup...');
-      const response = await fetch(`http://localhost:${ENV.PORT}/api/verify-and-sync-recent`, {
-        method: 'GET'
-      });
-      const data = await response.json();
-      logger.info('✅ Auto-verification completed', data);
+      // Call the function directly instead of HTTP request
+      const verifyFunction = async () => {
+        const startTime = Date.now();
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayStart = Math.floor(yesterday.getTime() / 1000);
+        const todayEnd = Math.floor((today.getTime() + 24 * 60 * 60 * 1000 - 1) / 1000);
+        
+        const results = {
+          stripe: { found: 0, missing: 0, synced: 0 },
+          lowPrice: { found: 0, missing: 0, synced: 0 },
+          primer: { found: 0, missing: 0, synced: 0 },
+          errors: []
+        };
+        
+        // Run syncs directly
+        try {
+          const syncResult = await performSyncLogic(false);
+          results.stripe.synced = syncResult.processed || 0;
+        } catch (error) {
+          results.errors.push({ source: 'stripe', error: error.message });
+        }
+        
+        try {
+          const syncResult = await performSyncLogicLowPrice(false);
+          results.lowPrice.synced = syncResult.processed || 0;
+        } catch (error) {
+          results.errors.push({ source: 'lowPrice', error: error.message });
+        }
+        
+        try {
+          const syncResult = await performSyncLogicPrimer(false);
+          results.primer.synced = syncResult.processed || 0;
+        } catch (error) {
+          results.errors.push({ source: 'primer', error: error.message });
+        }
+        
+        logger.info('✅ Auto-verification completed', { results, duration: `${Date.now() - startTime}ms` });
+      };
+      
+      await verifyFunction();
     } catch (error) {
       logger.error('Error in auto-verification', error);
     }
-  }, 10000); // Wait 10 seconds for server to be ready
+  }, 30000); // Wait 30 seconds for server to be ready and load existing purchases
 }
 
 app.listen(ENV.PORT, () => {
