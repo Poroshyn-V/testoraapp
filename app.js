@@ -5642,6 +5642,336 @@ app.post('/api/export-all-primer-payments', async (req, res) => {
 });
 
 // Verify and sync recent purchases (yesterday and today)
+// GET endpoint for easy browser access
+app.get('/api/verify-and-sync-recent', async (req, res) => {
+  const startTime = Date.now();
+  
+  try {
+    logger.info('🔍 Starting verification and sync of recent purchases (yesterday and today)');
+    
+    // Calculate date range: yesterday 00:00:00 to today 23:59:59
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    
+    const yesterdayStart = Math.floor(yesterday.getTime() / 1000); // Unix timestamp
+    const todayEnd = Math.floor((today.getTime() + 24 * 60 * 60 * 1000 - 1) / 1000); // End of today
+    
+    logger.info('📅 Date range for verification', {
+      yesterday: yesterday.toISOString(),
+      today: today.toISOString(),
+      yesterdayStart,
+      todayEnd
+    });
+    
+    const results = {
+      stripe: { found: 0, missing: 0, synced: 0 },
+      lowPrice: { found: 0, missing: 0, synced: 0 },
+      primer: { found: 0, missing: 0, synced: 0 },
+      errors: []
+    };
+    
+    // 1. Verify and sync Stripe (main account) purchases
+    try {
+      logger.info('🔍 Verifying Stripe (main) purchases...');
+      
+      const paymentsSheet = await googleSheets.getSheetByName('payments');
+      const existingRows = await paymentsSheet.getRows();
+      const existingPaymentIds = new Set();
+      
+      for (const row of existingRows) {
+        const paymentIdsField = row.get('Payment Intent IDs') || '';
+        if (paymentIdsField) {
+          const ids = paymentIdsField.split(',').map(id => id.trim()).filter(Boolean);
+          ids.forEach(id => existingPaymentIds.add(id));
+        }
+      }
+      
+      logger.info(`📊 Found ${existingPaymentIds.size} existing payments in main sheet`);
+      
+      // Get payments from Stripe for yesterday and today
+      const allPayments = [];
+      let hasMore = true;
+      let startingAfter = null;
+      
+      while (hasMore) {
+        const params = {
+          limit: 100,
+          created: {
+            gte: yesterdayStart,
+            lte: todayEnd
+          }
+        };
+        
+        if (startingAfter) {
+          params.starting_after = startingAfter;
+        }
+        
+        const payments = await stripe.paymentIntents.list(params);
+        allPayments.push(...payments.data);
+        
+        hasMore = payments.has_more;
+        if (hasMore && payments.data.length > 0) {
+          startingAfter = payments.data[payments.data.length - 1].id;
+        }
+      }
+      
+      const successfulPayments = allPayments.filter(p => 
+        p.status === 'succeeded' && 
+        p.customer && 
+        p.amount !== 60 // Exclude test payments
+      );
+      
+      results.stripe.found = successfulPayments.length;
+      logger.info(`📊 Found ${successfulPayments.length} successful Stripe payments in date range`);
+      
+      // Find missing payments
+      const missingPayments = successfulPayments.filter(p => !existingPaymentIds.has(p.id));
+      results.stripe.missing = missingPayments.length;
+      
+      if (missingPayments.length > 0) {
+        logger.info(`⚠️ Found ${missingPayments.length} missing Stripe payments, syncing...`);
+        // Use existing sync logic to add missing payments
+        const syncResult = await performSyncLogic(false);
+        results.stripe.synced = syncResult.processed || 0;
+      }
+      
+    } catch (error) {
+      logger.error('Error verifying Stripe purchases', error);
+      results.errors.push({ source: 'stripe', error: error.message });
+    }
+    
+    // 2. Verify and sync LowPrice purchases
+    try {
+      logger.info('🔍 Verifying LowPrice purchases...');
+      
+      if (stripeLowPrice) {
+        const LOW_PRICE_SHEET_NAME = ENV.STRIPE_LOW_PRICE_SHEET_NAME || 'LowPrice';
+        const lowPriceSheet = await googleSheets.getSheetByName(LOW_PRICE_SHEET_NAME);
+        const existingRows = await lowPriceSheet.getRows();
+        const existingPaymentIds = new Set();
+        
+        for (const row of existingRows) {
+          const paymentIdsField = row.get('Payment Intent IDs') || '';
+          if (paymentIdsField) {
+            const ids = paymentIdsField.split(',').map(id => id.trim()).filter(Boolean);
+            ids.forEach(id => existingPaymentIds.add(id));
+          }
+        }
+        
+        logger.info(`📊 Found ${existingPaymentIds.size} existing payments in LowPrice sheet`);
+        
+        // Get payments from LowPrice Stripe for yesterday and today
+        const allPayments = [];
+        let hasMore = true;
+        let startingAfter = null;
+        
+        while (hasMore) {
+          const params = {
+            limit: 100,
+            created: {
+              gte: yesterdayStart,
+              lte: todayEnd
+            }
+          };
+          
+          if (startingAfter) {
+            params.starting_after = startingAfter;
+          }
+          
+          const payments = await stripeLowPrice.paymentIntents.list(params);
+          allPayments.push(...payments.data);
+          
+          hasMore = payments.has_more;
+          if (hasMore && payments.data.length > 0) {
+            startingAfter = payments.data[payments.data.length - 1].id;
+          }
+        }
+        
+        const successfulPayments = allPayments.filter(p => 
+          p.status === 'succeeded' && 
+          p.customer && 
+          p.amount !== 60 // Exclude test payments
+        );
+        
+        results.lowPrice.found = successfulPayments.length;
+        logger.info(`📊 Found ${successfulPayments.length} successful LowPrice payments in date range`);
+        
+        // Find missing payments
+        const missingPayments = successfulPayments.filter(p => !existingPaymentIds.has(p.id));
+        results.lowPrice.missing = missingPayments.length;
+        
+        if (missingPayments.length > 0) {
+          logger.info(`⚠️ Found ${missingPayments.length} missing LowPrice payments, syncing...`);
+          // Use existing sync logic to add missing payments
+          const syncResult = await performSyncLogicLowPrice(false);
+          results.lowPrice.synced = syncResult.processed || 0;
+        }
+      } else {
+        logger.info('ℹ️ LowPrice Stripe account not configured, skipping');
+      }
+      
+    } catch (error) {
+      logger.error('Error verifying LowPrice purchases', error);
+      results.errors.push({ source: 'lowPrice', error: error.message });
+    }
+    
+    // 3. Verify and sync Primer purchases
+    try {
+      logger.info('🔍 Verifying Primer purchases...');
+      
+      if (isPrimerConfigured()) {
+        const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
+        const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
+        const existingRows = await primerSheet.getRows();
+        const existingPaymentIds = new Set();
+        
+        for (const row of existingRows) {
+          const paymentIdField = row.get('Payment ID') || '';
+          if (paymentIdField) {
+            existingPaymentIds.add(paymentIdField.trim());
+          }
+        }
+        
+        logger.info(`📊 Found ${existingPaymentIds.size} existing payments in Primer sheet`);
+        
+        // Get payments from Primer for yesterday and today
+        const fromDate = yesterday.toISOString();
+        const toDate = new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1).toISOString();
+        
+        const primerPayments = await getRecentPaymentsPrimer(1000, 2); // Last 2 days
+        
+        // Filter by date range
+        const paymentsInRange = primerPayments.filter(p => {
+          const paymentDate = new Date(p.created_at || p.createdAt || 0);
+          return paymentDate >= yesterday && paymentDate <= today;
+        });
+        
+        results.primer.found = paymentsInRange.length;
+        logger.info(`📊 Found ${paymentsInRange.length} Primer payments in date range`);
+        
+        // Find missing payments
+        const missingPayments = paymentsInRange.filter(p => {
+          const paymentId = p.id || p.payment_id;
+          return paymentId && !existingPaymentIds.has(paymentId);
+        });
+        
+        results.primer.missing = missingPayments.length;
+        
+        if (missingPayments.length > 0) {
+          logger.info(`⚠️ Found ${missingPayments.length} missing Primer payments, syncing...`);
+          // Use existing sync logic to add missing payments
+          const syncResult = await performSyncLogicPrimer(false);
+          results.primer.synced = syncResult.processed || 0;
+        }
+      } else {
+        logger.info('ℹ️ Primer API not configured, skipping');
+      }
+      
+    } catch (error) {
+      logger.error('Error verifying Primer purchases', error);
+      results.errors.push({ source: 'primer', error: error.message });
+    }
+    
+    const duration = Date.now() - startTime;
+    
+    logger.info('✅ Verification and sync completed', {
+      ...results,
+      duration: `${duration}ms`
+    });
+    
+    // Return HTML response for browser access
+    if (req.headers.accept && req.headers.accept.includes('text/html')) {
+      const html = `
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Verification and Sync Results</title>
+  <meta charset="utf-8">
+  <style>
+    body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
+    .container { background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    h1 { color: #333; }
+    .section { margin: 20px 0; padding: 15px; background: #f9f9f9; border-radius: 4px; }
+    .success { color: #28a745; font-weight: bold; }
+    .error { color: #dc3545; }
+    .info { color: #17a2b8; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
+    th { background: #007bff; color: white; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>✅ Verification and Sync Completed</h1>
+    <p class="success">Duration: ${duration}ms</p>
+    
+    <div class="section">
+      <h2>💳 Stripe (Main)</h2>
+      <table>
+        <tr><th>Metric</th><th>Value</th></tr>
+        <tr><td>Found</td><td>${results.stripe.found}</td></tr>
+        <tr><td>Missing</td><td>${results.stripe.missing}</td></tr>
+        <tr><td>Synced</td><td class="success">${results.stripe.synced}</td></tr>
+      </table>
+    </div>
+    
+    <div class="section">
+      <h2>💰 LowPrice</h2>
+      <table>
+        <tr><th>Metric</th><th>Value</th></tr>
+        <tr><td>Found</td><td>${results.lowPrice.found}</td></tr>
+        <tr><td>Missing</td><td>${results.lowPrice.missing}</td></tr>
+        <tr><td>Synced</td><td class="success">${results.lowPrice.synced}</td></tr>
+      </table>
+    </div>
+    
+    <div class="section">
+      <h2>🔷 Primer</h2>
+      <table>
+        <tr><th>Metric</th><th>Value</th></tr>
+        <tr><td>Found</td><td>${results.primer.found}</td></tr>
+        <tr><td>Missing</td><td>${results.primer.missing}</td></tr>
+        <tr><td>Synced</td><td class="success">${results.primer.synced}</td></tr>
+      </table>
+    </div>
+    
+    ${results.errors.length > 0 ? `
+    <div class="section">
+      <h2 class="error">⚠️ Errors</h2>
+      <ul>
+        ${results.errors.map(e => `<li>${e.source}: ${e.error}</li>`).join('')}
+      </ul>
+    </div>
+    ` : ''}
+    
+    <p class="success">✅ Total synced: ${results.stripe.synced + results.lowPrice.synced + results.primer.synced} purchases</p>
+  </div>
+</body>
+</html>
+      `;
+      res.send(html);
+    } else {
+      res.json({
+        success: true,
+        message: 'Verification and sync completed',
+        results,
+        duration: `${duration}ms`
+      });
+    }
+    
+  } catch (error) {
+    logger.error('Error in verify-and-sync-recent endpoint', error);
+    res.status(500).json({
+      success: false,
+      message: 'Error verifying and syncing recent purchases',
+      error: error.message
+    });
+  }
+});
+
+// POST endpoint (same functionality)
 app.post('/api/verify-and-sync-recent', async (req, res) => {
   const startTime = Date.now();
   
@@ -7753,6 +8083,22 @@ app.use(errorHandler);
 app.use(notFoundHandler);
 
 // Start server
+// Auto-run verification on startup if env var is set
+if (process.env.AUTO_VERIFY_ON_STARTUP === 'true') {
+  setTimeout(async () => {
+    try {
+      logger.info('🚀 Auto-running verification and sync on startup...');
+      const response = await fetch(`http://localhost:${ENV.PORT}/api/verify-and-sync-recent`, {
+        method: 'GET'
+      });
+      const data = await response.json();
+      logger.info('✅ Auto-verification completed', data);
+    } catch (error) {
+      logger.error('Error in auto-verification', error);
+    }
+  }, 10000); // Wait 10 seconds for server to be ready
+}
+
 app.listen(ENV.PORT, () => {
   logger.info(`Server listening on port ${ENV.PORT}`);
   console.log('🚀 Refactored Stripe Ops API is running!');
