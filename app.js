@@ -4166,19 +4166,29 @@ async function performSyncLogicLowPrice(exportAll = false) {
         
         if (rowsResult.status === 'rejected') {
           const error = rowsResult.reason;
-          const isQuotaError = error?.message?.includes('429') || error?.message?.includes('Quota exceeded');
-          logger.error(`Failed to fetch rows from LowPrice sheet`, { 
-            error: error?.message,
-            isQuotaError,
-            customerId
-          });
+          const isQuotaError = error?.message?.includes('429') || 
+                              error?.message?.includes('Quota exceeded') ||
+                              error?.response?.status === 429;
           
-          // Если это quota error, не считаем это критической ошибкой - просто пропускаем этого клиента
+          // Если это quota error, логируем как предупреждение, а не ошибку
           if (isQuotaError) {
-            logger.warn(`⚠️ Google Sheets quota exceeded, skipping customer ${customerId} for now`);
+            logger.warn(`⚠️ Google Sheets quota exceeded, skipping customer ${customerId} for now`, {
+              error: error?.message,
+              customerId,
+              paymentCount: payments.length
+            });
             results.skipped += payments.length;
             continue;
           }
+          
+          // Для других ошибок логируем как ошибку
+          logger.error(`Failed to fetch rows from LowPrice sheet`, { 
+            error: error?.message,
+            errorCode: error?.code,
+            statusCode: error?.response?.status,
+            customerId,
+            paymentCount: payments.length
+          });
           
           results.failed++;
           results.errors.push({ customerId, error: 'Failed to load LowPrice sheet rows' });

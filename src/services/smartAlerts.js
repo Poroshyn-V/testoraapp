@@ -382,14 +382,30 @@ Drop: ${drop}%
       return alertText;
       
     } catch (error) {
+      // Проверяем различные типы ошибок
+      const errorMessage = error?.message || '';
+      const statusCode = error?.response?.status || error?.status;
+      const isQuotaError = statusCode === 429 || 
+                          errorMessage.includes('429') || 
+                          errorMessage.includes('Quota exceeded') ||
+                          errorMessage.includes('rateLimitExceeded');
+      
       // Если это quota error, не логируем как ошибку - просто пропускаем алерт
-      if (error.message?.includes('429') || error.message?.includes('Quota exceeded')) {
+      if (isQuotaError) {
         logWarn('⚠️ Google Sheets quota exceeded, skipping real-time campaign alert', {
-          error: error.message
+          error: errorMessage,
+          statusCode
         });
         return null;
       }
-      logError('Error checking real-time campaign alert', error);
+      
+      // Для других ошибок логируем с деталями
+      logError('Error checking real-time campaign alert', error, {
+        errorMessage,
+        statusCode,
+        errorCode: error?.code,
+        stack: error?.stack
+      });
       return null; // Не бросаем ошибку, чтобы не ломать синхронизацию
     }
   }
@@ -531,14 +547,30 @@ Drop: ${drop}%
       return alertText;
       
     } catch (error) {
+      // Проверяем различные типы ошибок
+      const errorMessage = error?.message || '';
+      const statusCode = error?.response?.status || error?.status;
+      const isQuotaError = statusCode === 429 || 
+                          errorMessage.includes('429') || 
+                          errorMessage.includes('Quota exceeded') ||
+                          errorMessage.includes('rateLimitExceeded');
+      
       // Если это quota error, не логируем как ошибку - просто пропускаем алерт
-      if (error.message?.includes('429') || error.message?.includes('Quota exceeded')) {
+      if (isQuotaError) {
         logWarn('⚠️ Google Sheets quota exceeded, skipping real-time creative alert', {
-          error: error.message
+          error: errorMessage,
+          statusCode
         });
         return null;
       }
-      logError('Error checking real-time creative alert', error);
+      
+      // Для других ошибок логируем с деталями
+      logError('Error checking real-time creative alert', error, {
+        errorMessage,
+        statusCode,
+        errorCode: error?.code,
+        stack: error?.stack
+      });
       return null; // Не бросаем ошибку, чтобы не ломать синхронизацию
     }
   }
