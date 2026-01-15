@@ -285,11 +285,23 @@ Drop: ${drop}%
         await new Promise(resolve => setTimeout(resolve, 2000)); // Задержка между запросами
         primerRows = await fetchWithRetry(() => primerSheet.getRows(), 3, 2000);
       } catch (error) {
+        // Проверяем различные типы ошибок
+        const errorMessage = error?.message || '';
+        const statusCode = error?.response?.status || error?.status;
+        const isQuotaError = statusCode === 429 || 
+                            errorMessage.includes('429') || 
+                            errorMessage.includes('Quota exceeded') ||
+                            errorMessage.includes('rateLimitExceeded');
+        
         // Если это quota error, просто пропускаем Primer лист
-        if (error.message?.includes('429') || error.message?.includes('Quota exceeded')) {
-          logWarn('⚠️ Google Sheets quota exceeded for Primer sheet, skipping');
+        if (isQuotaError) {
+          logWarn('⚠️ Google Sheets quota exceeded for Primer sheet, skipping', {
+            error: errorMessage,
+            statusCode
+          });
         } else {
           // Primer лист не существует или не настроен - это нормально
+          logInfo(`ℹ️ Primer sheet not available: ${errorMessage}`);
         }
       }
       
@@ -442,11 +454,23 @@ Drop: ${drop}%
         await new Promise(resolve => setTimeout(resolve, 2000)); // Задержка между запросами
         primerRows = await fetchWithRetry(() => primerSheet.getRows(), 3, 2000);
       } catch (error) {
+        // Проверяем различные типы ошибок
+        const errorMessage = error?.message || '';
+        const statusCode = error?.response?.status || error?.status;
+        const isQuotaError = statusCode === 429 || 
+                            errorMessage.includes('429') || 
+                            errorMessage.includes('Quota exceeded') ||
+                            errorMessage.includes('rateLimitExceeded');
+        
         // Если это quota error, просто пропускаем Primer лист
-        if (error.message?.includes('429') || error.message?.includes('Quota exceeded')) {
-          logWarn('⚠️ Google Sheets quota exceeded for Primer sheet, skipping');
+        if (isQuotaError) {
+          logWarn('⚠️ Google Sheets quota exceeded for Primer sheet, skipping', {
+            error: errorMessage,
+            statusCode
+          });
         } else {
           // Primer лист не существует или не настроен - это нормально
+          logInfo(`ℹ️ Primer sheet not available: ${errorMessage}`);
         }
       }
       
