@@ -4196,14 +4196,49 @@ async function performSyncLogicLowPrice(exportAll = false) {
         
         if (rowsResult.status === 'rejected') {
           const error = rowsResult.reason;
-          const isQuotaError = error?.message?.includes('429') || 
-                              error?.message?.includes('Quota exceeded') ||
-                              error?.response?.status === 429;
+          const errorMessage = error?.message || '';
+          const errorCode = error?.code || '';
+          const errorReason = error?.reason || '';
+          const statusCode = error?.response?.status || error?.status;
           
-          // Если это quota error, логируем как предупреждение, а не ошибку
-          if (isQuotaError) {
-            logger.warn(`⚠️ Google Sheets quota exceeded, skipping customer ${customerId} for now`, {
-              error: error?.message,
+          // Проверяем различные типы retryable ошибок
+          const isQuotaError = statusCode === 429 || 
+                              errorMessage.includes('429') || 
+                              errorMessage.includes('Quota exceeded') ||
+                              errorMessage.includes('rateLimitExceeded');
+          
+          const isTimeoutError = errorCode === 'ETIMEDOUT' || 
+                                 errorMessage.includes('ETIMEDOUT') ||
+                                 errorMessage.includes('timeout') ||
+                                 errorReason.includes('ETIMEDOUT');
+          
+          const isNetworkError = errorCode === 'ECONNRESET' || 
+                                 errorCode === 'ENOTFOUND' || 
+                                 errorCode === 'ECONNREFUSED' ||
+                                 errorMessage.includes('ECONNRESET') ||
+                                 errorMessage.includes('ENOTFOUND') ||
+                                 errorMessage.includes('ECONNREFUSED') ||
+                                 errorMessage.includes('connect');
+          
+          const isTokenError = statusCode === 401 || 
+                              errorMessage.includes('401') || 
+                              errorMessage.includes('Unauthorized') ||
+                              errorMessage.includes('invalid_grant') ||
+                              errorMessage.includes('invalid_token');
+          
+          const isRetryableError = isQuotaError || isTimeoutError || isNetworkError || isTokenError;
+          
+          // Если это retryable ошибка, логируем как предупреждение, а не ошибку
+          if (isRetryableError) {
+            const errorType = isQuotaError ? 'quota exceeded' : 
+                            isTimeoutError ? 'timeout' : 
+                            isNetworkError ? 'network error' : 
+                            'token error';
+            
+            logger.warn(`⚠️ Google Sheets ${errorType}, skipping customer ${customerId} for now`, {
+              error: errorMessage,
+              errorCode,
+              statusCode,
               customerId,
               paymentCount: payments.length
             });
@@ -4213,9 +4248,9 @@ async function performSyncLogicLowPrice(exportAll = false) {
           
           // Для других ошибок логируем как ошибку
           logger.error(`Failed to fetch rows from LowPrice sheet`, { 
-            error: error?.message,
-            errorCode: error?.code,
-            statusCode: error?.response?.status,
+            error: errorMessage,
+            errorCode,
+            statusCode,
             customerId,
             paymentCount: payments.length
           });
