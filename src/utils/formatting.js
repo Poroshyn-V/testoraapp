@@ -20,7 +20,9 @@ function formatCampaignName(name) {
     // Clean up multiple underscores
     .replace(/_+/g, '_')
     // Remove leading/trailing underscores
-    .replace(/^_|_$/g, '');
+    .replace(/^_|_$/g, '')
+    // Keep test geo notation like T1 without extra underscore (fix T_1 → T1)
+    .replace(/T_([0-9]+)/g, 'T$1');
 }
 
 // Format payment data for Google Sheets
