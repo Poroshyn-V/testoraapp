@@ -10,7 +10,7 @@ config({ path: resolve(__dirname, '.env') });
 
 const { ENV } = await import('./src/config/env.js');
 const { googleSheets } = await import('./src/services/googleSheets.js');
-const { getCustomerPayments, getCustomer } from './src/services/stripe.js';
+const { getCustomerPayments, getCustomer } = await import('./src/services/stripe.js');
 const { formatPaymentForSheets } = await import('./src/utils/formatting.js');
 const { fetchWithRetry } = await import('./src/utils/retry.js');
 

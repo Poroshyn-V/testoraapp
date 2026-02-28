@@ -99,7 +99,7 @@ async function exportAllLowPriceUpsells() {
         const allPayments = await fetchWithRetry(() => getCustomerPaymentsLowPrice(customerId));
         const allSuccessfulPayments = allPayments.filter(p => {
           if (p.status !== 'succeeded' || !p.customer) return false;
-          // ✅ УБРАЛИ исключение subscription update - это могут быть реальные апселлы!
+          if (p.description && p.description.toLowerCase().includes('subscription update')) return false;
           if (p.amount === 60) return false; // Исключаем тестовые $0.60
           return true;
         });

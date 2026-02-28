@@ -7,24 +7,11 @@
 import { fileURLToPath } from 'url';
 import { dirname, resolve } from 'path';
 import { config } from 'dotenv';
-import pino from 'pino';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 config({ path: resolve(__dirname, '.env') });
-
-const logger = pino({ 
-  level: 'info',
-  transport: {
-    target: 'pino-pretty',
-    options: {
-      colorize: true,
-      translateTime: 'SYS:standard',
-      ignore: 'pid,hostname'
-    }
-  }
-});
 
 const { ENV } = await import('./src/config/env.js');
 const { googleSheets } = await import('./src/services/googleSheets.js');
@@ -135,8 +122,8 @@ async function cleanPrimerRecurring() {
     }
 
   } catch (error) {
-    logger.error('Критическая ошибка при очистке', error);
     console.error('❌ Критическая ошибка:', error.message);
+    console.error(error.stack);
     process.exit(1);
   }
 }
@@ -148,7 +135,7 @@ cleanPrimerRecurring()
     process.exit(0);
   })
   .catch(error => {
-    logger.error('Ошибка выполнения скрипта', error);
     console.error('❌ Ошибка выполнения:', error.message);
+    console.error(error.stack);
     process.exit(1);
   });

@@ -1,0 +1,21 @@
+{
+  "name": "fb-stripe-bot",
+  "version": "1.0.0",
+  "description": "Facebook Stripe Integration Bot",
+  "main": "main.js",
+  "type": "module",
+  "scripts": {
+    "start": "node main.js",
+    "dev": "node --watch main.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["facebook", "stripe", "bot", "integration"],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "node-fetch": "^3.3.2",
+    "googleapis": "^128.0.0",
+    "dotenv": "^16.3.1"
+  }
+}
+

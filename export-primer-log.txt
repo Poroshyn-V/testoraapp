@@ -1,0 +1,122 @@
+{"level":"info","time":"2025-12-26T13:32:54.141Z","pid":14964,"hostname":"Mac","msg":"🚀 Начинаю массовую выгрузку всех платежей Primer в Google Sheets..."}
+{"level":"info","time":"2025-12-26T13:32:55.033Z","pid":14964,"hostname":"Mac","message":"Google Sheets initialized successfully","title":"Stripe Payments","sheetCount":3,"sheetTitle":"payments","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:32:55.033Z","pid":14964,"hostname":"Mac","msg":"✅ Используется лист: \"Primer\""}
+{"level":"info","time":"2025-12-26T13:32:55.708Z","pid":14964,"hostname":"Mac","msg":"✅ Заголовки загружены"}
+{"level":"info","time":"2025-12-26T13:32:56.374Z","pid":14964,"hostname":"Mac","msg":"📋 Найдено 3 существующих платежей в листе Primer"}
+{"level":"info","time":"2025-12-26T13:32:56.374Z","pid":14964,"hostname":"Mac","msg":"📥 Получаю все платежи из Primer API (это может занять время)..."}
+{"level":"info","time":"2025-12-26T13:32:56.374Z","pid":14964,"hostname":"Mac","message":"Fetching ALL payments from Primer API (this may take a while)...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:32:56.792Z","pid":14964,"hostname":"Mac","message":"Fetched 1 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:32:57.159Z","pid":14964,"hostname":"Mac","message":"Fetched 6 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:32:57.418Z","pid":14964,"hostname":"Mac","message":"Fetched 12 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:32:57.668Z","pid":14964,"hostname":"Mac","message":"Fetched 16 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:32:58.137Z","pid":14964,"hostname":"Mac","message":"Fetched 18 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:32:58.454Z","pid":14964,"hostname":"Mac","message":"Fetched 22 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:32:58.695Z","pid":14964,"hostname":"Mac","message":"Fetched 23 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:32:59.029Z","pid":14964,"hostname":"Mac","message":"Fetched 25 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:00.336Z","pid":14964,"hostname":"Mac","message":"Fetched 30 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:00.566Z","pid":14964,"hostname":"Mac","message":"Fetched 33 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:00.828Z","pid":14964,"hostname":"Mac","message":"Fetched 36 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:01.087Z","pid":14964,"hostname":"Mac","message":"Fetched 39 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:02.142Z","pid":14964,"hostname":"Mac","message":"Fetched 41 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:02.626Z","pid":14964,"hostname":"Mac","message":"Fetched 43 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:02.948Z","pid":14964,"hostname":"Mac","message":"Fetched 45 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:03.296Z","pid":14964,"hostname":"Mac","message":"Fetched 50 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:03.670Z","pid":14964,"hostname":"Mac","message":"Fetched 55 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:03.946Z","pid":14964,"hostname":"Mac","message":"Fetched 58 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:04.228Z","pid":14964,"hostname":"Mac","message":"Fetched 66 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:04.536Z","pid":14964,"hostname":"Mac","message":"Fetched 70 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:04.943Z","pid":14964,"hostname":"Mac","message":"Fetched 73 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:05.216Z","pid":14964,"hostname":"Mac","message":"Fetched 78 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:05.655Z","pid":14964,"hostname":"Mac","message":"Fetched 79 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:05.899Z","pid":14964,"hostname":"Mac","message":"Fetched 82 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:06.150Z","pid":14964,"hostname":"Mac","message":"Fetched 88 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:06.510Z","pid":14964,"hostname":"Mac","message":"Fetched 93 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:06.762Z","pid":14964,"hostname":"Mac","message":"Fetched 97 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:07.014Z","pid":14964,"hostname":"Mac","message":"Fetched 97 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:07.379Z","pid":14964,"hostname":"Mac","message":"Fetched 97 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:07.608Z","pid":14964,"hostname":"Mac","message":"Fetched 100 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:07.829Z","pid":14964,"hostname":"Mac","message":"Fetched 103 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:08.072Z","pid":14964,"hostname":"Mac","message":"Fetched 105 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:08.394Z","pid":14964,"hostname":"Mac","message":"Fetched 112 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:08.628Z","pid":14964,"hostname":"Mac","message":"Fetched 116 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:08.873Z","pid":14964,"hostname":"Mac","message":"Fetched 122 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:09.121Z","pid":14964,"hostname":"Mac","message":"Fetched 124 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:10.489Z","pid":14964,"hostname":"Mac","message":"Fetched 127 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:11.300Z","pid":14964,"hostname":"Mac","message":"Fetched 129 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:12.734Z","pid":14964,"hostname":"Mac","message":"Fetched 130 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:13.100Z","pid":14964,"hostname":"Mac","message":"Fetched 130 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:13.334Z","pid":14964,"hostname":"Mac","message":"Fetched 133 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:14.413Z","pid":14964,"hostname":"Mac","message":"Fetched 138 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:14.651Z","pid":14964,"hostname":"Mac","message":"Fetched 139 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:14.927Z","pid":14964,"hostname":"Mac","message":"Fetched 141 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:15.191Z","pid":14964,"hostname":"Mac","message":"Fetched 141 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:15.434Z","pid":14964,"hostname":"Mac","message":"Fetched 143 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:15.697Z","pid":14964,"hostname":"Mac","message":"Fetched 144 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:16.028Z","pid":14964,"hostname":"Mac","message":"Fetched 145 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:16.428Z","pid":14964,"hostname":"Mac","message":"Fetched 145 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:16.673Z","pid":14964,"hostname":"Mac","message":"Fetched 147 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:16.914Z","pid":14964,"hostname":"Mac","message":"Fetched 149 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:17.151Z","pid":14964,"hostname":"Mac","message":"Fetched 150 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:17.375Z","pid":14964,"hostname":"Mac","message":"Fetched 153 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:17.622Z","pid":14964,"hostname":"Mac","message":"Fetched 157 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:17.844Z","pid":14964,"hostname":"Mac","message":"Fetched 158 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:18.099Z","pid":14964,"hostname":"Mac","message":"Fetched 161 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:18.371Z","pid":14964,"hostname":"Mac","message":"Fetched 162 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:18.615Z","pid":14964,"hostname":"Mac","message":"Fetched 165 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:19.063Z","pid":14964,"hostname":"Mac","message":"Fetched 167 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:19.316Z","pid":14964,"hostname":"Mac","message":"Fetched 169 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:19.560Z","pid":14964,"hostname":"Mac","message":"Fetched 174 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:19.932Z","pid":14964,"hostname":"Mac","message":"Fetched 176 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:20.171Z","pid":14964,"hostname":"Mac","message":"Fetched 179 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:20.496Z","pid":14964,"hostname":"Mac","message":"Fetched 182 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:20.763Z","pid":14964,"hostname":"Mac","message":"Fetched 186 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:21.065Z","pid":14964,"hostname":"Mac","message":"Fetched 189 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:21.374Z","pid":14964,"hostname":"Mac","message":"Fetched 192 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:21.610Z","pid":14964,"hostname":"Mac","message":"Fetched 193 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:21.844Z","pid":14964,"hostname":"Mac","message":"Fetched 194 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:22.182Z","pid":14964,"hostname":"Mac","message":"Fetched 196 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:22.484Z","pid":14964,"hostname":"Mac","message":"Fetched 200 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:22.743Z","pid":14964,"hostname":"Mac","message":"Fetched 202 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:23.009Z","pid":14964,"hostname":"Mac","message":"Fetched 204 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:23.506Z","pid":14964,"hostname":"Mac","message":"Fetched 209 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:23.877Z","pid":14964,"hostname":"Mac","message":"Fetched 210 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:24.102Z","pid":14964,"hostname":"Mac","message":"Fetched 211 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:24.396Z","pid":14964,"hostname":"Mac","message":"Fetched 215 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:24.722Z","pid":14964,"hostname":"Mac","message":"Fetched 216 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:25.031Z","pid":14964,"hostname":"Mac","message":"Fetched 223 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:25.381Z","pid":14964,"hostname":"Mac","message":"Fetched 230 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:25.599Z","pid":14964,"hostname":"Mac","message":"Fetched 231 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:25.946Z","pid":14964,"hostname":"Mac","message":"Fetched 242 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:26.276Z","pid":14964,"hostname":"Mac","message":"Fetched 244 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:26.515Z","pid":14964,"hostname":"Mac","message":"Fetched 245 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:26.949Z","pid":14964,"hostname":"Mac","message":"Fetched 252 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:27.301Z","pid":14964,"hostname":"Mac","message":"Fetched 258 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:27.589Z","pid":14964,"hostname":"Mac","message":"Fetched 264 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:27.858Z","pid":14964,"hostname":"Mac","message":"Fetched 267 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:28.117Z","pid":14964,"hostname":"Mac","message":"Fetched 271 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:28.378Z","pid":14964,"hostname":"Mac","message":"Fetched 275 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:28.620Z","pid":14964,"hostname":"Mac","message":"Fetched 285 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:29.003Z","pid":14964,"hostname":"Mac","message":"Fetched 289 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:29.233Z","pid":14964,"hostname":"Mac","message":"Fetched 292 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:29.472Z","pid":14964,"hostname":"Mac","message":"Fetched 296 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:29.687Z","pid":14964,"hostname":"Mac","message":"Fetched 299 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:29.965Z","pid":14964,"hostname":"Mac","message":"Fetched 302 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:30.183Z","pid":14964,"hostname":"Mac","message":"Fetched 307 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:30.539Z","pid":14964,"hostname":"Mac","message":"Fetched 307 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:30.974Z","pid":14964,"hostname":"Mac","message":"Fetched 309 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:31.256Z","pid":14964,"hostname":"Mac","message":"Fetched 313 testora payments so far, fetching next page...","service":"stripe-ops"}
+{"level":"error","time":"2025-12-26T13:33:31.381Z","pid":14964,"hostname":"Mac","message":"Primer API request failed","error":{"name":"Error","message":"Primer API error: 400 Bad Request - {\"error\":{\"errorId\":\"PaginationLimitError\",\"description\":\"Invalid Elastic Pagination Limit Value\",\"diagnosticsId\":\"15293154455724618504\",\"validationErrors\":[]}}","stack":"Error: Primer API error: 400 Bad Request - {\"error\":{\"errorId\":\"PaginationLimitError\",\"description\":\"Invalid Elastic Pagination Limit Value\",\"diagnosticsId\":\"15293154455724618504\",\"validationErrors\":[]}}\n    at primerApiRequest (file:///Users/valerii-poroshyn/Downloads/stripe-ops/src/services/primer.js:35:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)\n    at async getAllPaymentsPrimer (file:///Users/valerii-poroshyn/Downloads/stripe-ops/src/services/primer.js:137:24)\n    at async fetchWithRetry (file:///Users/valerii-poroshyn/Downloads/stripe-ops/src/utils/retry.js:9:14)\n    at async exportAllPrimerPayments (file:///Users/valerii-poroshyn/Downloads/stripe-ops/export-all-primer.js:78:25)"},"endpoint":"/payments?limit=100&status=SETTLED%2CAUTHORIZED&cursor=eyJmaXJzdF90aW1lc3RhbXAiOiAiMjAyNS0xMi0yNlQxMzozMjoxOS45NzAwMDAiLCAicGFnaW5hdGlvbl9rZXkiOiAiZXlKa2FYSmxZM1JwYjI0aU9pQWlSazlTVjBGU1JGTWlMQ0FpYTJWNUlqb2dJams1TURBaUxDQWlkRzkwWVd4ZmNtVnpkV3gwY3lJNklERTRORE0yTWpGOSJ9","url":"https://api.primer.io/payments?limit=100&status=SETTLED%2CAUTHORIZED&cursor=eyJmaXJzdF90aW1lc3RhbXAiOiAiMjAyNS0xMi0yNlQxMzozMjoxOS45NzAwMDAiLCAicGFnaW5hdGlvbl9rZXkiOiAiZXlKa2FYSmxZM1JwYjI0aU9pQWlSazlTVjBGU1JGTWlMQ0FpYTJWNUlqb2dJams1TURBaUxDQWlkRzkwWVd4ZmNtVnpkV3gwY3lJNklERTRORE0yTWpGOSJ9","service":"stripe-ops"}
+{"level":"error","time":"2025-12-26T13:33:31.381Z","pid":14964,"hostname":"Mac","message":"Error fetching all payments from Primer API","error":{"name":"Error","message":"Primer API error: 400 Bad Request - {\"error\":{\"errorId\":\"PaginationLimitError\",\"description\":\"Invalid Elastic Pagination Limit Value\",\"diagnosticsId\":\"15293154455724618504\",\"validationErrors\":[]}}","stack":"Error: Primer API error: 400 Bad Request - {\"error\":{\"errorId\":\"PaginationLimitError\",\"description\":\"Invalid Elastic Pagination Limit Value\",\"diagnosticsId\":\"15293154455724618504\",\"validationErrors\":[]}}\n    at primerApiRequest (file:///Users/valerii-poroshyn/Downloads/stripe-ops/src/services/primer.js:35:13)\n    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)\n    at async getAllPaymentsPrimer (file:///Users/valerii-poroshyn/Downloads/stripe-ops/src/services/primer.js:137:24)\n    at async fetchWithRetry (file:///Users/valerii-poroshyn/Downloads/stripe-ops/src/utils/retry.js:9:14)\n    at async exportAllPrimerPayments (file:///Users/valerii-poroshyn/Downloads/stripe-ops/export-all-primer.js:78:25)"},"service":"stripe-ops"}
+{"level":"info","time":"2025-12-26T13:33:31.381Z","pid":14964,"hostname":"Mac","msg":"✅ Получено 0 платежей из Primer API"}
+{"level":"info","time":"2025-12-26T13:33:31.381Z","pid":14964,"hostname":"Mac","msg":"✅ Найдено 0 успешных платежей"}
+{"level":"info","time":"2025-12-26T13:33:31.381Z","pid":14964,"hostname":"Mac","msg":"🆕 Обрабатываю 0 новых платежей (избежано 0 дубликатов)"}
+{"level":"info","time":"2025-12-26T13:33:31.381Z","pid":14964,"hostname":"Mac","msg":"ℹ️ Нет новых платежей для обработки"}
+file:///Users/valerii-poroshyn/Downloads/stripe-ops/export-all-primer.js:308
+    logger.error('❌ Скрипт завершился с ошибкой', error);
+    ^
+
+ReferenceError: logger is not defined
+    at file:///Users/valerii-poroshyn/Downloads/stripe-ops/export-all-primer.js:308:5
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+
+Node.js v25.2.1

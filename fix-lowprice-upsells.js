@@ -65,7 +65,10 @@ async function fixLowPriceUpsells() {
             console.log(`   ⚠️ Пропущен платеж ${p.id}: status=${p.status}, customer=${p.customer}`);
             return false;
           }
-          // ✅ УБРАЛИ исключение subscription update - это могут быть реальные апселлы!
+          if (p.description && p.description.toLowerCase().includes('subscription update')) {
+            console.log(`   ⚠️ Пропущен платеж ${p.id}: subscription update`);
+            return false;
+          }
           if (p.amount === 60) {
             console.log(`   ⚠️ Пропущен платеж ${p.id}: тестовый $0.60`);
             return false; // Исключаем тестовые $0.60
