@@ -77,10 +77,15 @@ export async function getRecentPaymentsPrimer(limit = 100, days = 7) {
     const allPayments = [];
     let cursor = null;
     let requestCount = 0;
-    const maxRequests = 100; // Защита от бесконечного цикла
+    const maxRequests = 10; // Максимум 10 страниц (1000 платежей) — не перегружаем API
 
     while (requestCount < maxRequests) {
       requestCount++;
+
+      // Задержка между запросами чтобы не триггерить rate limit
+      if (requestCount > 1) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
 
       const params = new URLSearchParams({
         limit: '100', // Maximum per page
@@ -167,11 +172,16 @@ export async function getAllPaymentsPrimer() {
     const endpoint = '/payments'; // Primer API endpoint for payments
     
     let requestCount = 0;
-    const maxRequests = 1000; // Защита от бесконечного цикла
-    
+    const maxRequests = 20; // Максимум 20 страниц (2000 платежей) — не перегружаем API
+
     while (requestCount < maxRequests) {
       requestCount++;
-      
+
+      // Задержка между запросами
+      if (requestCount > 1) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+
       const params = new URLSearchParams({
         limit: '100', // Maximum per request
         status: 'SETTLED,AUTHORIZED' // Only successful payments
@@ -251,22 +261,26 @@ export async function getCustomerPaymentsPrimer(customerId, limit = 100) {
   }
 
   try {
-    logInfo('Fetching customer payments from Primer API (with pagination)', { customerId, limit });
+    logInfo('Fetching customer payments from Primer API', { customerId, limit });
 
-    // Primer API не поддерживает фильтрацию по customer_id в query параметрах
-    // Пагинируем через все страницы и фильтруем client-side
+    // Primer API поддерживает фильтрацию по customer_id в query параметрах
     const endpoint = '/payments';
     const allPayments = [];
     let cursor = null;
     let requestCount = 0;
-    const maxRequests = 50; // Защита от бесконечного цикла
+    const maxRequests = 5; // Максимум 5 страниц на клиента (500 платежей — более чем достаточно)
 
     while (requestCount < maxRequests) {
       requestCount++;
 
+      if (requestCount > 1) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+
       const params = new URLSearchParams({
         limit: '100',
-        status: 'SETTLED,AUTHORIZED'
+        status: 'SETTLED,AUTHORIZED',
+        customer_id: customerId
       });
 
       if (cursor) {
@@ -284,13 +298,7 @@ export async function getCustomerPaymentsPrimer(customerId, limit = 100) {
           return application.toLowerCase() === 'testora';
         });
 
-        // Фильтруем по customerId
-        const matchingPayments = testoraPayments.filter(payment => {
-          const paymentCustomerId = payment.customerId || payment.metadata?.customer_id;
-          return paymentCustomerId === customerId;
-        });
-
-        allPayments.push(...matchingPayments);
+        allPayments.push(...testoraPayments);
 
         // Check for more pages
         if (response.nextCursor && payments.length > 0) {
@@ -299,16 +307,10 @@ export async function getCustomerPaymentsPrimer(customerId, limit = 100) {
           break;
         }
 
-        // Если уже нашли достаточно, продолжаем дальше для полноты (нужны ВСЕ платежи клиента)
-        // Но если нашли > limit, можно остановиться
         if (allPayments.length >= limit) {
           break;
         }
       } catch (error) {
-        if (error.message && (error.message.includes('PaginationLimitError') || error.message.includes('400'))) {
-          logInfo(`⚠️ Pagination limit reached for customer ${customerId}, returning ${allPayments.length} payments`);
-          break;
-        }
         if (allPayments.length > 0) {
           logInfo(`⚠️ Error during pagination for customer ${customerId}, returning ${allPayments.length} payments found so far`);
           break;

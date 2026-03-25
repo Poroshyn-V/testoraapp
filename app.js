@@ -665,6 +665,159 @@ async function runSync() {
   }
 }
 
+// ==========================================
+// Primer Webhook (must be BEFORE express.json() for raw body access)
+// ==========================================
+app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  try {
+    // 1. Verify webhook signature
+    const signature = req.headers['x-signature-primary'];
+    const webhookSecret = ENV.PRIMER_WEBHOOK_SECRET;
+
+    if (webhookSecret && signature) {
+      const rawBody = req.body.toString('utf-8');
+      const computed = crypto.createHmac('sha256', webhookSecret).update(rawBody).digest('base64');
+      if (computed !== signature) {
+        logger.warn('Primer webhook: invalid signature');
+        return res.status(401).json({ error: 'Invalid signature' });
+      }
+    }
+
+    // Parse body
+    const payload = typeof req.body === 'string' ? JSON.parse(req.body) :
+                    Buffer.isBuffer(req.body) ? JSON.parse(req.body.toString('utf-8')) : req.body;
+
+    const eventType = payload.eventType;
+    logger.info(`📩 Primer webhook received: ${eventType}`, {
+      paymentId: payload.payment?.id,
+      status: payload.payment?.status
+    });
+
+    // 2. Only process PAYMENT.STATUS events with terminal success statuses
+    if (eventType !== 'PAYMENT.STATUS') {
+      return res.json({ received: true, skipped: true, reason: `event type ${eventType} not handled` });
+    }
+
+    const payment = payload.payment;
+    if (!payment) {
+      return res.json({ received: true, skipped: true, reason: 'no payment data' });
+    }
+
+    const status = (payment.status || '').toUpperCase();
+    if (status !== 'SETTLED' && status !== 'AUTHORIZED') {
+      return res.json({ received: true, skipped: true, reason: `status ${status} not processed` });
+    }
+
+    // 3. Filter for testora application only
+    const metadata = payment.metadata || {};
+    const application = (metadata.application || '').toLowerCase();
+    if (application !== 'testora') {
+      return res.json({ received: true, skipped: true, reason: 'not testora application' });
+    }
+
+    // 4. Extract customer ID
+    const customerId = payment.customerId || metadata.customer_id;
+    if (!customerId) {
+      return res.json({ received: true, skipped: true, reason: 'no customer ID' });
+    }
+
+    // 5. Normalize the payment using existing function
+    const normalizedPayment = normalizePrimerPayment(payment);
+
+    if (normalizedPayment.status !== 'succeeded') {
+      return res.json({ received: true, skipped: true, reason: `normalized status: ${normalizedPayment.status}` });
+    }
+
+    // 6. Extract email — skip if no email (rebill)
+    const customer = {
+      id: customerId,
+      email: payment.customer?.emailAddress || normalizedPayment.email || null,
+      address: { country: payment.customer?.billingAddress?.countryCode || normalizedPayment.country || null }
+    };
+
+    const rowData = formatPaymentForSheetsPrimer(normalizedPayment, customer, { accountSource: 'primer' });
+
+    if (!rowData['Email'] || rowData['Email'] === 'N/A') {
+      logger.warn(`⏭️ Primer webhook: skipping payment without email for customer ${customerId} — likely rebill`);
+      return res.json({ received: true, skipped: true, reason: 'no email - rebill' });
+    }
+
+    // 7. Check Google Sheet for duplicates
+    const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
+    const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
+    await primerSheet.loadHeaderRow();
+    const existingRows = await primerSheet.getRows();
+
+    // Check if payment ID already exists
+    const paymentExists = existingRows.some(row => {
+      const ids = row.get('Payment Intent IDs') || '';
+      return ids.includes(payment.id);
+    });
+
+    if (paymentExists) {
+      logger.info(`⏭️ Primer webhook: payment ${payment.id} already in sheet, skipping`);
+      return res.json({ received: true, skipped: true, reason: 'already exists' });
+    }
+
+    // Check if customer exists — skip (rebill/recurring)
+    const customerExists = existingRows.some(row => row.get('Customer ID') === customerId);
+
+    if (customerExists) {
+      logger.info(`⏭️ Primer webhook: customer ${customerId} already in sheet — skipping rebill, payment ${payment.id}`);
+      return res.json({ received: true, skipped: true, reason: 'customer exists - rebill' });
+    }
+
+    // 8. New customer — add row to sheet
+    rowData['Payment Intent IDs'] = payment.id;
+    rowData['Payment Count'] = '1';
+    rowData['Total Amount'] = (normalizedPayment.amount / 100).toFixed(2);
+    rowData['Purchase ID'] = `purchase_${customerId}_${normalizedPayment.created}`;
+
+    const newRow = await primerSheet.addRow(rowData);
+    await addLaTimeFormulaToPrimerSheet(newRow.rowNumber);
+
+    logger.info(`✅ Primer webhook: NEW customer ${customerId} added — payment ${payment.id}, $${rowData['Total Amount']}`);
+
+    // 9. Send notification
+    const sheetData = {
+      'Ad Name': rowData['Ad Name'] || 'N/A',
+      'Adset Name': rowData['Adset Name'] || 'N/A',
+      'Campaign Name': rowData['UTM Campaign'] || 'N/A',
+      'Total Amount': rowData['Total Amount'],
+      'Payment Count': rowData['Payment Count'],
+      'Payment Intent IDs': rowData['Payment Intent IDs'],
+      accountSource: 'primer'
+    };
+
+    const notificationMessage = formatTelegramNotification(normalizedPayment, customer, sheetData);
+    const amount = parseFloat(rowData['Total Amount'] || 0);
+    const isVip = amount >= alertConfig.vipPurchaseThreshold;
+
+    await notificationQueue.add({
+      type: isVip ? 'vip_new_purchase' : 'new_purchase',
+      channel: 'telegram',
+      message: notificationMessage,
+      payment: normalizedPayment,
+      customer: customer,
+      sheetData: sheetData,
+      metadata: {
+        paymentId: payment.id,
+        customerId: customerId,
+        amount: rowData['Total Amount'],
+        type: 'new_purchase',
+        isVip: isVip,
+        accountSource: 'primer'
+      }
+    });
+
+    return res.json({ received: true, action: 'added', customerId, paymentId: payment.id });
+
+  } catch (error) {
+    logger.error('Primer webhook error', { error: error.message, stack: error.stack });
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Middleware
 app.use(express.json());
 app.use(cors());

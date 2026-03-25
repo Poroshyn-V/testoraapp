@@ -10,6 +10,7 @@ export const ENV = {
   PRIMER_API_URL: process.env.PRIMER_API_URL || 'https://api.primer.io',
   PRIMER_API_VERSION: process.env.PRIMER_API_VERSION || '2.4',
   PRIMER_SHEET_NAME: process.env.PRIMER_SHEET_NAME || 'Primer',
+  PRIMER_WEBHOOK_SECRET: process.env.PRIMER_WEBHOOK_SECRET || null,
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
   TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID,
   SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN,
