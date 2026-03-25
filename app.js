@@ -24,6 +24,7 @@ import healthRoutes from './src/routes/health.js';
 import { google } from 'googleapis';
 import { fetchWithRetry as fetchWithRetryUtil } from './src/utils/retry.js';
 import fetch from 'node-fetch';
+import { requireAdminKey } from './src/middleware/adminAuth.js';
 
 // Глобальные переменные для locks
 const syncLock = new Map(); // customerId -> timestamp
@@ -888,6 +889,9 @@ app.get('/api/status', async (_req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+// Auth middleware — all /api/* routes below this line require ADMIN_API_KEY
+app.use('/api', requireAdminKey);
 
 // Emergency stop endpoint
 app.post('/api/emergency-stop', (req, res) => {
@@ -4780,10 +4784,11 @@ async function performSyncLogicPrimer(exportAll = false) {
     logger.info(`📋 Found ${existingPaymentIds.size} existing payments in Primer sheet`);
     
     // Get payments from Primer API (all or recent)
-    // ✅ Увеличиваем период до 30 дней для getRecentPaymentsPrimer чтобы не пропустить покупки
-    const primerPayments = exportAll 
+    // ✅ Увеличиваем период до 90 дней с пагинацией — чтобы firstPaymentsOnly фильтр видел
+    // старые платежи клиентов и правильно определял ребиллы
+    const primerPayments = exportAll
       ? await getAllPaymentsPrimer()
-      : await getRecentPaymentsPrimer(100, 30); // 30 дней вместо 7 по умолчанию
+      : await getRecentPaymentsPrimer(10000, 90); // 90 дней с пагинацией (до 10к платежей)
     
     logger.info(`📥 Получено ${primerPayments.length} платежей из Primer API (после фильтрации по application: "testora")`);
     
@@ -5241,10 +5246,20 @@ async function performSyncLogicPrimer(exportAll = false) {
           }
           
           const existingRow = existingCustomers[0];
-          
+
           // ✅ Пересчитываем Total Amount правильно (всегда делим на 100, так как amounts в центах)
           const correctTotalAmount = (totalAmountAll / 100).toFixed(2);
-          
+
+          // ✅ ВАЖНО: Не затираем email/GEO если в ребилле нет данных — сохраняем старые значения из таблицы
+          const existingEmail = existingRow.get('Email');
+          const existingGeo = existingRow.get('GEO');
+          const finalEmail = (updatedRowData['Email'] && updatedRowData['Email'] !== 'N/A')
+            ? updatedRowData['Email']
+            : (existingEmail && existingEmail !== 'N/A' ? existingEmail : updatedRowData['Email']);
+          const finalGeo = (updatedRowData['GEO'] && updatedRowData['GEO'] !== 'Unknown')
+            ? updatedRowData['GEO']
+            : (existingGeo && existingGeo !== 'Unknown' ? existingGeo : updatedRowData['GEO']);
+
           // Устанавливаем все поля перед сохранением
           existingRow.set('Purchase ID', `purchase_${customerId}`);
           existingRow.set('Total Amount', correctTotalAmount);
@@ -5252,8 +5267,8 @@ async function performSyncLogicPrimer(exportAll = false) {
           existingRow.set('Payment Intent IDs', paymentIdsAll.join(', '));
           existingRow.set('Created UTC', updatedRowData['Created UTC']);
           existingRow.set('Created Local (UTC-8)', updatedRowData['Created Local (UTC-8)']);
-          existingRow.set('Email', updatedRowData['Email']); // ✅ Сохраняем email при обновлении
-          existingRow.set('GEO', updatedRowData['GEO']); // ✅ Сохраняем GEO при обновлении
+          existingRow.set('Email', finalEmail); // ✅ Не затираем email из ребилла
+          existingRow.set('GEO', finalGeo); // ✅ Не затираем GEO из ребилла
           existingRow.set('Customer ID', customerId);
           
           logger.info(`💾 Сохраняю обновление Primer покупки: Customer=${customerId}, Email=${updatedRowData['Email']}, GEO=${updatedRowData['GEO']}, Amount=$${correctTotalAmount}, Payment IDs=${paymentIdsAll.join(', ')}`);
@@ -5287,11 +5302,28 @@ async function performSyncLogicPrimer(exportAll = false) {
               results.skipped++;
               continue;
             }
-            
+
             // Сортируем по дате создания (первая покупка)
             allSuccessfulPayments.sort((a, b) => a.created - b.created);
             const firstPayment = allSuccessfulPayments[0];
-            
+
+            // ✅ КРИТИЧЕСКИ ВАЖНО: Если у клиента >1 платежа, а его нет в листе —
+            // значит это ребилл (первый платёж был до начала синхронизации или был удалён)
+            if (allSuccessfulPayments.length > 1) {
+              const latestPayment = allSuccessfulPayments[allSuccessfulPayments.length - 1];
+              const daysBetween = Math.floor((latestPayment.created - firstPayment.created) / (24 * 60 * 60));
+              logger.warn(`⏭️ Skipping rebill customer ${customerId} — found ${allSuccessfulPayments.length} payments spanning ${daysBetween} days, but customer not in sheet (likely rebill)`, {
+                customerId,
+                paymentCount: allSuccessfulPayments.length,
+                firstPaymentDate: new Date(firstPayment.created * 1000).toISOString(),
+                latestPaymentDate: new Date(latestPayment.created * 1000).toISOString(),
+                daysBetween,
+                totalAmount: (allSuccessfulPayments.reduce((sum, p) => sum + p.amount, 0) / 100).toFixed(2)
+              });
+              results.skipped++;
+              continue;
+            }
+
             // ✅ Проверяем что firstPayment существует и имеет id
             if (!firstPayment || !firstPayment.id) {
               logger.error(`❌ First payment is missing or has no ID for customer ${customerId}`, {
@@ -5329,7 +5361,22 @@ async function performSyncLogicPrimer(exportAll = false) {
             if (!rowData['GEO'] || rowData['GEO'] === 'Unknown') {
               rowData['GEO'] = customer?.country || customer?.address?.country || firstPayment.country || 'Unknown';
             }
-            
+
+            // ✅ КРИТИЧЕСКИ ВАЖНО: Пропускаем платежи без email — это ребиллы (рекурентные платежи)
+            // Первая покупка через Primer всегда содержит email. Если email отсутствует,
+            // значит это ребилл от подписки, где первый платёж был за пределами окна API (30 дней)
+            if (!rowData['Email'] || rowData['Email'] === 'N/A') {
+              logger.warn(`⏭️ Skipping Primer payment without email for customer ${customerId} — likely a rebill/recurring payment`, {
+                customerId,
+                paymentId: firstPayment.id,
+                amount: rowData['Total Amount'],
+                paymentCount: allSuccessfulPayments.length,
+                reason: 'No email found — first purchase was likely outside the API lookback window'
+              });
+              results.skipped++;
+              continue;
+            }
+
             logger.info(`➕ Добавляю новую покупку Primer: Customer=${customerId}, Email=${rowData['Email']}, GEO=${rowData['GEO']}, Amount=$${rowData['Total Amount']}, Payments=${allSuccessfulPayments.length}, PaymentID=${firstPayment.id}`);
             
             // ✅ КРИТИЧЕСКИ ВАЖНО: Проверяем существование ПЕРЕД добавлением (как в Stripe и LowPrice логике)

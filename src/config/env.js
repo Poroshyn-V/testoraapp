@@ -19,7 +19,8 @@ export const ENV = {
   GOOGLE_SHEETS_DOC_ID: process.env.GOOGLE_SHEETS_DOC_ID,
   BOT_DISABLED: process.env.BOT_DISABLED === 'true',
   NOTIFICATIONS_DISABLED: process.env.NOTIFICATIONS_DISABLED === 'true',
-  AUTO_SYNC_DISABLED: process.env.AUTO_SYNC_DISABLED === 'true'
+  AUTO_SYNC_DISABLED: process.env.AUTO_SYNC_DISABLED === 'true',
+  ADMIN_API_KEY: process.env.ADMIN_API_KEY || null
 };
 
 // Rate limiting configuration

@@ -56,53 +56,85 @@ export async function getRecentPaymentsPrimer(limit = 100, days = 7) {
   }
 
   try {
-    logInfo('Fetching recent payments from Primer API', { limit, days });
-    
-    // Primer API endpoint: /payments (не /v1/payments!)
+    logInfo('Fetching recent payments from Primer API (with pagination)', { limit, days });
+
     const endpoint = '/payments';
-    
+
     // Calculate date range
     const toDate = new Date().toISOString();
     const fromDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-    
-    const params = new URLSearchParams({
-      limit: Math.min(limit, 100).toString(), // Maximum 100 per page
-      from_date: fromDate,
-      to_date: toDate,
-      status: 'SETTLED,AUTHORIZED' // Only successful payments (SETTLED, AUTHORIZED - COMPLETED не существует в Primer API)
+
+    const allPayments = [];
+    let cursor = null;
+    let requestCount = 0;
+    const maxRequests = 100; // Защита от бесконечного цикла
+
+    while (requestCount < maxRequests) {
+      requestCount++;
+
+      const params = new URLSearchParams({
+        limit: '100', // Maximum per page
+        from_date: fromDate,
+        to_date: toDate,
+        status: 'SETTLED,AUTHORIZED'
+      });
+
+      if (cursor) {
+        params.append('cursor', cursor);
+      }
+
+      try {
+        const response = await primerApiRequest(`${endpoint}?${params.toString()}`);
+        const payments = response.data || [];
+
+        // Фильтруем только payments для приложения "testora"
+        const testoraPayments = payments.filter(payment => {
+          const metadata = payment.metadata || {};
+          const application = metadata.application || '';
+          return application.toLowerCase() === 'testora';
+        });
+
+        allPayments.push(...testoraPayments);
+
+        if (requestCount === 1) {
+          logInfo(`First page: total=${payments.length}, testora=${testoraPayments.length}`);
+        }
+
+        // Check for more pages
+        if (response.nextCursor && payments.length > 0) {
+          cursor = response.nextCursor;
+          logInfo(`Fetched ${allPayments.length} testora payments so far (page ${requestCount}), fetching next...`);
+        } else {
+          break;
+        }
+
+        // Stop if we have enough
+        if (allPayments.length >= limit) {
+          break;
+        }
+      } catch (error) {
+        if (error.message && (error.message.includes('PaginationLimitError') || error.message.includes('400'))) {
+          logInfo(`⚠️ Pagination limit reached, stopping. Total fetched: ${allPayments.length} payments`);
+          break;
+        }
+        if (allPayments.length === 0) {
+          throw error;
+        }
+        logInfo(`⚠️ Error during pagination, but already have ${allPayments.length} payments. Stopping.`);
+        break;
+      }
+    }
+
+    logInfo(`✅ Fetched ${allPayments.length} testora payments from Primer API (${requestCount} pages, ${days} days)`, {
+      count: allPayments.length,
+      pages: requestCount,
+      days
     });
 
-    const response = await primerApiRequest(`${endpoint}?${params.toString()}`);
-    
-    // Primer API response structure: { data: [...], nextCursor: "...", prevCursor: "..." }
-    let payments = response.data || [];
-    
-    // ✅ КРИТИЧЕСКИ ВАЖНО: Фильтруем только payments для приложения "testora"
-    payments = payments.filter(payment => {
-      const metadata = payment.metadata || {};
-      const application = metadata.application || '';
-      return application.toLowerCase() === 'testora';
-    });
-    
-    logInfo(`✅ Filtered payments for application "testora": ${payments.length} payments`);
-    
-    // Handle pagination if needed (if we got less than requested and there's nextCursor)
-    if (payments.length < limit && response.nextCursor) {
-      // Could fetch more pages here if needed
-      logInfo(`ℹ️ More payments available (nextCursor exists), but limiting to ${limit}`);
-    }
-    
     // Limit results
-    payments = payments.slice(0, limit);
-    
-    logInfo('Successfully fetched payments from Primer API', { 
-      count: payments.length 
-    });
-    
-    return payments;
+    return allPayments.slice(0, limit);
   } catch (error) {
     logError('Error fetching payments from Primer API', error);
-    // Return empty array instead of throwing to allow system to continue
     return [];
   }
 }
@@ -209,58 +241,79 @@ export async function getCustomerPaymentsPrimer(customerId, limit = 100) {
   }
 
   try {
-    logInfo('Fetching customer payments from Primer API', { customerId, limit });
-    
+    logInfo('Fetching customer payments from Primer API (with pagination)', { customerId, limit });
+
     // Primer API не поддерживает фильтрацию по customer_id в query параметрах
-    // Получаем платежи БЕЗ пагинации (только первую страницу) чтобы избежать ошибок
+    // Пагинируем через все страницы и фильтруем client-side
     const endpoint = '/payments';
-    const params = new URLSearchParams({
-      limit: Math.min(limit, 100).toString(), // Максимум 100 за запрос
-      status: 'SETTLED,AUTHORIZED' // Only successful payments
+    const allPayments = [];
+    let cursor = null;
+    let requestCount = 0;
+    const maxRequests = 50; // Защита от бесконечного цикла
+
+    while (requestCount < maxRequests) {
+      requestCount++;
+
+      const params = new URLSearchParams({
+        limit: '100',
+        status: 'SETTLED,AUTHORIZED'
+      });
+
+      if (cursor) {
+        params.append('cursor', cursor);
+      }
+
+      try {
+        const response = await primerApiRequest(`${endpoint}?${params.toString()}`);
+        const payments = response.data || [];
+
+        // Фильтруем по testora
+        const testoraPayments = payments.filter(payment => {
+          const metadata = payment.metadata || {};
+          const application = metadata.application || '';
+          return application.toLowerCase() === 'testora';
+        });
+
+        // Фильтруем по customerId
+        const matchingPayments = testoraPayments.filter(payment => {
+          const paymentCustomerId = payment.customerId || payment.metadata?.customer_id;
+          return paymentCustomerId === customerId;
+        });
+
+        allPayments.push(...matchingPayments);
+
+        // Check for more pages
+        if (response.nextCursor && payments.length > 0) {
+          cursor = response.nextCursor;
+        } else {
+          break;
+        }
+
+        // Если уже нашли достаточно, продолжаем дальше для полноты (нужны ВСЕ платежи клиента)
+        // Но если нашли > limit, можно остановиться
+        if (allPayments.length >= limit) {
+          break;
+        }
+      } catch (error) {
+        if (error.message && (error.message.includes('PaginationLimitError') || error.message.includes('400'))) {
+          logInfo(`⚠️ Pagination limit reached for customer ${customerId}, returning ${allPayments.length} payments`);
+          break;
+        }
+        if (allPayments.length > 0) {
+          logInfo(`⚠️ Error during pagination for customer ${customerId}, returning ${allPayments.length} payments found so far`);
+          break;
+        }
+        throw error;
+      }
+    }
+
+    logInfo(`Successfully fetched customer payments from Primer API`, {
+      customerId,
+      count: allPayments.length,
+      pages: requestCount
     });
 
-    let allPayments = [];
-    
-    try {
-      // Пробуем получить только первую страницу без пагинации
-      const response = await primerApiRequest(`${endpoint}?${params.toString()}`);
-      let payments = response.data || [];
-      
-      // ✅ КРИТИЧЕСКИ ВАЖНО: Фильтруем только payments для приложения "testora"
-      payments = payments.filter(payment => {
-        const metadata = payment.metadata || {};
-        const application = metadata.application || '';
-        return application.toLowerCase() === 'testora';
-      });
-      
-      // Фильтруем по customerId (может быть в customerId или metadata.customer_id)
-      const matchingPayments = payments.filter(payment => {
-        const paymentCustomerId = payment.customerId || payment.metadata?.customer_id;
-        return paymentCustomerId === customerId;
-      });
-      
-      allPayments.push(...matchingPayments);
-    } catch (error) {
-      // Если ошибка пагинации - возвращаем что получили или пустой массив
-      if (error.message && error.message.includes('PaginationLimitError')) {
-        logInfo('Pagination limit error when fetching customer payments, returning what we have', { 
-          customerId, 
-          found: allPayments.length 
-        });
-        return allPayments;
-      }
-      throw error;
-    }
-    
-    // Limit results
-    const payments = allPayments.slice(0, limit);
-    
-    logInfo('Successfully fetched customer payments from Primer API', { 
-      customerId, 
-      count: payments.length 
-    });
-    
-    return payments;
+    return allPayments.slice(0, limit);
   } catch (error) {
     logError('Error fetching customer payments from Primer API', error, { customerId });
     throw error;
