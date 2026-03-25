@@ -32,6 +32,16 @@ async function primerApiRequest(endpoint, options = {}) {
 
     if (!response.ok) {
       const errorText = await response.text();
+      logError('Primer API FULL error response', new Error('Primer API error'), {
+        status: response.status,
+        statusText: response.statusText,
+        body: errorText,
+        endpoint,
+        url,
+        apiVersion: PRIMER_API_VERSION,
+        hasApiKey: !!PRIMER_API_KEY,
+        apiKeyPrefix: PRIMER_API_KEY ? PRIMER_API_KEY.substring(0, 8) + '...' : 'MISSING'
+      });
       throw new Error(`Primer API error: ${response.status} ${response.statusText} - ${errorText}`);
     }
 
