@@ -4788,7 +4788,7 @@ async function performSyncLogicPrimer(exportAll = false) {
     // старые платежи клиентов и правильно определял ребиллы
     const primerPayments = exportAll
       ? await getAllPaymentsPrimer()
-      : await getRecentPaymentsPrimer(10000, 90); // 90 дней с пагинацией (до 10к платежей)
+      : await getRecentPaymentsPrimer(10000, 30); // 30 дней с пагинацией (до 10к платежей)
     
     logger.info(`📥 Получено ${primerPayments.length} платежей из Primer API (после фильтрации по application: "testora")`);
     
