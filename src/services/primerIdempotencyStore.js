@@ -49,7 +49,7 @@ async function ensureInit() {
 
 /**
  * Atomically marks payment as processed.
- * @returns {Promise<{enabled: boolean, inserted: boolean}>}
+ * @returns {Promise<{enabled: boolean, inserted: boolean, error?: string}>}
  */
 export async function markPrimerPaymentOnce(paymentId) {
   const url = getDatabaseUrl();
@@ -66,8 +66,7 @@ export async function markPrimerPaymentOnce(paymentId) {
     return { enabled: true, inserted: res.rowCount === 1 };
   } catch (e) {
     logger.error({ err: e, paymentId }, 'Primer idempotency store insert failed');
-    // Fail open: treat as not inserted to allow processing.
-    return { enabled: true, inserted: true };
+    return { enabled: true, inserted: false, error: e?.message || 'db_error' };
   }
 }
 

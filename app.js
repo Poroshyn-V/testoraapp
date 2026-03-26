@@ -709,17 +709,6 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
       return res.json({ received: true, skipped: true, reason: `status ${status} not processed` });
     }
 
-    // 2.5. Cross-instance idempotency (Postgres)
-    // Primer can retry webhooks and Railway can run multiple instances.
-    // This prevents duplicates even across different processes/containers.
-    if (payment.id) {
-      const idem = await markPrimerPaymentOnce(payment.id);
-      if (idem.enabled && !idem.inserted) {
-        logger.info(`⏭️ Primer webhook: payment ${payment.id} already processed (db), skipping`);
-        return res.json({ received: true, skipped: true, reason: 'already processed (db)' });
-      }
-    }
-
     // 3. Filter for testora application only
     const metadata = payment.metadata || {};
     const application = (metadata.application || '').toLowerCase();
@@ -752,6 +741,24 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
     if (!rowData['Email'] || rowData['Email'] === 'N/A') {
       logger.warn(`⏭️ Primer webhook: skipping payment without email for customer ${customerId} — likely rebill`);
       return res.json({ received: true, skipped: true, reason: 'no email - rebill' });
+    }
+
+    // 6.5. Cross-instance idempotency (Postgres)
+    // IMPORTANT: we mark payment only after eligibility filters pass.
+    // This avoids "poisoning" payment IDs from partial/irrelevant webhook events.
+    if (payment.id) {
+      const idem = await markPrimerPaymentOnce(payment.id);
+      if (idem.enabled && idem.error) {
+        logger.error(`❌ Primer webhook: idempotency store error for payment ${payment.id}`, {
+          paymentId: payment.id,
+          error: idem.error
+        });
+        return res.status(503).json({ error: 'Idempotency store unavailable, please retry' });
+      }
+      if (idem.enabled && !idem.inserted) {
+        logger.info(`⏭️ Primer webhook: payment ${payment.id} already processed (db), skipping`);
+        return res.json({ received: true, skipped: true, reason: 'already processed (db)' });
+      }
     }
 
     // 7. Idempotency / anti-duplicate protection
