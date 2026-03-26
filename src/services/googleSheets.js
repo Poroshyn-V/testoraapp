@@ -13,6 +13,7 @@ class GoogleSheetsService {
     this.sheet = null;
     this.isInitialized = false;
     this.serviceAccountAuth = null;
+    this.initializingPromise = null;
   }
 
   // Reset initialization to force token refresh
@@ -22,6 +23,7 @@ class GoogleSheetsService {
     this.doc = null;
     this.sheet = null;
     this.serviceAccountAuth = null;
+    this.initializingPromise = null;
   }
 
   // Check if error is related to expired/invalid token
@@ -61,6 +63,13 @@ class GoogleSheetsService {
       return;
     }
 
+    // Prevent parallel loadInfo() races across concurrent callers.
+    // If one init is in progress, others wait for it.
+    if (this.initializingPromise && !forceRefresh) {
+      await this.initializingPromise;
+      return;
+    }
+
     if (!ENV.GOOGLE_SERVICE_EMAIL || !ENV.GOOGLE_SERVICE_PRIVATE_KEY || !ENV.GOOGLE_SHEETS_DOC_ID) {
       logError('Google Sheets not configured', null, {
         hasEmail: !!ENV.GOOGLE_SERVICE_EMAIL,
@@ -70,7 +79,7 @@ class GoogleSheetsService {
       throw new Error('Google Sheets not configured');
     }
 
-    try {
+    this.initializingPromise = (async () => {
       const privateKey = ENV.GOOGLE_SERVICE_PRIVATE_KEY;
       
       // Create new JWT auth instance (this will generate a fresh token)
@@ -99,7 +108,7 @@ class GoogleSheetsService {
         sheetTitle: this.sheet.title,
         forceRefresh
       });
-    } catch (error) {
+    })().catch(async (error) => {
       // If it's a token error, reset and try once more
       if (this.isTokenError(error) && !forceRefresh) {
         logWarn('Token error detected, resetting and retrying initialization', {
@@ -108,7 +117,8 @@ class GoogleSheetsService {
           statusCode: error.response?.status || error.status
         });
         this.resetInitialization();
-        return this.initialize(true); // Force refresh
+        await this.initialize(true); // Force refresh
+        return;
       }
       
       logError('Failed to initialize Google Sheets after retries', error, {
@@ -118,7 +128,11 @@ class GoogleSheetsService {
         isTokenError: this.isTokenError(error)
       });
       throw error;
-    }
+    }).finally(() => {
+      this.initializingPromise = null;
+    });
+
+    await this.initializingPromise;
   }
 
   // Get sheet by name (creates if doesn't exist)

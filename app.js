@@ -20,6 +20,7 @@ import { campaignAnalyzer } from './src/services/campaignAnalyzer.js';
 import { duplicateChecker } from './src/services/duplicateChecker.js';
 import { formatPaymentForSheets, formatPaymentForSheetsLowPrice, formatPaymentForSheetsPrimer, formatTelegramNotification } from './src/utils/formatting.js';
 import { getRecentPaymentsPrimer, getAllPaymentsPrimer, getCustomerPaymentsPrimer, getCustomerPrimer, normalizePrimerPayment, isPrimerConfigured } from './src/services/primer.js';
+import { markPrimerPaymentOnce } from './src/services/primerIdempotencyStore.js';
 import healthRoutes from './src/routes/health.js';
 import { google } from 'googleapis';
 import { fetchWithRetry as fetchWithRetryUtil } from './src/utils/retry.js';
@@ -708,6 +709,17 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
       return res.json({ received: true, skipped: true, reason: `status ${status} not processed` });
     }
 
+    // 2.5. Cross-instance idempotency (Postgres)
+    // Primer can retry webhooks and Railway can run multiple instances.
+    // This prevents duplicates even across different processes/containers.
+    if (payment.id) {
+      const idem = await markPrimerPaymentOnce(payment.id);
+      if (idem.enabled && !idem.inserted) {
+        logger.info(`⏭️ Primer webhook: payment ${payment.id} already processed (db), skipping`);
+        return res.json({ received: true, skipped: true, reason: 'already processed (db)' });
+      }
+    }
+
     // 3. Filter for testora application only
     const metadata = payment.metadata || {};
     const application = (metadata.application || '').toLowerCase();
@@ -742,41 +754,58 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
       return res.json({ received: true, skipped: true, reason: 'no email - rebill' });
     }
 
-    // 7. Check Google Sheet for duplicates
-    const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
-    const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
-    await primerSheet.loadHeaderRow();
-    const existingRows = await primerSheet.getRows();
+    // 7. Idempotency / anti-duplicate protection
+    // Primer (как и Stripe) может доставлять один и тот же webhook несколько раз.
+    // Если два webhook-а прилетят параллельно, оба могут успеть прочитать sheet до записи и создать дубли.
+    // Поэтому делаем критическую секцию под локом: "проверил -> записал".
+    const paymentLockKey = `primer_webhook_payment_${payment.id}`;
+    let paymentLockId = null;
 
-    // Check if payment ID already exists
-    const paymentExists = existingRows.some(row => {
-      const ids = row.get('Payment Intent IDs') || '';
-      return ids.includes(payment.id);
-    });
+    try {
+      paymentLockId = await distributedLock.acquire(paymentLockKey, 50, 50);
 
-    if (paymentExists) {
-      logger.info(`⏭️ Primer webhook: payment ${payment.id} already in sheet, skipping`);
-      return res.json({ received: true, skipped: true, reason: 'already exists' });
+      // 8. Check Google Sheet for duplicates (inside lock)
+      const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
+      const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
+      await primerSheet.loadHeaderRow();
+      const existingRows = await primerSheet.getRows();
+
+      const paymentExists = existingRows.some(row => {
+        const idsRaw = row.get('Payment Intent IDs') || '';
+        const ids = String(idsRaw)
+          .split(',')
+          .map(v => v.trim())
+          .filter(Boolean);
+        return ids.includes(payment.id);
+      });
+
+      if (paymentExists) {
+        logger.info(`⏭️ Primer webhook: payment ${payment.id} already in sheet, skipping`);
+        return res.json({ received: true, skipped: true, reason: 'already exists' });
+      }
+
+      // Check if customer exists — skip (rebill/recurring)
+      const customerExists = existingRows.some(row => row.get('Customer ID') === customerId);
+      if (customerExists) {
+        logger.info(`⏭️ Primer webhook: customer ${customerId} already in sheet — skipping rebill, payment ${payment.id}`);
+        return res.json({ received: true, skipped: true, reason: 'customer exists - rebill' });
+      }
+
+      // 9. New customer — add row to sheet
+      rowData['Payment Intent IDs'] = payment.id;
+      rowData['Payment Count'] = '1';
+      rowData['Total Amount'] = (normalizedPayment.amount / 100).toFixed(2);
+      rowData['Purchase ID'] = `purchase_${customerId}_${normalizedPayment.created}`;
+
+      const newRow = await primerSheet.addRow(rowData);
+      await addLaTimeFormulaToPrimerSheet(newRow.rowNumber);
+
+      logger.info(`✅ Primer webhook: NEW customer ${customerId} added — payment ${payment.id}, $${rowData['Total Amount']}`);
+    } finally {
+      if (paymentLockId) {
+        distributedLock.release(paymentLockKey, paymentLockId);
+      }
     }
-
-    // Check if customer exists — skip (rebill/recurring)
-    const customerExists = existingRows.some(row => row.get('Customer ID') === customerId);
-
-    if (customerExists) {
-      logger.info(`⏭️ Primer webhook: customer ${customerId} already in sheet — skipping rebill, payment ${payment.id}`);
-      return res.json({ received: true, skipped: true, reason: 'customer exists - rebill' });
-    }
-
-    // 8. New customer — add row to sheet
-    rowData['Payment Intent IDs'] = payment.id;
-    rowData['Payment Count'] = '1';
-    rowData['Total Amount'] = (normalizedPayment.amount / 100).toFixed(2);
-    rowData['Purchase ID'] = `purchase_${customerId}_${normalizedPayment.created}`;
-
-    const newRow = await primerSheet.addRow(rowData);
-    await addLaTimeFormulaToPrimerSheet(newRow.rowNumber);
-
-    logger.info(`✅ Primer webhook: NEW customer ${customerId} added — payment ${payment.id}, $${rowData['Total Amount']}`);
 
     // 9. Send notification
     const sheetData = {
@@ -5532,43 +5561,74 @@ async function performSyncLogicPrimer(exportAll = false) {
 
             logger.info(`➕ Добавляю новую покупку Primer: Customer=${customerId}, Email=${rowData['Email']}, GEO=${rowData['GEO']}, Amount=$${rowData['Total Amount']}, Payments=${allSuccessfulPayments.length}, PaymentID=${firstPayment.id}`);
             
-            // ✅ КРИТИЧЕСКИ ВАЖНО: Проверяем существование ПЕРЕД добавлением (как в Stripe и LowPrice логике)
-            // Проверяем существование напрямую в primerSheet
-            const existingInPrimer = allPrimerRows.filter(row => {
-              const rowCustomerId = row.get('Customer ID');
-              return rowCustomerId === customerId;
-            });
+            // ✅ Idempotency protection across API-sync AND webhook:
+            // Lock by paymentId so "check -> add" is atomic even if webhook runs in parallel.
+            const paymentIdForLock = firstPayment?.id;
+            const paymentLockKey = paymentIdForLock ? `primer_payment_${paymentIdForLock}` : `primer_customer_${customerId}_${Date.now()}`;
+            let paymentLockId = null;
             
             let addResult;
-            if (existingInPrimer.length > 0) {
-              // Клиент уже существует - обновляем (но НЕ отправляем уведомление)
-              addResult = {
-                success: false,
-                exists: true,
-                action: 'skipped',
-                row: existingInPrimer[0]
-              };
-              logger.info(`📊 Customer ${customerId} already exists in Primer sheet (row ${existingInPrimer[0].rowNumber}) - converting to update`);
+            try {
+              paymentLockId = await distributedLock.acquire(paymentLockKey, 50, 50);
               
-              // Обновляем существующую строку
-              const existingRow = existingInPrimer[0];
-              existingRow.set('Purchase ID', rowData['Purchase ID']);
-              existingRow.set('Total Amount', rowData['Total Amount']);
-              existingRow.set('Payment Count', rowData['Payment Count']);
-              existingRow.set('Payment Intent IDs', rowData['Payment Intent IDs']);
-              existingRow.set('Created UTC', rowData['Created UTC']);
-              existingRow.set('Created Local (UTC-8)', rowData['Created Local (UTC-8)']);
-              existingRow.set('Email', rowData['Email']);
-              existingRow.set('GEO', rowData['GEO']);
+              // ✅ Re-load rows inside lock (avoid stale snapshot / race with webhook)
+              const rowsInsideLock = await fetchWithRetryUtil(
+                async () => {
+                  return await handleGoogleSheetsOperation(
+                    () => primerSheet.getRows(),
+                    PRIMER_SHEET_NAME
+                  );
+                },
+                5,
+                2000
+              );
               
-              await fetchWithRetry(() => existingRow.save());
+              // 1) If payment already exists anywhere — skip
+              const paymentExists = rowsInsideLock.some(row => {
+                const idsRaw = row.get('Payment Intent IDs') || row.get('Payment ID') || '';
+                const ids = String(idsRaw)
+                  .split(',')
+                  .map(v => v.trim())
+                  .filter(Boolean);
+                return paymentIdForLock ? ids.includes(paymentIdForLock) : false;
+              });
               
-              results.updatedPurchases++;
-              results.processed++;
-              // ❌ НЕ отправляем уведомление для существующих клиентов (чтобы избежать спама)
-              continue;
-            } else {
-              // Добавляем новую строку НАПРЯМУЮ в primerSheet
+              if (paymentExists) {
+                results.duplicatesAvoided++;
+                logger.info(`⏭️ Primer sync: payment ${paymentIdForLock} already exists in sheet, skipping`);
+                continue;
+              }
+              
+              // 2) Customer exists — update (no notification)
+              const existingInPrimer = rowsInsideLock.filter(row => row.get('Customer ID') === customerId);
+              
+              if (existingInPrimer.length > 0) {
+                addResult = {
+                  success: false,
+                  exists: true,
+                  action: 'skipped',
+                  row: existingInPrimer[0]
+                };
+                logger.info(`📊 Customer ${customerId} already exists in Primer sheet (row ${existingInPrimer[0].rowNumber}) - converting to update`);
+                
+                const existingRow = existingInPrimer[0];
+                existingRow.set('Purchase ID', rowData['Purchase ID']);
+                existingRow.set('Total Amount', rowData['Total Amount']);
+                existingRow.set('Payment Count', rowData['Payment Count']);
+                existingRow.set('Payment Intent IDs', rowData['Payment Intent IDs']);
+                existingRow.set('Created UTC', rowData['Created UTC']);
+                existingRow.set('Created Local (UTC-8)', rowData['Created Local (UTC-8)']);
+                existingRow.set('Email', rowData['Email']);
+                existingRow.set('GEO', rowData['GEO']);
+                
+                await fetchWithRetry(() => existingRow.save());
+                
+                results.updatedPurchases++;
+                results.processed++;
+                continue;
+              }
+              
+              // 3) New customer — add row
               try {
                 const newRow = await primerSheet.addRow(rowData);
                 addResult = {
@@ -5579,7 +5639,6 @@ async function performSyncLogicPrimer(exportAll = false) {
                 };
                 logger.info(`📊 Successfully added customer ${customerId} to Primer sheet (row ${newRow.rowNumber})`);
                 
-                // Add LA time formula to Created Local (UTC-8) column
                 await addLaTimeFormulaToPrimerSheet(newRow.rowNumber);
               } catch (addError) {
                 logger.error(`❌ CRITICAL: Failed to add Primer customer ${customerId} to sheet`, {
@@ -5589,7 +5648,11 @@ async function performSyncLogicPrimer(exportAll = false) {
                   sheetName: primerSheet.title
                 });
                 results.failed++;
-                continue; // Пропускаем этого клиента, НЕ отправляем уведомление
+                continue;
+              }
+            } finally {
+              if (paymentLockId) {
+                distributedLock.release(paymentLockKey, paymentLockId);
               }
             }
             
