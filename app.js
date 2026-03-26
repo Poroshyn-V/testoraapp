@@ -749,13 +749,14 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
     if (payment.id) {
       const idem = await markPrimerPaymentOnce(payment.id);
       if (idem.enabled && idem.error) {
-        logger.error(`❌ Primer webhook: idempotency store error for payment ${payment.id}`, {
+        logger.error(`❌ Primer webhook: idempotency store error for payment ${payment.id}, continuing in fail-open mode`, {
           paymentId: payment.id,
           error: idem.error
         });
-        return res.status(503).json({ error: 'Idempotency store unavailable, please retry' });
+        // Fail-open to avoid dropping purchases when DB is temporarily unavailable.
+        // We still have in-process lock + sheet duplicate checks below.
       }
-      if (idem.enabled && !idem.inserted) {
+      if (idem.enabled && !idem.inserted && !idem.error) {
         logger.info(`⏭️ Primer webhook: payment ${payment.id} already processed (db), skipping`);
         return res.json({ received: true, skipped: true, reason: 'already processed (db)' });
       }
