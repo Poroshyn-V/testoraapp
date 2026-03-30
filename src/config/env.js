@@ -8,7 +8,7 @@ export const ENV = {
   // Primer API for PayPal payments
   PRIMER_API_KEY: process.env.PRIMER_API_KEY || null,
   PRIMER_API_URL: process.env.PRIMER_API_URL || 'https://api.primer.io',
-  PRIMER_API_VERSION: process.env.PRIMER_API_VERSION || '2.4',
+  PRIMER_API_VERSION: process.env.PRIMER_API_VERSION || '2.3',
   PRIMER_SHEET_NAME: process.env.PRIMER_SHEET_NAME || 'Primer',
   PRIMER_WEBHOOK_SECRET: process.env.PRIMER_WEBHOOK_SECRET || null,
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,

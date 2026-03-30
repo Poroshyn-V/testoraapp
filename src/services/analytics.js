@@ -1,18 +1,79 @@
-import { logInfo, logError } from '../utils/logging.js';
-import { formatWeeklyReport, formatCreativeAlert } from '../utils/formatting.js';
+import { logInfo, logError, logWarn } from '../utils/logging.js';
 import googleSheets from './googleSheets.js';
 import { ENV } from '../config/env.js';
 import { fetchWithRetry } from '../utils/retry.js';
 
 // Analytics service
 export class AnalyticsService {
-  
+
+  /**
+   * Load rows from ALL sheets (payments + LowPrice + Primer)
+   */
+  async loadAllSheetRows() {
+    const allRows = [];
+
+    try {
+      const paymentsSheet = await googleSheets.getSheetByName('payments');
+      await fetchWithRetry(() => paymentsSheet.loadHeaderRow(), 3, 2000);
+      const rows = await fetchWithRetry(() => paymentsSheet.getRows(), 3, 2000);
+      allRows.push(...rows);
+    } catch (error) {
+      logWarn(`⚠️ Could not load payments sheet: ${error.message}`);
+    }
+
+    try {
+      const lowPriceSheet = await googleSheets.getSheetByName('LowPrice');
+      await fetchWithRetry(() => lowPriceSheet.loadHeaderRow(), 3, 2000);
+      const rows = await fetchWithRetry(() => lowPriceSheet.getRows(), 3, 2000);
+      allRows.push(...rows);
+    } catch (error) {
+      logWarn(`⚠️ Could not load LowPrice sheet: ${error.message}`);
+    }
+
+    try {
+      const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
+      const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
+      await fetchWithRetry(() => primerSheet.loadHeaderRow(), 3, 2000);
+      const rows = await fetchWithRetry(() => primerSheet.getRows(), 3, 2000);
+      allRows.push(...rows);
+    } catch (error) {
+      const msg = error?.message || '';
+      if (msg.includes('429') || msg.includes('Quota')) {
+        logWarn('⚠️ Quota exceeded for Primer sheet, skipping');
+      } else {
+        logInfo(`ℹ️ Primer sheet not available: ${msg}`);
+      }
+    }
+
+    return allRows;
+  }
+
+  /**
+   * Get Created UTC date string from a row (works across all sheets)
+   */
+  getRowDateUTC(row) {
+    const createdUTC = row.get('Created UTC') || '';
+    if (createdUTC) return createdUTC.split('T')[0];
+    const createdLocal = row.get('Created Local (UTC+1)') || row.get('Created Local (UTC-8)') || '';
+    if (createdLocal) return createdLocal.split(' ')[0];
+    return '';
+  }
+
+  /**
+   * Get Created UTC Date object from a row
+   */
+  getRowDateObj(row) {
+    const createdUTC = row.get('Created UTC') || '';
+    if (createdUTC) return new Date(createdUTC);
+    return null;
+  }
+
   // Generate weekly report
   async generateWeeklyReport() {
     try {
       logInfo('Generating weekly report...');
-      
-      const rows = await googleSheets.getAllRows();
+
+      const rows = await this.loadAllSheetRows();
       
       // Текущая неделя
       const thisWeek = this.getWeekData(rows, 0);
@@ -47,7 +108,7 @@ export class AnalyticsService {
 ${thisWeek.topCountries.map((c, i) => `   ${i + 1}. ${c.country}: ${c.count} purchases`).join('\n')}
 
 🎯 Top Campaigns:
-${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFixed(2)}`).join('\n')}
+${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFixed(2)} (${c.count} purchases)`).join('\n')}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
 
@@ -62,41 +123,38 @@ ${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFi
   }
 
   getWeekData(rows, weeksAgo = 0) {
-    // weeksAgo: 0 = текущая неделя, 1 = прошлая неделя
     const now = new Date();
-    const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
-    const startOfWeek = new Date(utcPlus1);
-    startOfWeek.setDate(utcPlus1.getDate() - utcPlus1.getDay() + 1 - (weeksAgo * 7)); // Понедельник
-    startOfWeek.setHours(0, 0, 0, 0);
-    
+    const startOfWeek = new Date(now);
+    startOfWeek.setUTCDate(now.getUTCDate() - now.getUTCDay() + 1 - (weeksAgo * 7)); // Monday
+    startOfWeek.setUTCHours(0, 0, 0, 0);
+
     const endOfWeek = new Date(startOfWeek);
-    endOfWeek.setDate(startOfWeek.getDate() + 6); // Воскресенье
-    endOfWeek.setHours(23, 59, 59, 999);
-    
+    endOfWeek.setUTCDate(startOfWeek.getUTCDate() + 6); // Sunday
+    endOfWeek.setUTCHours(23, 59, 59, 999);
+
     const weekRows = rows.filter(row => {
-      const created = new Date(row.get('Created Local (UTC+1)'));
-      return created >= startOfWeek && created <= endOfWeek;
+      const dateObj = this.getRowDateObj(row);
+      return dateObj && dateObj >= startOfWeek && dateObj <= endOfWeek;
     });
-    
-    const revenue = weekRows.reduce((sum, row) => 
+
+    const revenue = weekRows.reduce((sum, row) =>
       sum + parseFloat(row.get('Total Amount') || 0), 0
     );
-    
-    // Анализ стран
+
     const countryStats = new Map();
     const campaignStats = new Map();
-    
+
     for (const row of weekRows) {
-      // GEO анализ
+      // GEO
       const geo = row.get('GEO') || '';
       const country = geo.split(',')[0].trim();
-      if (country) {
+      if (country && country !== 'Unknown') {
         countryStats.set(country, (countryStats.get(country) || 0) + 1);
       }
-      
-      // Анализ кампаний
-      const campaign = row.get('Campaign') || '';
-      if (campaign) {
+
+      // Campaign — check all possible column names
+      const campaign = row.get('UTM Campaign') || row.get('Campaign Name') || row.get('Campaign') || '';
+      if (campaign && campaign !== 'N/A') {
         const amount = parseFloat(row.get('Total Amount') || 0);
         if (campaignStats.has(campaign)) {
           campaignStats.get(campaign).count++;
@@ -106,19 +164,17 @@ ${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFi
         }
       }
     }
-    
-    // Топ-3 страны
+
     const topCountries = Array.from(countryStats.entries())
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
+      .slice(0, 5)
       .map(([country, count]) => ({ country, count }));
-    
-    // Топ-3 кампании по выручке
+
     const topCampaigns = Array.from(campaignStats.entries())
       .sort((a, b) => b[1].revenue - a[1].revenue)
-      .slice(0, 3)
-      .map(([name, stats]) => ({ name, revenue: stats.revenue }));
-    
+      .slice(0, 5)
+      .map(([name, stats]) => ({ name, revenue: stats.revenue, count: stats.count }));
+
     return {
       startDate: startOfWeek.toISOString().split('T')[0],
       endDate: endOfWeek.toISOString().split('T')[0],
@@ -133,55 +189,15 @@ ${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFi
   // Generate Hourly Report with platform breakdown (includes both Stripe accounts)
   async generateHourlyReport() {
     try {
-      logInfo('📊 Генерирую часовой отчет...');
-      
-      // Получаем данные из всех листов (payments, LowPrice, Primer)
-      const paymentsSheet = await googleSheets.getSheetByName('payments');
-      const lowPriceSheet = await googleSheets.getSheetByName('LowPrice');
-      
-      await fetchWithRetry(() => paymentsSheet.loadHeaderRow(), 5, 2000);
-      await fetchWithRetry(() => lowPriceSheet.loadHeaderRow(), 5, 2000);
-      
-      const paymentsRows = await fetchWithRetry(() => paymentsSheet.getRows(), 5, 2000);
-      const lowPriceRows = await fetchWithRetry(() => lowPriceSheet.getRows(), 5, 2000);
-      
-      // Попытаемся получить данные из Primer листа (если он существует)
-      let primerRows = [];
-      try {
-        const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
-        const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
-        await fetchWithRetry(() => primerSheet.loadHeaderRow(), 5, 2000);
-        primerRows = await fetchWithRetry(() => primerSheet.getRows(), 5, 2000);
-        logInfo(`✅ Primer sheet "${PRIMER_SHEET_NAME}" found with ${primerRows.length} rows`);
-      } catch (error) {
-        logInfo(`ℹ️ Primer sheet not found or not configured (${error.message})`);
-      }
-      
-      // Получаем сегодняшнюю дату в UTC
+      logInfo('📊 Generating hourly report...');
+
+      const allRows = await this.loadAllSheetRows();
       const today = new Date();
-      const todayUTC = today.toISOString().split('T')[0]; // YYYY-MM-DD
-      
-      logInfo(`📅 Анализирую покупки за ${todayUTC} (UTC)`);
-      
-      // Фильтруем покупки за сегодня по UTC (для всех листов)
-      const todayPayments = paymentsRows.filter(row => {
-        const createdUTC = row.get('Created UTC') || '';
-        return createdUTC.includes(todayUTC);
-      });
-      
-      const todayLowPrice = lowPriceRows.filter(row => {
-        const createdUTC = row.get('Created UTC') || '';
-        return createdUTC.includes(todayUTC);
-      });
-      
-      const todayPrimer = primerRows.filter(row => {
-        const createdUTC = row.get('Created UTC') || '';
-        return createdUTC.includes(todayUTC);
-      });
-      
-      const allTodayPurchases = [...todayPayments, ...todayLowPrice, ...todayPrimer];
-      
-      logInfo(`📊 Найдено ${allTodayPurchases.length} покупок за сегодня (${todayPayments.length} из payments, ${todayLowPrice.length} из LowPrice, ${todayPrimer.length} из Primer)`);
+      const todayUTC = today.toISOString().split('T')[0];
+
+      const allTodayPurchases = allRows.filter(row => this.getRowDateUTC(row) === todayUTC);
+
+      logInfo(`📊 Found ${allTodayPurchases.length} purchases today`);
       
       if (allTodayPurchases.length === 0) {
         logInfo('📭 Нет покупок за сегодня - пропускаю часовой отчет');
@@ -219,9 +235,6 @@ ${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFi
       for (const [platform, stats] of platformStats.entries()) {
         if (platform === 'N/A') continue;
         
-        const countryStats = Array.from(stats.countries.entries())
-          .sort((a, b) => b[1] - a[1]);
-        
         // Определяем основные страны
         const usCount = stats.countries.get('US') || 0;
         const auCount = stats.countries.get('AU') || 0;
@@ -257,22 +270,16 @@ ${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFi
   // Generate GEO alert (restored from old working version)
   async generateGeoAlert() {
     try {
-      logInfo('🌍 Анализирую GEO данные за сегодня...');
-      
-      const rows = await googleSheets.getAllRows();
-      
-      // Получаем сегодняшнюю дату в UTC+1
-      const today = new Date();
-      const utcPlus1 = new Date(today.getTime() + 60 * 60 * 1000);
-      const todayStr = utcPlus1.toISOString().split('T')[0]; // YYYY-MM-DD
-      
-      logInfo(`📅 Анализирую покупки за ${todayStr} (UTC+1)`);
-      
-      // Фильтруем покупки за сегодня
-      const todayPurchases = rows.filter(row => {
-        const createdLocal = row.get('Created Local (UTC+1)') || '';
-        return createdLocal.includes(todayStr);
-      });
+      logInfo('🌍 Analyzing GEO data for today...');
+
+      const rows = await this.loadAllSheetRows();
+
+      const now = new Date();
+      const todayStr = now.toISOString().split('T')[0];
+
+      logInfo(`📅 Analyzing purchases for ${todayStr} (UTC)`);
+
+      const todayPurchases = rows.filter(row => this.getRowDateUTC(row) === todayStr);
       
       logInfo(`📊 Найдено ${todayPurchases.length} покупок за сегодня`);
       
@@ -488,27 +495,22 @@ ${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFi
     return flags[country] || '🌍';
   }
   
-  // Generate daily stats alert (restored from old working version)
+  // Generate daily stats alert
   async generateDailyStats() {
     try {
-      logInfo('📊 Анализирую статистику за вчера...');
-      
-      const rows = await googleSheets.getAllRows();
-      
-      // Получаем вчерашнюю дату в UTC+1
-      const today = new Date();
-      const utcPlus1 = new Date(today.getTime() + 60 * 60 * 1000);
-      const yesterday = new Date(utcPlus1);
-      yesterday.setDate(utcPlus1.getDate() - 1);
-      const yesterdayStr = yesterday.toISOString().split('T')[0]; // YYYY-MM-DD
-      
-      logInfo(`📅 Анализирую статистику за ${yesterdayStr} (UTC+1)`);
-      
-      // Фильтруем покупки за вчера
-      const yesterdayPurchases = rows.filter(row => {
-        const createdLocal = row.get('Created Local (UTC+1)') || '';
-        return createdLocal.includes(yesterdayStr);
-      });
+      logInfo('📊 Generating daily stats...');
+
+      const rows = await this.loadAllSheetRows();
+
+      // Yesterday's date in UTC
+      const now = new Date();
+      const yesterday = new Date(now);
+      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+      logInfo(`📅 Analyzing stats for ${yesterdayStr} (UTC)`);
+
+      const yesterdayPurchases = rows.filter(row => this.getRowDateUTC(row) === yesterdayStr);
       
       logInfo(`📊 Найдено ${yesterdayPurchases.length} покупок за вчера`);
       
@@ -517,62 +519,56 @@ ${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFi
         return null;
       }
       
-      // T1 страны (первый уровень)
       const t1Countries = ['US', 'CA', 'AU', 'GB', 'DE', 'FR', 'IT', 'ES', 'NL', 'SE', 'NO', 'DK', 'FI', 'CH', 'AT', 'BE', 'IE', 'PT', 'GR', 'LU', 'MT', 'CY'];
-      
-      // Анализируем статистику
+
       const stats = {
-        US: { main: 0, additional: 0, total: 0 },
-        T1: { main: 0, additional: 0, total: 0 },
-        WW: { main: 0, additional: 0, total: 0 }
+        US: { main: 0, additional: 0, total: 0, revenue: 0 },
+        T1: { main: 0, additional: 0, total: 0, revenue: 0 },
+        WW: { main: 0, additional: 0, total: 0, revenue: 0 }
       };
-      
+
+      let totalRevenue = 0;
+
       for (const purchase of yesterdayPurchases) {
         const geo = purchase.get('GEO') || '';
         const amount = parseFloat(purchase.get('Total Amount') || '0');
         const country = geo.split(',')[0].trim();
-        
-        // Определяем категорию страны
+
+        totalRevenue += amount;
+
         let category = 'WW';
         if (country === 'US') {
           category = 'US';
         } else if (t1Countries.includes(country)) {
           category = 'T1';
         }
-        
-        // Определяем тип покупки
-        const isMain = amount <= 9.99;
-        const isAdditional = amount > 9.99;
-        
-        if (isMain) {
+
+        if (amount <= 9.99) {
           stats[category].main++;
-        }
-        if (isAdditional) {
+        } else {
           stats[category].additional++;
         }
         stats[category].total++;
+        stats[category].revenue += amount;
       }
-      
-      // Формируем сообщение
-      const alertText = `📊 **Daily Stats for ${yesterdayStr}**
 
-🇺🇸 **US Market:**
-• Main purchases (≤$9.99): ${stats.US.main}
-• Additional sales (>$9.99): ${stats.US.additional}
-• Total: ${stats.US.total}
+      const alertText = `📊 Daily Stats for ${yesterdayStr}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-🌍 **T1 Countries:**
-• Main purchases (≤$9.99): ${stats.T1.main}
-• Additional sales (>$9.99): ${stats.T1.additional}
-• Total: ${stats.T1.total}
+🇺🇸 US Market:
+  Main (≤$9.99): ${stats.US.main} | Upsells (>$9.99): ${stats.US.additional}
+  Total: ${stats.US.total} | Revenue: $${stats.US.revenue.toFixed(2)}
 
-🌎 **WW (Rest of World):**
-• Main purchases (≤$9.99): ${stats.WW.main}
-• Additional sales (>$9.99): ${stats.WW.additional}
-• Total: ${stats.WW.total}
+🌍 T1 Countries:
+  Main (≤$9.99): ${stats.T1.main} | Upsells (>$9.99): ${stats.T1.additional}
+  Total: ${stats.T1.total} | Revenue: $${stats.T1.revenue.toFixed(2)}
 
-📈 **Overall Total:** ${yesterdayPurchases.length} purchases
-⏰ Report time: 07:00 UTC+1`;
+🌎 WW (Rest of World):
+  Main (≤$9.99): ${stats.WW.main} | Upsells (>$9.99): ${stats.WW.additional}
+  Total: ${stats.WW.total} | Revenue: $${stats.WW.revenue.toFixed(2)}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📈 Total: ${yesterdayPurchases.length} purchases | $${totalRevenue.toFixed(2)} revenue`;
       
       logInfo('📤 Отправляю ежедневную статистику:', { alertText });
       
@@ -587,33 +583,30 @@ ${thisWeek.topCampaigns.map((c, i) => `   ${i + 1}. ${c.name}: $${c.revenue.toFi
   // Generate anomaly check (restored from old working version)
   async generateAnomalyCheck() {
     try {
-      logInfo('🚨 Проверяю аномалии в продажах...');
-      
-      const rows = await googleSheets.getAllRows();
-      
+      logInfo('🚨 Checking sales anomalies...');
+
+      const rows = await this.loadAllSheetRows();
+
       const now = new Date();
-      const utcPlus1 = new Date(now.getTime() + 60 * 60 * 1000);
-      
-      // Анализируем последние 2 часа
-      const twoHoursAgo = new Date(utcPlus1.getTime() - 2 * 60 * 60 * 1000);
+
+      // Last 2 hours
+      const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
       const recentPurchases = rows.filter(row => {
-        const createdLocal = row.get('Created Local (UTC+1)') || '';
-        const purchaseDate = new Date(createdLocal);
-        return purchaseDate >= twoHoursAgo;
+        const dateObj = this.getRowDateObj(row);
+        return dateObj && dateObj >= twoHoursAgo;
       });
-      
-      // Анализируем тот же период вчера
-      const yesterdayStart = new Date(utcPlus1);
-      yesterdayStart.setDate(utcPlus1.getDate() - 1);
-      yesterdayStart.setHours(utcPlus1.getHours() - 2, 0, 0, 0);
-      
+
+      // Same 2-hour window yesterday
+      const yesterdayStart = new Date(now);
+      yesterdayStart.setUTCDate(yesterdayStart.getUTCDate() - 1);
+      yesterdayStart.setUTCHours(now.getUTCHours() - 2, 0, 0, 0);
+
       const yesterdayEnd = new Date(yesterdayStart);
-      yesterdayEnd.setHours(yesterdayStart.getHours() + 2, 0, 0, 0);
-      
+      yesterdayEnd.setUTCHours(yesterdayStart.getUTCHours() + 2, 0, 0, 0);
+
       const yesterdayPurchases = rows.filter(row => {
-        const createdLocal = row.get('Created Local (UTC+1)') || '';
-        const purchaseDate = new Date(createdLocal);
-        return purchaseDate >= yesterdayStart && purchaseDate <= yesterdayEnd;
+        const dateObj = this.getRowDateObj(row);
+        return dateObj && dateObj >= yesterdayStart && dateObj <= yesterdayEnd;
       });
       
       logInfo(`📊 Последние 2 часа: ${recentPurchases.length} покупок`);
@@ -662,108 +655,44 @@ ${isSignificantDrop ? '🔍 Check your campaigns!' : '🎉 Great performance!'}`
     }
   }
   
-  // Generate creative alert (restored from old working version)
-  // ✅ Обновлено: включает данные из обоих Stripe аккаунтов (payments + LowPrice)
   async generateCreativeAlert() {
     try {
-      logInfo('🎨 Анализирую креативы за сегодня...');
-      
-      // ✅ Получаем данные из всех листов (payments, LowPrice, Primer)
-      const paymentsSheet = await googleSheets.getSheetByName('payments');
-      const lowPriceSheet = await googleSheets.getSheetByName('LowPrice');
-      
-      await fetchWithRetry(() => paymentsSheet.loadHeaderRow(), 5, 2000);
-      await fetchWithRetry(() => lowPriceSheet.loadHeaderRow(), 5, 2000);
-      
-      const paymentsRows = await fetchWithRetry(() => paymentsSheet.getRows(), 5, 2000);
-      const lowPriceRows = await fetchWithRetry(() => lowPriceSheet.getRows(), 5, 2000);
-      
-      // Попытаемся получить данные из Primer листа (если он существует)
-      let primerRows = [];
-      try {
-        const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
-        const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
-        await fetchWithRetry(() => primerSheet.loadHeaderRow(), 5, 2000);
-        primerRows = await fetchWithRetry(() => primerSheet.getRows(), 5, 2000);
-        logInfo(`✅ Primer sheet "${PRIMER_SHEET_NAME}" found with ${primerRows.length} rows`);
-      } catch (error) {
-        logInfo(`ℹ️ Primer sheet not found or not configured (${error.message})`);
-      }
-      
-      // Объединяем все покупки из всех аккаунтов
-      const allRows = [...paymentsRows, ...lowPriceRows, ...primerRows];
-      
-      logInfo(`📊 Загружено ${paymentsRows.length} покупок из основного аккаунта, ${lowPriceRows.length} из LowPrice, ${primerRows.length} из Primer`);
-      
-      // Получаем сегодняшнюю дату в UTC+1
-      const today = new Date();
-      const utcPlus1 = new Date(today.getTime() + 60 * 60 * 1000);
-      const todayStr = utcPlus1.toISOString().split('T')[0]; // YYYY-MM-DD
-      
-      logInfo(`📅 Анализирую креативы за ${todayStr} (UTC+1)`);
-      
-      // Фильтруем покупки за сегодня
-      const todayPurchases = allRows.filter(row => {
-        const createdLocal = row.get('Created Local (UTC+1)') || '';
-        return createdLocal.includes(todayStr);
-      });
-      
-      logInfo(`📊 Найдено ${todayPurchases.length} покупок за сегодня (из обоих аккаунтов)`);
-      
-      if (todayPurchases.length === 0) {
-        logInfo('📭 Нет покупок за сегодня - пропускаю креатив алерт');
-        return null;
-      }
-      
-      // Анализируем креативы (ad_name)
+      logInfo('🎨 Analyzing creatives for today...');
+
+      const allRows = await this.loadAllSheetRows();
+      const now = new Date();
+      const todayStr = now.toISOString().split('T')[0];
+
+      const todayPurchases = allRows.filter(row => this.getRowDateUTC(row) === todayStr);
+
+      logInfo(`📊 Found ${todayPurchases.length} purchases today`);
+
+      if (todayPurchases.length === 0) return null;
+
       const creativeStats = new Map();
-      
       for (const purchase of todayPurchases) {
         const adName = purchase.get('Ad Name') || '';
         if (adName && adName.trim() !== '' && adName !== 'N/A') {
-          if (creativeStats.has(adName)) {
-            creativeStats.set(adName, creativeStats.get(adName) + 1);
-          } else {
-            creativeStats.set(adName, 1);
-          }
+          creativeStats.set(adName, (creativeStats.get(adName) || 0) + 1);
         }
       }
-      
-      if (creativeStats.size === 0) {
-        logInfo('📭 Нет креативов за сегодня - пропускаю креатив алерт');
-        return null;
-      }
-      
-      // Сортируем по количеству покупок
+
+      if (creativeStats.size === 0) return null;
+
       const sortedCreatives = Array.from(creativeStats.entries())
         .sort((a, b) => b[1] - a[1])
-        .slice(0, 5);
-      
-      // Формируем ТОП-5 креативов
-      const top5 = [];
-      for (let i = 0; i < sortedCreatives.length; i++) {
-        const [creative, count] = sortedCreatives[i];
-        const rank = i + 1;
-        top5.push(`${rank}. ${creative} - ${count} purchases`);
-      }
-      
-      // Получаем текущее время UTC+1
-      const now = new Date();
-      const utcPlus1Now = new Date(now.getTime() + 60 * 60 * 1000);
-      const timeStr = utcPlus1Now.toLocaleTimeString('ru-RU', { 
-        timeZone: 'Europe/Berlin',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-      
-      // Формируем сообщение (включает все источники: W2W, FL, Primer)
-      const sources = [];
-      if (paymentsRows.length > 0) sources.push('W2W');
-      if (lowPriceRows.length > 0) sources.push('FL');
-      if (primerRows.length > 0) sources.push('Primer');
-      const sourcesText = sources.length > 0 ? sources.join(' + ') : 'W2W + FL';
-      
-      const alertText = `🎨 **TOP-5 Creative Performance for today (${todayStr})**\n\n${top5.join('\n')}\n\n📈 Total purchases: ${todayPurchases.length} (${sourcesText})\n⏰ Report time: ${timeStr} UTC+1`;
+        .slice(0, 10);
+
+      const top = sortedCreatives
+        .map(([creative, count], i) => `${i + 1}. ${creative} — ${count} purchases`)
+        .join('\n');
+
+      const alertText = `🎨 TOP Creatives for today (${todayStr})
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+${top}
+
+📈 Total purchases: ${todayPurchases.length}
+⏰ ${now.toISOString().split('T')[1].split('.')[0]} UTC`;
       
       logInfo('📤 Отправляю креатив алерт:', { alertText });
       
