@@ -106,6 +106,10 @@ let alertCleanupInterval = null;
 // Emergency stop flag
 let emergencyStop = false;
 
+// Primer webhook monitoring — track last received event time
+let lastPrimerWebhookAt = null; // ISO string, updated on every incoming webhook
+let primerWebhookMonitorInterval = null;
+
 // Helper function for VIP purchase alerts
 async function sendVipPurchaseAlert(payment, customer, sheetData) {
   const amount = parseFloat(sheetData['Total Amount'] || 0);
@@ -689,6 +693,7 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
                     Buffer.isBuffer(req.body) ? JSON.parse(req.body.toString('utf-8')) : req.body;
 
     const eventType = payload.eventType;
+    lastPrimerWebhookAt = new Date().toISOString(); // Track for monitoring
     logger.info(`📩 Primer webhook received: ${eventType}`, {
       paymentId: payload.payment?.id,
       status: payload.payment?.status
@@ -944,7 +949,8 @@ app.get('/health', async (_req, res) => {
     const serviceChecks = {
       stripe: await checkStripeConnection(),
       googleSheets: await checkGoogleSheetsConnection(),
-      telegram: await checkTelegramConnection()
+      telegram: await checkTelegramConnection(),
+      postgres: await checkPostgresConnection()
     };
     
     const allServicesHealthy = Object.values(serviceChecks).every(check => check.status === 'healthy');
@@ -987,9 +993,15 @@ app.get('/health', async (_req, res) => {
       },
       performance: performanceMonitor.getStats(),
       metrics: metrics.getSummary(),
-      notificationQueue: notificationQueue.getStats()
+      notificationQueue: notificationQueue.getStats(),
+      primerWebhook: {
+        lastReceivedAt: lastPrimerWebhookAt || null,
+        silentFor: lastPrimerWebhookAt
+          ? `${Math.round((Date.now() - new Date(lastPrimerWebhookAt).getTime()) / 60000)}m`
+          : 'never received'
+      }
     };
-    
+
     const statusCode = allServicesHealthy ? 200 : 503;
     res.status(statusCode).json(healthStatus);
     
@@ -1050,6 +1062,23 @@ async function checkTelegramConnection() {
       status: 'unhealthy',
       error: error.message
     };
+  }
+}
+
+async function checkPostgresConnection() {
+  const url = process.env.POSTGRES_URL || process.env.DATABASE_URL || null;
+  if (!url) {
+    return { status: 'not_configured', note: 'Set POSTGRES_URL for idempotency protection' };
+  }
+  try {
+    const startTime = Date.now();
+    // markPrimerPaymentOnce internally uses the pool — just do a lightweight check
+    const { markPrimerPaymentOnce: check } = await import('./src/services/primerIdempotencyStore.js');
+    // Attempt a no-op call with a dummy ID that won't insert (empty string skips insert)
+    await check('');
+    return { status: 'healthy', responseTime: `${Date.now() - startTime}ms` };
+  } catch (error) {
+    return { status: 'unhealthy', error: error.message };
   }
 }
 
@@ -9132,9 +9161,40 @@ app.listen(ENV.PORT, () => {
     
     // Start automatic alert cleanup (every 24 hours)
     alertCleanupInterval = setInterval(cleanOldAlerts, 24 * 60 * 60 * 1000);
-    
+
     // Run initial cleanup after 10 seconds
     setTimeout(cleanOldAlerts, 10000);
+
+    // Primer webhook silence monitor — alert if no webhook received in 2 hours
+    primerWebhookMonitorInterval = setInterval(async () => {
+      try {
+        const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+        const lastAt = lastPrimerWebhookAt ? new Date(lastPrimerWebhookAt) : null;
+
+        // Only alert if we've been running for at least 2 hours
+        const uptimeHours = process.uptime() / 3600;
+        if (uptimeHours < 2) return;
+
+        if (!lastAt || lastAt < twoHoursAgo) {
+          const sinceText = lastAt
+            ? `Last received: ${lastPrimerWebhookAt}`
+            : 'No webhooks received since server start';
+
+          const alertMsg = `⚠️ PRIMER WEBHOOK SILENCE ALERT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+No Primer webhook events in the last 2 hours!
+${sinceText}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔍 Check: Primer dashboard → Webhooks → Delivery logs
+Possible causes: Primer outage, webhook misconfigured, network issue`;
+
+          await sendTextNotifications(alertMsg);
+          logger.warn('⚠️ Primer webhook silence alert sent', { lastPrimerWebhookAt });
+        }
+      } catch (err) {
+        logger.error('Error in Primer webhook monitor', { error: err.message });
+      }
+    }, 2 * 60 * 60 * 1000); // check every 2 hours
     
     console.log('🤖 AUTOMATIC SYSTEM ENABLED:');
     console.log('   ✅ Checks Stripe every 5 minutes');
