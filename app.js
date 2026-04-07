@@ -673,9 +673,106 @@ async function runSync() {
 // ==========================================
 // Primer Webhook (must be BEFORE express.json() for raw body access)
 // ==========================================
+// ==========================================
+// Primer Sheet In-Memory Cache
+// Avoids loading ALL rows from Google Sheets on every webhook
+// ==========================================
+const primerSheetCache = {
+  customerIds: new Set(),
+  paymentIds: new Set(),
+  lastRefresh: null,
+  refreshing: false,
+  STALE_MS: 5 * 60 * 1000, // 5 minutes
+
+  isStale() {
+    return !this.lastRefresh || (Date.now() - this.lastRefresh) > this.STALE_MS;
+  },
+
+  async refresh() {
+    if (this.refreshing) return;
+    this.refreshing = true;
+    const start = Date.now();
+    try {
+      const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
+      const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
+      await primerSheet.loadHeaderRow();
+      const rows = await primerSheet.getRows();
+
+      const newCustomerIds = new Set();
+      const newPaymentIds = new Set();
+      for (const row of rows) {
+        const cid = row.get('Customer ID');
+        if (cid && cid !== 'N/A') newCustomerIds.add(cid);
+        const pids = String(row.get('Payment Intent IDs') || '').split(',').map(v => v.trim()).filter(Boolean);
+        for (const pid of pids) newPaymentIds.add(pid);
+      }
+
+      this.customerIds = newCustomerIds;
+      this.paymentIds = newPaymentIds;
+      this.lastRefresh = Date.now();
+      logger.info(`✅ Primer cache refreshed`, {
+        customers: newCustomerIds.size,
+        payments: newPaymentIds.size,
+        duration: `${Date.now() - start}ms`
+      });
+    } catch (err) {
+      logger.warn(`⚠️ Primer cache refresh failed (using stale cache)`, { error: err.message });
+    } finally {
+      this.refreshing = false;
+    }
+  },
+
+  addEntry(customerId, paymentId) {
+    if (customerId) this.customerIds.add(customerId);
+    if (paymentId) this.paymentIds.add(paymentId);
+  },
+
+  hasCustomer(customerId) { return this.customerIds.has(customerId); },
+  hasPayment(paymentId) { return this.paymentIds.has(paymentId); },
+  stats() {
+    return {
+      customers: this.customerIds.size,
+      payments: this.paymentIds.size,
+      lastRefresh: this.lastRefresh ? new Date(this.lastRefresh).toISOString() : null,
+      isStale: this.isStale()
+    };
+  }
+};
+
+// Refresh Primer cache on startup (non-blocking) and periodically
+setTimeout(() => primerSheetCache.refresh().catch(() => {}), 15_000);
+setInterval(() => {
+  if (primerSheetCache.isStale()) primerSheetCache.refresh().catch(() => {});
+}, 3 * 60 * 1000);
+
+// Helper: retry Google Sheets operation with exponential backoff
+async function retrySheetOp(fn, { maxRetries = 3, label = 'sheet op' } = {}) {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const code = err.code || err.response?.status || 0;
+      const isRetryable = [409, 429, 500, 502, 503].includes(code) ||
+        /aborted|unavailable|internal error|ECONNRESET|ETIMEDOUT/i.test(err.message);
+      if (!isRetryable || attempt === maxRetries) throw err;
+      const delay = Math.min(1000 * Math.pow(2, attempt - 1) + Math.random() * 500, 8000);
+      logger.warn(`⚠️ ${label}: attempt ${attempt}/${maxRetries} failed (${code || err.message}), retrying in ${Math.round(delay)}ms`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+}
+
 app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  // Context for detailed error logging
+  let step = 'parse';
+  let paymentId = null;
+  let customerId = null;
+  let eventType = null;
+  let amount = null;
+
   try {
     // 1. Verify webhook signature
+    step = 'signature_verify';
     const signature = req.headers['x-signature-primary'];
     const webhookSecret = ENV.PRIMER_WEBHOOK_SECRET;
 
@@ -689,13 +786,15 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
     }
 
     // Parse body
+    step = 'parse_body';
     const payload = typeof req.body === 'string' ? JSON.parse(req.body) :
                     Buffer.isBuffer(req.body) ? JSON.parse(req.body.toString('utf-8')) : req.body;
 
-    const eventType = payload.eventType;
-    lastPrimerWebhookAt = new Date().toISOString(); // Track for monitoring
+    eventType = payload.eventType;
+    paymentId = payload.payment?.id || null;
+    lastPrimerWebhookAt = new Date().toISOString();
     logger.info(`📩 Primer webhook received: ${eventType}`, {
-      paymentId: payload.payment?.id,
+      paymentId,
       status: payload.payment?.status
     });
 
@@ -709,12 +808,14 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
       return res.json({ received: true, skipped: true, reason: 'no payment data' });
     }
 
+    paymentId = payment.id;
     const status = (payment.status || '').toUpperCase();
     if (status !== 'SETTLED' && status !== 'AUTHORIZED') {
       return res.json({ received: true, skipped: true, reason: `status ${status} not processed` });
     }
 
     // 3. Filter for testora application only
+    step = 'filter_app';
     const metadata = payment.metadata || {};
     const application = (metadata.application || '').toLowerCase();
     if (application !== 'testora') {
@@ -722,12 +823,14 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
     }
 
     // 4. Extract customer ID
-    const customerId = payment.customerId || metadata.customer_id;
+    step = 'extract_customer';
+    customerId = payment.customerId || metadata.customer_id;
     if (!customerId) {
       return res.json({ received: true, skipped: true, reason: 'no customer ID' });
     }
 
-    // 5. Normalize the payment using existing function
+    // 5. Normalize the payment
+    step = 'normalize';
     const normalizedPayment = normalizePrimerPayment(payment);
 
     if (normalizedPayment.status !== 'succeeded') {
@@ -735,6 +838,7 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
     }
 
     // 6. Extract email — skip if no email (rebill)
+    step = 'extract_email';
     const customer = {
       id: customerId,
       email: payment.customer?.emailAddress || normalizedPayment.email || null,
@@ -744,83 +848,127 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
     const rowData = formatPaymentForSheetsPrimer(normalizedPayment, customer, { accountSource: 'primer' });
 
     if (!rowData['Email'] || rowData['Email'] === 'N/A') {
-      logger.warn(`⏭️ Primer webhook: skipping payment without email for customer ${customerId} — likely rebill`);
+      logger.warn(`⏭️ Primer webhook: skipping payment without email for customer ${customerId} — likely rebill`, { paymentId, customerId });
       return res.json({ received: true, skipped: true, reason: 'no email - rebill' });
     }
 
-    // 6.5. Cross-instance idempotency (Postgres)
-    // IMPORTANT: we mark payment only after eligibility filters pass.
-    // This avoids "poisoning" payment IDs from partial/irrelevant webhook events.
-    if (payment.id) {
-      const idem = await markPrimerPaymentOnce(payment.id);
-      if (idem.enabled && idem.error) {
-        logger.error(`❌ Primer webhook: idempotency store error for payment ${payment.id}, continuing in fail-open mode`, {
-          paymentId: payment.id,
-          error: idem.error
-        });
-        // Fail-open to avoid dropping purchases when DB is temporarily unavailable.
-        // We still have in-process lock + sheet duplicate checks below.
+    amount = (normalizedPayment.amount / 100).toFixed(2);
+
+    // 7. In-memory cache duplicate check (fast, no API calls)
+    step = 'cache_check';
+    if (primerSheetCache.lastRefresh) {
+      if (primerSheetCache.hasPayment(paymentId)) {
+        logger.info(`⏭️ Primer webhook: payment ${paymentId} already in cache, skipping`, { customerId });
+        return res.json({ received: true, skipped: true, reason: 'already exists (cache)' });
       }
-      if (idem.enabled && !idem.inserted && !idem.error) {
-        logger.info(`⏭️ Primer webhook: payment ${payment.id} already processed (db), skipping`);
-        return res.json({ received: true, skipped: true, reason: 'already processed (db)' });
+      if (primerSheetCache.hasCustomer(customerId)) {
+        logger.info(`⏭️ Primer webhook: customer ${customerId} already in cache — skipping rebill`, { paymentId });
+        return res.json({ received: true, skipped: true, reason: 'customer exists - rebill (cache)' });
       }
     }
 
-    // 7. Idempotency / anti-duplicate protection
-    // Primer (как и Stripe) может доставлять один и тот же webhook несколько раз.
-    // Если два webhook-а прилетят параллельно, оба могут успеть прочитать sheet до записи и создать дубли.
-    // Поэтому делаем критическую секцию под локом: "проверил -> записал".
-    const paymentLockKey = `primer_webhook_payment_${payment.id}`;
+    // 8. Idempotency lock + sheet write
+    step = 'acquire_lock';
+    const paymentLockKey = `primer_webhook_payment_${paymentId}`;
     let paymentLockId = null;
 
     try {
       paymentLockId = await distributedLock.acquire(paymentLockKey, 50, 50);
 
-      // 8. Check Google Sheet for duplicates (inside lock)
+      // 8a. Sheet-level duplicate check (inside lock, needed for cache-miss or stale cache)
+      step = 'sheet_duplicate_check';
       const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
-      const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
-      await primerSheet.loadHeaderRow();
-      const existingRows = await primerSheet.getRows();
+      const primerSheet = await retrySheetOp(
+        () => googleSheets.getSheetByName(PRIMER_SHEET_NAME),
+        { label: `getSheet(${PRIMER_SHEET_NAME})` }
+      );
+
+      await retrySheetOp(
+        () => primerSheet.loadHeaderRow(),
+        { label: 'loadHeaderRow' }
+      );
+
+      const existingRows = await retrySheetOp(
+        () => primerSheet.getRows(),
+        { label: 'getRows' }
+      );
 
       const paymentExists = existingRows.some(row => {
         const idsRaw = row.get('Payment Intent IDs') || '';
-        const ids = String(idsRaw)
-          .split(',')
-          .map(v => v.trim())
-          .filter(Boolean);
-        return ids.includes(payment.id);
+        return String(idsRaw).split(',').map(v => v.trim()).filter(Boolean).includes(paymentId);
       });
 
       if (paymentExists) {
-        logger.info(`⏭️ Primer webhook: payment ${payment.id} already in sheet, skipping`);
+        primerSheetCache.addEntry(null, paymentId);
+        logger.info(`⏭️ Primer webhook: payment ${paymentId} already in sheet, skipping`);
         return res.json({ received: true, skipped: true, reason: 'already exists' });
       }
 
-      // Check if customer exists — skip (rebill/recurring)
       const customerExists = existingRows.some(row => row.get('Customer ID') === customerId);
       if (customerExists) {
-        logger.info(`⏭️ Primer webhook: customer ${customerId} already in sheet — skipping rebill, payment ${payment.id}`);
+        primerSheetCache.addEntry(customerId, null);
+        logger.info(`⏭️ Primer webhook: customer ${customerId} already in sheet — skipping rebill, payment ${paymentId}`);
         return res.json({ received: true, skipped: true, reason: 'customer exists - rebill' });
       }
 
-      // 9. New customer — add row to sheet
-      rowData['Payment Intent IDs'] = payment.id;
+      // 8b. New customer — add row to sheet
+      step = 'add_row';
+      rowData['Payment Intent IDs'] = paymentId;
       rowData['Payment Count'] = '1';
-      rowData['Total Amount'] = (normalizedPayment.amount / 100).toFixed(2);
+      rowData['Total Amount'] = amount;
       rowData['Purchase ID'] = `purchase_${customerId}_${normalizedPayment.created}`;
 
-      const newRow = await primerSheet.addRow(rowData);
-      await addLaTimeFormulaToPrimerSheet(newRow.rowNumber);
+      const newRow = await retrySheetOp(
+        () => primerSheet.addRow(rowData),
+        { label: `addRow(${customerId})` }
+      );
 
-      logger.info(`✅ Primer webhook: NEW customer ${customerId} added — payment ${payment.id}, $${rowData['Total Amount']}`);
+      // 8c. Add LA time formula (non-critical — don't fail the webhook if this fails)
+      step = 'la_time_formula';
+      try {
+        await addLaTimeFormulaToPrimerSheet(newRow.rowNumber);
+      } catch (formulaErr) {
+        logger.warn(`⚠️ Primer webhook: LA time formula failed for row ${newRow.rowNumber} (non-critical)`, {
+          error: formulaErr.message, paymentId, customerId
+        });
+      }
+
+      // 8d. Update in-memory cache
+      primerSheetCache.addEntry(customerId, paymentId);
+
+      logger.info(`✅ Primer webhook: NEW customer ${customerId} added — payment ${paymentId}, $${amount}`, {
+        paymentId, customerId, amount, row: newRow.rowNumber,
+        email: rowData['Email'],
+        country: rowData['Country']
+      });
+
     } finally {
       if (paymentLockId) {
         distributedLock.release(paymentLockKey, paymentLockId);
       }
     }
 
-    // 9. Send notification
+    // 9. Mark in Postgres AFTER successful sheet write
+    // CRITICAL: was previously before sheet write — if sheet failed, payment was
+    // marked as processed in DB and retries were skipped → purchase lost forever
+    step = 'postgres_mark';
+    if (paymentId) {
+      try {
+        const idem = await markPrimerPaymentOnce(paymentId);
+        if (idem.enabled && idem.error) {
+          logger.warn(`⚠️ Primer webhook: postgres mark failed for ${paymentId} (non-critical, row already in sheet)`, {
+            error: idem.error
+          });
+        }
+      } catch (pgErr) {
+        logger.warn(`⚠️ Primer webhook: postgres mark threw for ${paymentId} (non-critical)`, {
+          error: pgErr.message
+        });
+      }
+    }
+
+    // 10. Send notification
+    step = 'notification';
     const sheetData = {
       'Ad Name': rowData['Ad Name'] || 'N/A',
       'Adset Name': rowData['Adset Name'] || 'N/A',
@@ -832,8 +980,8 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
     };
 
     const notificationMessage = formatTelegramNotification(normalizedPayment, customer, sheetData);
-    const amount = parseFloat(rowData['Total Amount'] || 0);
-    const isVip = amount >= alertConfig.vipPurchaseThreshold;
+    const amountNum = parseFloat(amount || 0);
+    const isVip = amountNum >= alertConfig.vipPurchaseThreshold;
 
     await notificationQueue.add({
       type: isVip ? 'vip_new_purchase' : 'new_purchase',
@@ -843,20 +991,32 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
       customer: customer,
       sheetData: sheetData,
       metadata: {
-        paymentId: payment.id,
-        customerId: customerId,
-        amount: rowData['Total Amount'],
+        paymentId,
+        customerId,
+        amount,
         type: 'new_purchase',
-        isVip: isVip,
+        isVip,
         accountSource: 'primer'
       }
     });
 
-    return res.json({ received: true, action: 'added', customerId, paymentId: payment.id });
+    return res.json({ received: true, action: 'added', customerId, paymentId });
 
   } catch (error) {
-    logger.error('Primer webhook error', { error: error.message, stack: error.stack });
-    return res.status(500).json({ error: 'Internal server error' });
+    const errCode = error.code || error.response?.status || null;
+    logger.error(`❌ Primer webhook FAILED at step="${step}"`, {
+      step,
+      paymentId,
+      customerId,
+      eventType,
+      amount,
+      errorMessage: error.message,
+      errorCode: errCode,
+      errorName: error.name,
+      stack: error.stack,
+      googleApiCode: error.errors?.[0]?.reason || null
+    });
+    return res.status(500).json({ error: 'Internal server error', step });
   }
 });
 
@@ -999,7 +1159,8 @@ app.get('/health', async (_req, res) => {
         silentFor: lastPrimerWebhookAt
           ? `${Math.round((Date.now() - new Date(lastPrimerWebhookAt).getTime()) / 60000)}m`
           : 'never received'
-      }
+      },
+      primerSheetCache: primerSheetCache.stats()
     };
 
     const statusCode = allServicesHealthy ? 200 : 503;
