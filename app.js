@@ -4880,31 +4880,20 @@ async function performSyncLogicLowPrice(exportAll = false) {
               results.failed++;
             }
           } else if (addResult.success && !addResult.exists) {
-            // ✅ УСПЕШНО ДОБАВЛЕНО - проверяем, что строка действительно в таблице
+            // ✅ УСПЕШНО ДОБАВЛЕНО — addRow() уже вернул успех, строка в таблице
+            rowSaved = true;
+            results.newPurchases++;
+
+            // LA time formula (non-critical)
             try {
               await addLaTimeFormulaToLowPriceSheet(addResult.row.rowNumber);
-              
-              // Дополнительная проверка: убеждаемся, что строка сохранена
-              const verifyRows = await lowPriceSheet.getRows();
-              const verifyRow = verifyRows.find(r => r.get('Customer ID') === customerId);
-              
-              if (!verifyRow) {
-                logger.error(`❌ CRITICAL: Row for ${customerId} not found in sheet after add! NOT sending notification.`);
-                results.failed++;
-                rowSaved = false;
-              } else {
-                rowSaved = true;
-                results.newPurchases++;
-                logger.info(`✅ VERIFIED: Low Price customer ${customerId} successfully added to sheet (row ${verifyRow.rowNumber})`);
-              }
-            } catch (verifyError) {
-              logger.error(`❌ CRITICAL: Error verifying row for ${customerId}`, {
-                error: verifyError.message,
-                customerId
+            } catch (formulaErr) {
+              logger.warn(`⚠️ LA time formula failed for Low Price row ${addResult.row.rowNumber} (non-critical)`, {
+                error: formulaErr.message, customerId
               });
-              results.failed++;
-              rowSaved = false;
             }
+
+            logger.info(`✅ Low Price customer ${customerId} added (row ${addResult.row.rowNumber})`);
             
             // ✅ ОТПРАВЛЯЕМ УВЕДОМЛЕНИЕ ТОЛЬКО ЕСЛИ СТРОКА УСПЕШНО СОХРАНЕНА В ТАБЛИЦУ
             if (rowSaved) {
