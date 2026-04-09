@@ -895,7 +895,11 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
     primerInFlight.set(paymentId, inFlightPromise);
 
     try {
-      // 8a. Sheet-level duplicate check (backup to cache)
+      // 8a. Sheet-level duplicate check — ONLY if cache is stale.
+      // When cache is fresh (< 5 min old), we trust it completely to avoid
+      // hammering Google Sheets API (which has been hitting quota limits
+      // due to 56k+ rows in Primer sheet and 69k+ in LowPrice).
+      // Postgres idempotency (step 9) is the final backstop against duplicates.
       step = 'sheet_duplicate_check';
       const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
       const primerSheet = await retrySheetOp(
@@ -908,29 +912,32 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
         { label: 'loadHeaderRow' }
       );
 
-      const existingRows = await retrySheetOp(
-        () => primerSheet.getRows(),
-        { label: 'getRows' }
-      );
+      if (primerSheetCache.isStale()) {
+        logger.info(`🔍 Primer webhook: cache is stale, doing full sheet check for ${paymentId}`);
+        const existingRows = await retrySheetOp(
+          () => primerSheet.getRows(),
+          { label: 'getRows' }
+        );
 
-      const paymentExists = existingRows.some(row => {
-        const idsRaw = row.get('Payment Intent IDs') || '';
-        return String(idsRaw).split(',').map(v => v.trim()).filter(Boolean).includes(paymentId);
-      });
+        const paymentExists = existingRows.some(row => {
+          const idsRaw = row.get('Payment Intent IDs') || '';
+          return String(idsRaw).split(',').map(v => v.trim()).filter(Boolean).includes(paymentId);
+        });
 
-      if (paymentExists) {
-        primerSheetCache.addEntry(null, paymentId);
-        logger.info(`⏭️ Primer webhook: payment ${paymentId} already in sheet, skipping`);
-        resolveInFlight();
-        return res.json({ received: true, skipped: true, reason: 'already exists' });
-      }
+        if (paymentExists) {
+          primerSheetCache.addEntry(null, paymentId);
+          logger.info(`⏭️ Primer webhook: payment ${paymentId} already in sheet, skipping`);
+          resolveInFlight();
+          return res.json({ received: true, skipped: true, reason: 'already exists' });
+        }
 
-      const customerExists = existingRows.some(row => row.get('Customer ID') === customerId);
-      if (customerExists) {
-        primerSheetCache.addEntry(customerId, null);
-        logger.info(`⏭️ Primer webhook: customer ${customerId} already in sheet — skipping rebill, payment ${paymentId}`);
-        resolveInFlight();
-        return res.json({ received: true, skipped: true, reason: 'customer exists - rebill' });
+        const customerExists = existingRows.some(row => row.get('Customer ID') === customerId);
+        if (customerExists) {
+          primerSheetCache.addEntry(customerId, null);
+          logger.info(`⏭️ Primer webhook: customer ${customerId} already in sheet — skipping rebill, payment ${paymentId}`);
+          resolveInFlight();
+          return res.json({ received: true, skipped: true, reason: 'customer exists - rebill' });
+        }
       }
 
       // 8b. New customer — add row to sheet
