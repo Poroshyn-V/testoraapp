@@ -745,6 +745,13 @@ setInterval(() => {
   if (primerSheetCache.isStale()) primerSheetCache.refresh().catch(() => {});
 }, 3 * 60 * 1000);
 
+// In-flight map: tracks webhook processing for each paymentId.
+// Prevents race condition where two concurrent webhooks for the same
+// paymentId both pass cache/sheet check and both write a row.
+// Only blocks concurrent duplicates of the same payment — does NOT
+// block sync or other webhooks.
+const primerInFlight = new Map(); // paymentId -> Promise
+
 // Helper: retry Google Sheets operation with exponential backoff
 async function retrySheetOp(fn, { maxRetries = 3, label = 'sheet op' } = {}) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -867,77 +874,106 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
       }
     }
 
-    // 8. Sheet-level duplicate check + write (no lock — dedup via cache + sheet check + Postgres)
-    // Lock removed: sync process holds Google Sheets locks for 10-20s, causing ALL webhooks
-    // to fail at acquire_lock. We have 3 layers of dedup protection:
-    //   Layer 1: primerSheetCache (in-memory, checked above at step 7)
-    //   Layer 2: sheet-level check below (reads actual rows)
-    //   Layer 3: Postgres idempotency (markPrimerPaymentOnce, checked at step 6)
-    step = 'sheet_duplicate_check';
-    const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
-    const primerSheet = await retrySheetOp(
-      () => googleSheets.getSheetByName(PRIMER_SHEET_NAME),
-      { label: `getSheet(${PRIMER_SHEET_NAME})` }
-    );
-
-    await retrySheetOp(
-      () => primerSheet.loadHeaderRow(),
-      { label: 'loadHeaderRow' }
-    );
-
-    const existingRows = await retrySheetOp(
-      () => primerSheet.getRows(),
-      { label: 'getRows' }
-    );
-
-    const paymentExists = existingRows.some(row => {
-      const idsRaw = row.get('Payment Intent IDs') || '';
-      return String(idsRaw).split(',').map(v => v.trim()).filter(Boolean).includes(paymentId);
-    });
-
-    if (paymentExists) {
-      primerSheetCache.addEntry(null, paymentId);
-      logger.info(`⏭️ Primer webhook: payment ${paymentId} already in sheet, skipping`);
-      return res.json({ received: true, skipped: true, reason: 'already exists' });
+    // 8. In-flight check — prevents race condition between concurrent webhooks
+    // for the same paymentId. If another webhook is currently processing this
+    // payment, wait for it to finish and return skip.
+    step = 'in_flight_check';
+    if (primerInFlight.has(paymentId)) {
+      try {
+        await primerInFlight.get(paymentId);
+        logger.info(`⏭️ Primer webhook: payment ${paymentId} was processed concurrently, skipping`);
+        return res.json({ received: true, skipped: true, reason: 'concurrent duplicate' });
+      } catch {
+        // Previous attempt failed — fall through and retry
+        logger.info(`🔁 Primer webhook: previous concurrent attempt for ${paymentId} failed, retrying`);
+      }
     }
 
-    const customerExists = existingRows.some(row => row.get('Customer ID') === customerId);
-    if (customerExists) {
-      primerSheetCache.addEntry(customerId, null);
-      logger.info(`⏭️ Primer webhook: customer ${customerId} already in sheet — skipping rebill, payment ${paymentId}`);
-      return res.json({ received: true, skipped: true, reason: 'customer exists - rebill' });
-    }
+    // Reserve this paymentId — any concurrent webhook will await this promise
+    let resolveInFlight, rejectInFlight;
+    const inFlightPromise = new Promise((res, rej) => { resolveInFlight = res; rejectInFlight = rej; });
+    primerInFlight.set(paymentId, inFlightPromise);
 
-    // 8b. New customer — add row to sheet
-    step = 'add_row';
-    rowData['Payment Intent IDs'] = paymentId;
-    rowData['Payment Count'] = '1';
-    rowData['Total Amount'] = amount;
-    rowData['Purchase ID'] = `purchase_${customerId}_${normalizedPayment.created}`;
-
-    const newRow = await retrySheetOp(
-      () => primerSheet.addRow(rowData),
-      { label: `addRow(${customerId})` }
-    );
-
-    // 8c. Add LA time formula (non-critical — don't fail the webhook if this fails)
-    step = 'la_time_formula';
     try {
-      await addLaTimeFormulaToPrimerSheet(newRow.rowNumber);
-    } catch (formulaErr) {
-      logger.warn(`⚠️ Primer webhook: LA time formula failed for row ${newRow.rowNumber} (non-critical)`, {
-        error: formulaErr.message, paymentId, customerId
+      // 8a. Sheet-level duplicate check (backup to cache)
+      step = 'sheet_duplicate_check';
+      const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
+      const primerSheet = await retrySheetOp(
+        () => googleSheets.getSheetByName(PRIMER_SHEET_NAME),
+        { label: `getSheet(${PRIMER_SHEET_NAME})` }
+      );
+
+      await retrySheetOp(
+        () => primerSheet.loadHeaderRow(),
+        { label: 'loadHeaderRow' }
+      );
+
+      const existingRows = await retrySheetOp(
+        () => primerSheet.getRows(),
+        { label: 'getRows' }
+      );
+
+      const paymentExists = existingRows.some(row => {
+        const idsRaw = row.get('Payment Intent IDs') || '';
+        return String(idsRaw).split(',').map(v => v.trim()).filter(Boolean).includes(paymentId);
       });
+
+      if (paymentExists) {
+        primerSheetCache.addEntry(null, paymentId);
+        logger.info(`⏭️ Primer webhook: payment ${paymentId} already in sheet, skipping`);
+        resolveInFlight();
+        return res.json({ received: true, skipped: true, reason: 'already exists' });
+      }
+
+      const customerExists = existingRows.some(row => row.get('Customer ID') === customerId);
+      if (customerExists) {
+        primerSheetCache.addEntry(customerId, null);
+        logger.info(`⏭️ Primer webhook: customer ${customerId} already in sheet — skipping rebill, payment ${paymentId}`);
+        resolveInFlight();
+        return res.json({ received: true, skipped: true, reason: 'customer exists - rebill' });
+      }
+
+      // 8b. New customer — add row to sheet
+      step = 'add_row';
+      rowData['Payment Intent IDs'] = paymentId;
+      rowData['Payment Count'] = '1';
+      rowData['Total Amount'] = amount;
+      rowData['Purchase ID'] = `purchase_${customerId}_${normalizedPayment.created}`;
+
+      const newRow = await retrySheetOp(
+        () => primerSheet.addRow(rowData),
+        { label: `addRow(${customerId})` }
+      );
+
+      // 8c. Add LA time formula (non-critical)
+      step = 'la_time_formula';
+      try {
+        await addLaTimeFormulaToPrimerSheet(newRow.rowNumber);
+      } catch (formulaErr) {
+        logger.warn(`⚠️ Primer webhook: LA time formula failed for row ${newRow.rowNumber} (non-critical)`, {
+          error: formulaErr.message, paymentId, customerId
+        });
+      }
+
+      // 8d. Update in-memory cache
+      primerSheetCache.addEntry(customerId, paymentId);
+
+      logger.info(`✅ Primer webhook: NEW customer ${customerId} added — payment ${paymentId}, $${amount}`, {
+        paymentId, customerId, amount, row: newRow.rowNumber,
+        email: rowData['Email'],
+        country: rowData['Country']
+      });
+
+      resolveInFlight();
+    } catch (err) {
+      rejectInFlight(err);
+      throw err;
+    } finally {
+      // Always clean up the in-flight map
+      if (primerInFlight.get(paymentId) === inFlightPromise) {
+        primerInFlight.delete(paymentId);
+      }
     }
-
-    // 8d. Update in-memory cache
-    primerSheetCache.addEntry(customerId, paymentId);
-
-    logger.info(`✅ Primer webhook: NEW customer ${customerId} added — payment ${paymentId}, $${amount}`, {
-      paymentId, customerId, amount, row: newRow.rowNumber,
-      email: rowData['Email'],
-      country: rowData['Country']
-    });
 
     // 9. Mark in Postgres AFTER successful sheet write
     // CRITICAL: was previously before sheet write — if sheet failed, payment was
