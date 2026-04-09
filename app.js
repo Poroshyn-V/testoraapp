@@ -20,7 +20,7 @@ import { campaignAnalyzer } from './src/services/campaignAnalyzer.js';
 import { duplicateChecker } from './src/services/duplicateChecker.js';
 import { formatPaymentForSheets, formatPaymentForSheetsLowPrice, formatPaymentForSheetsPrimer, formatTelegramNotification } from './src/utils/formatting.js';
 import { getRecentPaymentsPrimer, getAllPaymentsPrimer, getCustomerPaymentsPrimer, getCustomerPrimer, normalizePrimerPayment, isPrimerConfigured } from './src/services/primer.js';
-import { markPrimerPaymentOnce } from './src/services/primerIdempotencyStore.js';
+import { markPrimerPaymentOnce, isPrimerPaymentProcessed } from './src/services/primerIdempotencyStore.js';
 import healthRoutes from './src/routes/health.js';
 import { google } from 'googleapis';
 import { fetchWithRetry as fetchWithRetryUtil } from './src/utils/retry.js';
@@ -752,6 +752,32 @@ setInterval(() => {
 // block sync or other webhooks.
 const primerInFlight = new Map(); // paymentId -> Promise
 
+// Cached Primer sheet reference — avoids calling getSheetByName +
+// loadHeaderRow on every webhook (each call hits Google Sheets API
+// and contributes to quota exhaustion).
+let cachedPrimerSheet = null;
+let cachedPrimerSheetLoadedAt = 0;
+const PRIMER_SHEET_REF_TTL = 10 * 60 * 1000; // 10 minutes
+
+async function getPrimerSheetCached() {
+  const now = Date.now();
+  if (cachedPrimerSheet && (now - cachedPrimerSheetLoadedAt) < PRIMER_SHEET_REF_TTL) {
+    return cachedPrimerSheet;
+  }
+  const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
+  const sheet = await retrySheetOp(
+    () => googleSheets.getSheetByName(PRIMER_SHEET_NAME),
+    { label: `getSheet(${PRIMER_SHEET_NAME})` }
+  );
+  await retrySheetOp(
+    () => sheet.loadHeaderRow(),
+    { label: 'loadHeaderRow' }
+  );
+  cachedPrimerSheet = sheet;
+  cachedPrimerSheetLoadedAt = now;
+  return sheet;
+}
+
 // Helper: retry Google Sheets operation with exponential backoff
 async function retrySheetOp(fn, { maxRetries = 3, label = 'sheet op' } = {}) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -861,6 +887,24 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
 
     amount = (normalizedPayment.amount / 100).toFixed(2);
 
+    // 6.5. Postgres idempotency check (read-only, fast — no Google API)
+    // If this payment was already successfully processed before (Primer retry),
+    // skip immediately without touching Google Sheets.
+    step = 'postgres_idempotency_check';
+    if (paymentId) {
+      try {
+        const alreadyProcessed = await isPrimerPaymentProcessed(paymentId);
+        if (alreadyProcessed) {
+          logger.info(`⏭️ Primer webhook: payment ${paymentId} already processed (db), skipping`, { customerId });
+          return res.json({ received: true, skipped: true, reason: 'already processed (db)' });
+        }
+      } catch (dbErr) {
+        logger.warn(`⚠️ Primer webhook: postgres idempotency check failed (fail-open)`, {
+          error: dbErr.message, paymentId
+        });
+      }
+    }
+
     // 7. In-memory cache duplicate check (fast, no API calls)
     step = 'cache_check';
     if (primerSheetCache.lastRefresh) {
@@ -895,23 +939,15 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
     primerInFlight.set(paymentId, inFlightPromise);
 
     try {
+      // 8. Get cached sheet reference (only hits Google API once per 10 min)
+      step = 'get_sheet_ref';
+      const primerSheet = await getPrimerSheetCached();
+
       // 8a. Sheet-level duplicate check — ONLY if cache is stale.
       // When cache is fresh (< 5 min old), we trust it completely to avoid
-      // hammering Google Sheets API (which has been hitting quota limits
-      // due to 56k+ rows in Primer sheet and 69k+ in LowPrice).
-      // Postgres idempotency (step 9) is the final backstop against duplicates.
+      // hammering Google Sheets API. Postgres idempotency (step 6.5 + 9) is
+      // the final backstop against duplicates.
       step = 'sheet_duplicate_check';
-      const PRIMER_SHEET_NAME = ENV.PRIMER_SHEET_NAME || 'Primer';
-      const primerSheet = await retrySheetOp(
-        () => googleSheets.getSheetByName(PRIMER_SHEET_NAME),
-        { label: `getSheet(${PRIMER_SHEET_NAME})` }
-      );
-
-      await retrySheetOp(
-        () => primerSheet.loadHeaderRow(),
-        { label: 'loadHeaderRow' }
-      );
-
       if (primerSheetCache.isStale()) {
         logger.info(`🔍 Primer webhook: cache is stale, doing full sheet check for ${paymentId}`);
         const existingRows = await retrySheetOp(
@@ -973,6 +1009,8 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
 
       resolveInFlight();
     } catch (err) {
+      // Invalidate cached sheet ref on error — next webhook will reload it
+      cachedPrimerSheet = null;
       rejectInFlight(err);
       throw err;
     } finally {
@@ -1038,13 +1076,15 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
 
   } catch (error) {
     const errCode = error.code || error.response?.status || null;
-    logger.error(`❌ Primer webhook FAILED at step="${step}"`, {
+    const errMsg = error.message || 'unknown';
+    // Log everything in the main message so Railway shows it even when attributes are truncated
+    logger.error(`❌ Primer webhook FAILED at step="${step}" payment=${paymentId} customer=${customerId} code=${errCode} error="${errMsg}"`, {
       step,
       paymentId,
       customerId,
       eventType,
       amount,
-      errorMessage: error.message,
+      errorMessage: errMsg,
       errorCode: errCode,
       errorName: error.name,
       stack: error.stack,

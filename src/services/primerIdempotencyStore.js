@@ -48,6 +48,31 @@ async function ensureInit() {
 }
 
 /**
+ * Read-only check: has this payment already been processed?
+ * Returns false on any error (fail-open) — the caller will fall back to
+ * sheet-level dedup.
+ * @returns {Promise<boolean>}
+ */
+export async function isPrimerPaymentProcessed(paymentId) {
+  const url = getDatabaseUrl();
+  if (!url || !paymentId) return false;
+
+  const { enabled } = await ensureInit();
+  if (!enabled) return false;
+
+  try {
+    const res = await pool.query(
+      `SELECT 1 FROM primer_webhook_processed WHERE payment_id = $1 LIMIT 1;`,
+      [paymentId]
+    );
+    return res.rowCount > 0;
+  } catch (e) {
+    logger.error({ err: e, paymentId }, 'Primer idempotency read check failed');
+    return false;
+  }
+}
+
+/**
  * Atomically marks payment as processed.
  * @returns {Promise<{enabled: boolean, inserted: boolean, error?: string}>}
  */
