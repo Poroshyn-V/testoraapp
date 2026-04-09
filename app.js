@@ -3789,7 +3789,29 @@ async function performSyncLogic() {
     }
     
     logger.info(`👥 Grouped ${newPayments.length} payments into ${customerGroups.size} customer groups`);
-      
+
+      // ✅ CRITICAL OPTIMIZATION: Load main sheet rows ONCE and build a
+      // customerId -> rows Map. Previously the loop called mainSheet.getRows()
+      // for EVERY customer → quota exhaustion.
+      let mainRowsByCustomerId = new Map();
+      try {
+        const allMainRowsOnce = await fetchWithRetryUtil(
+          async () => mainSheet.getRows(),
+          5,
+          2000
+        );
+        for (const row of allMainRowsOnce) {
+          const cid = row.get('Customer ID');
+          if (!cid) continue;
+          if (!mainRowsByCustomerId.has(cid)) mainRowsByCustomerId.set(cid, []);
+          mainRowsByCustomerId.get(cid).push(row);
+        }
+        logger.info(`📇 Built main customer index: ${mainRowsByCustomerId.size} unique customers from ${allMainRowsOnce.length} rows`);
+      } catch (err) {
+        logger.error(`❌ Failed to load main sheet rows for index, aborting sync`, { error: err.message });
+        throw err;
+      }
+
       // Process each customer group
       for (const [customerId, payments] of customerGroups.entries()) {
         // 🔒 Получаем блокировку для этого клиента
@@ -3822,44 +3844,30 @@ async function performSyncLogic() {
         }
         
         try {
-          // ✅ ОПТИМИЗАЦИЯ: Загружаем customer и rows параллельно (они независимы)
-          // Используем Promise.allSettled для надежности - если один запрос упадет, другой все равно выполнится
-          const [customerResult, rowsResult] = await Promise.allSettled([
-            fetchWithRetry(() => getCustomer(customerId)),
-            mainSheet.getRows()
-          ]);
-          
-          // Проверяем результаты
-          if (customerResult.status === 'rejected') {
-            logger.error(`Failed to fetch customer ${customerId}`, { error: customerResult.reason?.message });
+          // Fetch customer from Stripe (rows come from pre-built index — no API call)
+          let customer;
+          try {
+            customer = await fetchWithRetry(() => getCustomer(customerId));
+          } catch (err) {
+            logger.error(`Failed to fetch customer ${customerId}`, { error: err?.message });
             results.failed++;
-            results.errors.push({ customerId, error: customerResult.reason?.message });
+            results.errors.push({ customerId, error: err?.message });
             continue;
           }
-          
-          if (rowsResult.status === 'rejected') {
-            logger.error(`Failed to fetch rows from sheet`, { error: rowsResult.reason?.message });
-            results.failed++;
-            results.errors.push({ customerId, error: 'Failed to load sheet rows' });
-            continue;
-          }
-          
-          const customer = customerResult.value;
-          const allMainRows = rowsResult.value;
-          
+
           if (!customer) {
             logger.warn(`Customer ${customerId} not found in Stripe`);
             results.skipped += payments.length;
             continue;
           }
-          
+
           // Sort payments by creation date
           payments.sort((a, b) => a.created - b.created);
           const firstPayment = payments[0];
           const latestPayment = payments[payments.length - 1];
-          
-          // ✅ КРИТИЧЕСКИ ВАЖНО: Используем уже загруженные строки
-          const existingCustomers = allMainRows.filter(row => row.get('Customer ID') === customerId);
+
+          // ✅ Lookup from pre-built index (no Google API call)
+          const existingCustomers = mainRowsByCustomerId.get(customerId) || [];
           
           if (existingCustomers.length > 0) {
             // Customer exists - UPDATE
@@ -4022,12 +4030,8 @@ async function performSyncLogic() {
             rowData['Payment Count'] = allSuccessfulPayments.length.toString();
             rowData['Payment Intent IDs'] = paymentIds.join(', ');
             
-            // ✅ КРИТИЧЕСКИ ВАЖНО: Добавляем НАПРЯМУЮ в mainSheet, без использования googleSheets.sheet
-            // Проверяем существование напрямую в mainSheet
-            const existingInMain = allMainRows.filter(row => {
-              const rowCustomerId = row.get('Customer ID');
-              return rowCustomerId === customerId;
-            });
+            // ✅ Lookup from pre-built index (no Google API call)
+            const existingInMain = mainRowsByCustomerId.get(customerId) || [];
             
             let addResult;
             if (existingInMain.length > 0) {
@@ -4603,7 +4607,22 @@ async function performSyncLogicLowPrice(exportAll = false) {
     }
     
     logger.info(`📦 Grouped ${newPayments.length} payments into ${customerGroups.size} customer groups`);
-    
+
+    // ✅ CRITICAL OPTIMIZATION: Build customerId -> rows map ONCE from
+    // already-loaded existingRows. Previously the loop called
+    // lowPriceSheet.getRows() for EVERY customer (69k rows × N customers
+    // = millions of rows read per sync → quota exhaustion).
+    const existingRowsByCustomerId = new Map();
+    for (const row of existingRows) {
+      const cid = row.get('Customer ID');
+      if (!cid) continue;
+      if (!existingRowsByCustomerId.has(cid)) {
+        existingRowsByCustomerId.set(cid, []);
+      }
+      existingRowsByCustomerId.get(cid).push(row);
+    }
+    logger.info(`📇 Built LowPrice customer index: ${existingRowsByCustomerId.size} unique customers`);
+
     // Process each customer group
     for (const [customerId, payments] of customerGroups.entries()) {
       // 🔒 Получаем блокировку для этого клиента
@@ -4636,117 +4655,31 @@ async function performSyncLogicLowPrice(exportAll = false) {
       }
       
       try {
-        // ✅ ОПТИМИЗАЦИЯ: Загружаем customer и rows параллельно (они независимы)
+        // Fetch customer from Stripe (rows come from pre-built index — no API call)
         logger.info(`🔍 Checking if customer ${customerId} exists in LowPrice sheet "${lowPriceSheet.title}"...`);
-        // Используем Promise.allSettled для надежности - если один запрос упадет, другой все равно выполнится
-        // Обертываем getRows в retry логику с обработкой 429 ошибок
-        const [customerResult, rowsResult] = await Promise.allSettled([
-          fetchWithRetry(() => getCustomerLowPrice(customerId)),
-          fetchWithRetryUtil(
-            async () => {
-              return await handleGoogleSheetsOperation(
-                () => lowPriceSheet.getRows(),
-                LOW_PRICE_SHEET_NAME
-              );
-            },
-            5, // maxRetries - больше попыток для quota errors
-            2000 // initial delay
-          )
-        ]);
-        
-        // Проверяем результаты
-        if (customerResult.status === 'rejected') {
-          logger.error(`Failed to fetch Low Price customer ${customerId}`, { error: customerResult.reason?.message });
+        let customer;
+        try {
+          customer = await fetchWithRetry(() => getCustomerLowPrice(customerId));
+        } catch (err) {
+          logger.error(`Failed to fetch Low Price customer ${customerId}`, { error: err?.message });
           results.failed++;
-          results.errors.push({ customerId, error: customerResult.reason?.message });
+          results.errors.push({ customerId, error: err?.message });
           continue;
         }
-        
-        if (rowsResult.status === 'rejected') {
-          const error = rowsResult.reason;
-          const errorMessage = error?.message || '';
-          const errorCode = error?.code || '';
-          const errorReason = error?.reason || '';
-          const statusCode = error?.response?.status || error?.status;
-          
-          // Проверяем различные типы retryable ошибок
-          const isQuotaError = statusCode === 429 || 
-                              errorMessage.includes('429') || 
-                              errorMessage.includes('Quota exceeded') ||
-                              errorMessage.includes('rateLimitExceeded');
-          
-          const isTimeoutError = errorCode === 'ETIMEDOUT' || 
-                                 errorMessage.includes('ETIMEDOUT') ||
-                                 errorMessage.includes('timeout') ||
-                                 errorReason.includes('ETIMEDOUT');
-          
-          const isNetworkError = errorCode === 'ECONNRESET' || 
-                                 errorCode === 'ENOTFOUND' || 
-                                 errorCode === 'ECONNREFUSED' ||
-                                 errorMessage.includes('ECONNRESET') ||
-                                 errorMessage.includes('ENOTFOUND') ||
-                                 errorMessage.includes('ECONNREFUSED') ||
-                                 errorMessage.includes('connect');
-          
-          const isTokenError = statusCode === 401 || 
-                              errorMessage.includes('401') || 
-                              errorMessage.includes('Unauthorized') ||
-                              errorMessage.includes('invalid_grant') ||
-                              errorMessage.includes('invalid_token');
-          
-          const isRetryableError = isQuotaError || isTimeoutError || isNetworkError || isTokenError;
-          
-          // Если это retryable ошибка, логируем как предупреждение, а не ошибку
-          if (isRetryableError) {
-            const errorType = isQuotaError ? 'quota exceeded' : 
-                            isTimeoutError ? 'timeout' : 
-                            isNetworkError ? 'network error' : 
-                            'token error';
-            
-            logger.warn(`⚠️ Google Sheets ${errorType}, skipping customer ${customerId} for now`, {
-              error: errorMessage,
-              errorCode,
-              statusCode,
-              customerId,
-              paymentCount: payments.length
-            });
-            results.skipped += payments.length;
-            continue;
-          }
-          
-          // Для других ошибок логируем как ошибку
-          logger.error(`Failed to fetch rows from LowPrice sheet`, { 
-            error: errorMessage,
-            errorCode,
-            statusCode,
-            customerId,
-            paymentCount: payments.length
-          });
-          
-          results.failed++;
-          results.errors.push({ customerId, error: 'Failed to load LowPrice sheet rows' });
-          continue;
-        }
-        
-        const customer = customerResult.value;
-        const allLowPriceRows = rowsResult.value;
-        
+
         if (!customer) {
           logger.warn(`Low Price customer ${customerId} not found in Stripe`);
           results.skipped += payments.length;
           continue;
         }
-        
+
         // Sort payments by creation date
         payments.sort((a, b) => a.created - b.created);
         const firstPayment = payments[0];
         const latestPayment = payments[payments.length - 1];
-        
-        // ✅ КРИТИЧЕСКИ ВАЖНО: Используем уже загруженные строки
-        const existingCustomers = allLowPriceRows.filter(row => {
-          const rowCustomerId = row.get('Customer ID');
-          return rowCustomerId === customerId;
-        });
+
+        // ✅ Lookup from pre-built index (no Google API call)
+        const existingCustomers = existingRowsByCustomerId.get(customerId) || [];
         
         logger.info(`🔍 Found ${existingCustomers.length} existing rows for customer ${customerId} in LowPrice sheet "${lowPriceSheet.title}"`);
         
@@ -4886,11 +4819,8 @@ async function performSyncLogicLowPrice(exportAll = false) {
           let addResult;
           let rowSaved = false;
           try {
-            // Проверяем существование напрямую в lowPriceSheet
-            const existingInLowPrice = allLowPriceRows.filter(row => {
-              const rowCustomerId = row.get('Customer ID');
-              return rowCustomerId === customerId;
-            });
+            // ✅ Lookup from pre-built index (no Google API call)
+            const existingInLowPrice = existingRowsByCustomerId.get(customerId) || [];
             
             if (existingInLowPrice.length > 0) {
               // Клиент уже существует - обновляем
@@ -5378,7 +5308,21 @@ async function performSyncLogicPrimer(exportAll = false) {
     }
     
     logger.info(`📦 Grouped ${newPayments.length} payments into ${customerGroups.size} customer groups`);
-    
+
+    // ✅ CRITICAL OPTIMIZATION: Build customerId -> rows map ONCE from
+    // already-loaded existingRows (56k+ rows). Previously the loop called
+    // primerSheet.getRows() for EVERY customer → quota exhaustion.
+    const existingRowsByCustomerIdPrimer = new Map();
+    for (const row of existingRows) {
+      const cid = row.get('Customer ID');
+      if (!cid) continue;
+      if (!existingRowsByCustomerIdPrimer.has(cid)) {
+        existingRowsByCustomerIdPrimer.set(cid, []);
+      }
+      existingRowsByCustomerIdPrimer.get(cid).push(row);
+    }
+    logger.info(`📇 Built Primer customer index: ${existingRowsByCustomerIdPrimer.size} unique customers`);
+
     // Process each customer group
     for (const [customerId, payments] of customerGroups.entries()) {
       // Get customer lock
@@ -5411,96 +5355,16 @@ async function performSyncLogicPrimer(exportAll = false) {
       }
       
       try {
-        // Load customer and rows in parallel with retry logic for quota errors
-        const [customerResult, rowsResult] = await Promise.allSettled([
-          fetchWithRetry(() => getCustomerPrimer(customerId)),
-          fetchWithRetryUtil(
-            async () => {
-              return await handleGoogleSheetsOperation(
-                () => primerSheet.getRows(),
-                PRIMER_SHEET_NAME
-              );
-            },
-            5, // maxRetries - больше попыток для quota errors
-            2000 // initial delay
-          )
-        ]);
-        
-        if (customerResult.status === 'rejected') {
-          logger.error(`Failed to fetch Primer customer ${customerId}`, { error: customerResult.reason?.message });
+        // Fetch customer from Primer (rows come from pre-built index — no API call)
+        let customer;
+        try {
+          customer = await fetchWithRetry(() => getCustomerPrimer(customerId));
+        } catch (err) {
+          logger.error(`Failed to fetch Primer customer ${customerId}`, { error: err?.message });
           results.failed++;
-          results.errors.push({ customerId, error: customerResult.reason?.message });
+          results.errors.push({ customerId, error: err?.message });
           continue;
         }
-        
-        if (rowsResult.status === 'rejected') {
-          const error = rowsResult.reason;
-          const errorMessage = error?.message || '';
-          const errorCode = error?.code || '';
-          const errorReason = error?.reason || '';
-          const statusCode = error?.response?.status || error?.status;
-          
-          // Проверяем различные типы retryable ошибок
-          const isQuotaError = statusCode === 429 || 
-                              errorMessage.includes('429') || 
-                              errorMessage.includes('Quota exceeded') ||
-                              errorMessage.includes('rateLimitExceeded');
-          
-          const isTimeoutError = errorCode === 'ETIMEDOUT' || 
-                                 errorMessage.includes('ETIMEDOUT') ||
-                                 errorMessage.includes('timeout') ||
-                                 errorReason.includes('ETIMEDOUT');
-          
-          const isNetworkError = errorCode === 'ECONNRESET' || 
-                                 errorCode === 'ENOTFOUND' || 
-                                 errorCode === 'ECONNREFUSED' ||
-                                 errorMessage.includes('ECONNRESET') ||
-                                 errorMessage.includes('ENOTFOUND') ||
-                                 errorMessage.includes('ECONNREFUSED') ||
-                                 errorMessage.includes('connect');
-          
-          const isTokenError = statusCode === 401 || 
-                              errorMessage.includes('401') || 
-                              errorMessage.includes('Unauthorized') ||
-                              errorMessage.includes('invalid_grant') ||
-                              errorMessage.includes('invalid_token');
-          
-          const isRetryableError = isQuotaError || isTimeoutError || isNetworkError || isTokenError;
-          
-          // Если это retryable ошибка, логируем как предупреждение, а не ошибку
-          if (isRetryableError) {
-            const errorType = isQuotaError ? 'quota exceeded' : 
-                            isTimeoutError ? 'timeout' : 
-                            isNetworkError ? 'network error' : 
-                            'token error';
-            
-            logger.warn(`⚠️ Google Sheets ${errorType}, skipping customer ${customerId} for now`, {
-              error: errorMessage,
-              errorCode,
-              statusCode,
-              customerId,
-              paymentCount: payments.length
-            });
-            results.skipped += payments.length;
-            continue;
-          }
-          
-          // Для других ошибок логируем как ошибку
-          logger.error(`Failed to fetch rows from Primer sheet`, { 
-            error: errorMessage,
-            errorCode,
-            statusCode,
-            customerId,
-            paymentCount: payments.length
-          });
-          
-          results.failed++;
-          results.errors.push({ customerId, error: 'Failed to load Primer sheet rows' });
-          continue;
-        }
-        
-        let customer = customerResult.value;
-        const allPrimerRows = rowsResult.value;
         
         // ✅ КРИТИЧЕСКИ ВАЖНО: Извлекаем email и GEO из всех возможных источников
         const firstPayment = payments[0];
@@ -5621,11 +5485,8 @@ async function performSyncLogicPrimer(exportAll = false) {
         // Sort payments by creation date
         payments.sort((a, b) => a.created - b.created);
         
-        // Check if customer exists
-        const existingCustomers = allPrimerRows.filter(row => {
-          const rowCustomerId = row.get('Customer ID');
-          return rowCustomerId === customerId;
-        });
+        // Check if customer exists (from pre-built index — no Google API call)
+        const existingCustomers = existingRowsByCustomerIdPrimer.get(customerId) || [];
         
         if (existingCustomers.length > 0) {
           // Customer exists - UPDATE
