@@ -778,18 +778,29 @@ async function getPrimerSheetCached() {
   return sheet;
 }
 
-// Helper: retry Google Sheets operation with exponential backoff
-async function retrySheetOp(fn, { maxRetries = 3, label = 'sheet op' } = {}) {
+// Helper: retry Google Sheets operation with exponential backoff.
+// Quota errors (429) get longer waits to let the per-minute window reset.
+async function retrySheetOp(fn, { maxRetries = 6, label = 'sheet op' } = {}) {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       return await fn();
     } catch (err) {
       const code = err.code || err.response?.status || 0;
-      const isRetryable = [409, 429, 500, 502, 503].includes(code) ||
-        /aborted|unavailable|internal error|ECONNRESET|ETIMEDOUT/i.test(err.message);
+      const msg = err.message || '';
+      const isQuota = code === 429 || /Quota exceeded|rateLimitExceeded|429/i.test(msg);
+      const isRetryable = isQuota || [409, 500, 502, 503].includes(code) ||
+        /aborted|unavailable|internal error|ECONNRESET|ETIMEDOUT/i.test(msg);
       if (!isRetryable || attempt === maxRetries) throw err;
-      const delay = Math.min(1000 * Math.pow(2, attempt - 1) + Math.random() * 500, 8000);
-      logger.warn(`⚠️ ${label}: attempt ${attempt}/${maxRetries} failed (${code || err.message}), retrying in ${Math.round(delay)}ms`);
+      // For quota errors: longer waits to clear the 60s rolling window.
+      // 10s, 20s, 40s, 60s, 60s (cap)
+      // For other retryable errors: shorter exponential backoff.
+      let delay;
+      if (isQuota) {
+        delay = Math.min(10_000 * Math.pow(2, attempt - 1) + Math.random() * 2000, 60_000);
+      } else {
+        delay = Math.min(1000 * Math.pow(2, attempt - 1) + Math.random() * 500, 8000);
+      }
+      logger.warn(`⚠️ ${label}: attempt ${attempt}/${maxRetries} failed (${code || msg}), retrying in ${Math.round(delay)}ms${isQuota ? ' [QUOTA]' : ''}`);
       await new Promise(r => setTimeout(r, delay));
     }
   }
@@ -905,51 +916,79 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
       }
     }
 
+    // 6.6. FIRE-AND-FORGET: respond 200 OK to Primer NOW so their retry loop
+    // doesn't hammer us during Google Sheets quota exhaustion. The actual
+    // sheet write + notification happen in background below. Postgres
+    // idempotency ensures that if Primer retries anyway, we dedupe correctly.
+    res.json({ received: true, queued: true, paymentId, customerId });
+
+    // Background processing — any error here is logged but does not reach Primer.
+    processPrimerPaymentInBackground({
+      paymentId, customerId, amount, normalizedPayment, customer, rowData
+    }).catch(bgErr => {
+      logger.error(`❌ Primer background task crashed for ${paymentId}`, {
+        error: bgErr.message, stack: bgErr.stack, paymentId, customerId
+      });
+    });
+    return;
+
+  } catch (error) {
+    const errCode = error.code || error.response?.status || null;
+    const errMsg = error.message || 'unknown';
+    logger.error(`❌ Primer webhook FAILED at step="${step}" payment=${paymentId} customer=${customerId} code=${errCode} error="${errMsg}"`, {
+      step, paymentId, customerId, eventType, amount,
+      errorMessage: errMsg, errorCode: errCode, errorName: error.name,
+      stack: error.stack,
+      googleApiCode: error.errors?.[0]?.reason || null
+    });
+    return res.status(500).json({ error: 'Internal server error', step });
+  }
+});
+
+/**
+ * Background processor for a validated Primer payment. Runs AFTER the webhook
+ * has already responded 200 OK to Primer. Has its own error handling — any
+ * failure here is logged but does not propagate back to Primer's retry loop.
+ */
+async function processPrimerPaymentInBackground({ paymentId, customerId, amount, normalizedPayment, customer, rowData }) {
+  let step = 'bg_start';
+  try {
     // 7. In-memory cache duplicate check (fast, no API calls)
     step = 'cache_check';
     if (primerSheetCache.lastRefresh) {
       if (primerSheetCache.hasPayment(paymentId)) {
-        logger.info(`⏭️ Primer webhook: payment ${paymentId} already in cache, skipping`, { customerId });
-        return res.json({ received: true, skipped: true, reason: 'already exists (cache)' });
+        logger.info(`⏭️ Primer bg: payment ${paymentId} already in cache, skipping`, { customerId });
+        return;
       }
       if (primerSheetCache.hasCustomer(customerId)) {
-        logger.info(`⏭️ Primer webhook: customer ${customerId} already in cache — skipping rebill`, { paymentId });
-        return res.json({ received: true, skipped: true, reason: 'customer exists - rebill (cache)' });
+        logger.info(`⏭️ Primer bg: customer ${customerId} already in cache — skipping rebill`, { paymentId });
+        return;
       }
     }
 
-    // 8. In-flight check — prevents race condition between concurrent webhooks
-    // for the same paymentId. If another webhook is currently processing this
-    // payment, wait for it to finish and return skip.
+    // In-flight check — prevents race between concurrent webhooks for same paymentId
     step = 'in_flight_check';
     if (primerInFlight.has(paymentId)) {
       try {
         await primerInFlight.get(paymentId);
-        logger.info(`⏭️ Primer webhook: payment ${paymentId} was processed concurrently, skipping`);
-        return res.json({ received: true, skipped: true, reason: 'concurrent duplicate' });
+        logger.info(`⏭️ Primer bg: payment ${paymentId} was processed concurrently, skipping`);
+        return;
       } catch {
-        // Previous attempt failed — fall through and retry
-        logger.info(`🔁 Primer webhook: previous concurrent attempt for ${paymentId} failed, retrying`);
+        logger.info(`🔁 Primer bg: previous concurrent attempt for ${paymentId} failed, retrying`);
       }
     }
 
-    // Reserve this paymentId — any concurrent webhook will await this promise
     let resolveInFlight, rejectInFlight;
-    const inFlightPromise = new Promise((res, rej) => { resolveInFlight = res; rejectInFlight = rej; });
+    const inFlightPromise = new Promise((rs, rj) => { resolveInFlight = rs; rejectInFlight = rj; });
     primerInFlight.set(paymentId, inFlightPromise);
 
     try {
-      // 8. Get cached sheet reference (only hits Google API once per 10 min)
       step = 'get_sheet_ref';
       const primerSheet = await getPrimerSheetCached();
 
-      // 8a. Sheet-level duplicate check — ONLY if cache is stale.
-      // When cache is fresh (< 5 min old), we trust it completely to avoid
-      // hammering Google Sheets API. Postgres idempotency (step 6.5 + 9) is
-      // the final backstop against duplicates.
       step = 'sheet_duplicate_check';
       if (primerSheetCache.isStale()) {
-        logger.info(`🔍 Primer webhook: cache is stale, doing full sheet check for ${paymentId}`);
+        logger.info(`🔍 Primer bg: cache is stale, doing full sheet check for ${paymentId}`);
         const existingRows = await retrySheetOp(
           () => primerSheet.getRows(),
           { label: 'getRows' }
@@ -962,21 +1001,20 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
 
         if (paymentExists) {
           primerSheetCache.addEntry(null, paymentId);
-          logger.info(`⏭️ Primer webhook: payment ${paymentId} already in sheet, skipping`);
+          logger.info(`⏭️ Primer bg: payment ${paymentId} already in sheet, skipping`);
           resolveInFlight();
-          return res.json({ received: true, skipped: true, reason: 'already exists' });
+          return;
         }
 
         const customerExists = existingRows.some(row => row.get('Customer ID') === customerId);
         if (customerExists) {
           primerSheetCache.addEntry(customerId, null);
-          logger.info(`⏭️ Primer webhook: customer ${customerId} already in sheet — skipping rebill, payment ${paymentId}`);
+          logger.info(`⏭️ Primer bg: customer ${customerId} already in sheet — skipping rebill, payment ${paymentId}`);
           resolveInFlight();
-          return res.json({ received: true, skipped: true, reason: 'customer exists - rebill' });
+          return;
         }
       }
 
-      // 8b. New customer — add row to sheet
       step = 'add_row';
       rowData['Payment Intent IDs'] = paymentId;
       rowData['Payment Count'] = '1';
@@ -988,20 +1026,18 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
         { label: `addRow(${customerId})` }
       );
 
-      // 8c. Add LA time formula (non-critical)
       step = 'la_time_formula';
       try {
         await addLaTimeFormulaToPrimerSheet(newRow.rowNumber);
       } catch (formulaErr) {
-        logger.warn(`⚠️ Primer webhook: LA time formula failed for row ${newRow.rowNumber} (non-critical)`, {
+        logger.warn(`⚠️ Primer bg: LA time formula failed for row ${newRow.rowNumber} (non-critical)`, {
           error: formulaErr.message, paymentId, customerId
         });
       }
 
-      // 8d. Update in-memory cache
       primerSheetCache.addEntry(customerId, paymentId);
 
-      logger.info(`✅ Primer webhook: NEW customer ${customerId} added — payment ${paymentId}, $${amount}`, {
+      logger.info(`✅ Primer bg: NEW customer ${customerId} added — payment ${paymentId}, $${amount}`, {
         paymentId, customerId, amount, row: newRow.rowNumber,
         email: rowData['Email'],
         country: rowData['Country']
@@ -1009,37 +1045,33 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
 
       resolveInFlight();
     } catch (err) {
-      // Invalidate cached sheet ref on error — next webhook will reload it
       cachedPrimerSheet = null;
       rejectInFlight(err);
       throw err;
     } finally {
-      // Always clean up the in-flight map
       if (primerInFlight.get(paymentId) === inFlightPromise) {
         primerInFlight.delete(paymentId);
       }
     }
 
-    // 9. Mark in Postgres AFTER successful sheet write
-    // CRITICAL: was previously before sheet write — if sheet failed, payment was
-    // marked as processed in DB and retries were skipped → purchase lost forever
+    // Mark in Postgres AFTER successful sheet write
     step = 'postgres_mark';
     if (paymentId) {
       try {
         const idem = await markPrimerPaymentOnce(paymentId);
         if (idem.enabled && idem.error) {
-          logger.warn(`⚠️ Primer webhook: postgres mark failed for ${paymentId} (non-critical, row already in sheet)`, {
+          logger.warn(`⚠️ Primer bg: postgres mark failed for ${paymentId} (non-critical, row already in sheet)`, {
             error: idem.error
           });
         }
       } catch (pgErr) {
-        logger.warn(`⚠️ Primer webhook: postgres mark threw for ${paymentId} (non-critical)`, {
+        logger.warn(`⚠️ Primer bg: postgres mark threw for ${paymentId} (non-critical)`, {
           error: pgErr.message
         });
       }
     }
 
-    // 10. Send notification
+    // Send notification
     step = 'notification';
     const sheetData = {
       'Ad Name': rowData['Ad Name'] || 'N/A',
@@ -1072,27 +1104,17 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
       }
     });
 
-    return res.json({ received: true, action: 'added', customerId, paymentId });
-
   } catch (error) {
     const errCode = error.code || error.response?.status || null;
     const errMsg = error.message || 'unknown';
-    // Log everything in the main message so Railway shows it even when attributes are truncated
-    logger.error(`❌ Primer webhook FAILED at step="${step}" payment=${paymentId} customer=${customerId} code=${errCode} error="${errMsg}"`, {
-      step,
-      paymentId,
-      customerId,
-      eventType,
-      amount,
-      errorMessage: errMsg,
-      errorCode: errCode,
-      errorName: error.name,
+    logger.error(`❌ Primer bg FAILED at step="${step}" payment=${paymentId} customer=${customerId} code=${errCode} error="${errMsg}"`, {
+      step, paymentId, customerId, amount,
+      errorMessage: errMsg, errorCode: errCode, errorName: error.name,
       stack: error.stack,
       googleApiCode: error.errors?.[0]?.reason || null
     });
-    return res.status(500).json({ error: 'Internal server error', step });
   }
-});
+}
 
 // Middleware
 app.use(express.json());
