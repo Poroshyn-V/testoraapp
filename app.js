@@ -891,8 +891,11 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
 
     const rowData = formatPaymentForSheetsPrimer(normalizedPayment, customer, { accountSource: 'primer' });
 
-    if (!rowData['Email'] || rowData['Email'] === 'N/A') {
-      logger.warn(`⏭️ Primer webhook: skipping payment without email for customer ${customerId} — likely rebill`, { paymentId, customerId });
+    const webhookEmailValue = (rowData['Email'] || '').trim();
+    if (!webhookEmailValue || webhookEmailValue === 'N/A' || !webhookEmailValue.includes('@')) {
+      logger.warn(`⏭️ Primer webhook: skipping payment without valid email for customer ${customerId} — likely rebill`, {
+        paymentId, customerId, emailFieldValue: webhookEmailValue || null
+      });
       return res.json({ received: true, skipped: true, reason: 'no email - rebill' });
     }
 
@@ -4038,7 +4041,20 @@ async function performSyncLogic() {
             const firstPayment = allSuccessfulPayments[0];
             
             const rowData = formatPaymentForSheets(firstPayment, customer);
-            
+
+            // Skip rebills: no valid email means Stripe filled the field with
+            // the ad name from the original transaction — not a new purchase.
+            const emailValueMain = (rowData['Email'] || '').trim();
+            if (!emailValueMain || emailValueMain === 'N/A' || !emailValueMain.includes('@')) {
+              logger.info(`⏭️ Main sync: skipping customer ${customerId} — no valid email (rebill)`, {
+                customerId,
+                paymentId: firstPayment.id,
+                emailFieldValue: emailValueMain || null
+              });
+              results.skipped++;
+              continue;
+            }
+
             // ✅ Суммируем ВСЕ платежи клиента (основная покупка + все апселлы)
             let totalAmount = 0;
             const paymentIds = [];
@@ -4046,12 +4062,12 @@ async function performSyncLogic() {
               totalAmount += p.amount;
               paymentIds.push(p.id);
             }
-            
+
             rowData['Purchase ID'] = `purchase_${customerId}_${firstPayment.created}`;
             rowData['Total Amount'] = (totalAmount / 100).toFixed(2);
             rowData['Payment Count'] = allSuccessfulPayments.length.toString();
             rowData['Payment Intent IDs'] = paymentIds.join(', ');
-            
+
             // ✅ Lookup from pre-built index (no Google API call)
             const existingInMain = mainRowsByCustomerId.get(customerId) || [];
             
@@ -4819,7 +4835,21 @@ async function performSyncLogicLowPrice(exportAll = false) {
             results.failed++;
             continue;
           }
-          
+
+          // Skip rebills: if there is no real email on the customer, this is
+          // a recurring charge where Stripe filled the email field with the
+          // ad name from the original transaction. We don't want these rows.
+          const emailValue = (rowData['Email'] || '').trim();
+          if (!emailValue || emailValue === 'N/A' || !emailValue.includes('@')) {
+            logger.info(`⏭️ LowPrice sync: skipping customer ${customerId} — no valid email (rebill)`, {
+              customerId,
+              paymentId: firstPayment.id,
+              emailFieldValue: emailValue || null
+            });
+            results.skipped++;
+            continue;
+          }
+
           // ✅ Суммируем ВСЕ платежи клиента (основная покупка + все апселлы)
           let totalAmount = 0;
           const paymentIds = [];
@@ -5688,16 +5718,19 @@ async function performSyncLogicPrimer(exportAll = false) {
               rowData['GEO'] = customer?.country || customer?.address?.country || firstPayment.country || 'Unknown';
             }
 
-            // ✅ КРИТИЧЕСКИ ВАЖНО: Пропускаем платежи без email — это ребиллы (рекурентные платежи)
-            // Первая покупка через Primer всегда содержит email. Если email отсутствует,
-            // значит это ребилл от подписки, где первый платёж был за пределами окна API (30 дней)
-            if (!rowData['Email'] || rowData['Email'] === 'N/A') {
-              logger.warn(`⏭️ Skipping Primer payment without email for customer ${customerId} — likely a rebill/recurring payment`, {
+            // ✅ КРИТИЧЕСКИ ВАЖНО: Пропускаем платежи без валидного email — это ребиллы.
+            // Первая покупка через Primer всегда содержит email. Если поле пустое,
+            // равно 'N/A', или не содержит '@' (Stripe иногда пихает туда ad name
+            // первой транзакции), значит это ребилл — пропускаем.
+            const primerEmailValue = (rowData['Email'] || '').trim();
+            if (!primerEmailValue || primerEmailValue === 'N/A' || !primerEmailValue.includes('@')) {
+              logger.warn(`⏭️ Skipping Primer payment without valid email for customer ${customerId} — likely a rebill/recurring payment`, {
                 customerId,
                 paymentId: firstPayment.id,
                 amount: rowData['Total Amount'],
                 paymentCount: allSuccessfulPayments.length,
-                reason: 'No email found — first purchase was likely outside the API lookback window'
+                emailFieldValue: primerEmailValue || null,
+                reason: 'No valid email — first purchase was likely outside the API lookback window or this is a rebill'
               });
               results.skipped++;
               continue;
