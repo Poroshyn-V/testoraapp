@@ -152,6 +152,11 @@ async function sendVipPurchaseAlert(payment, customer, sheetData) {
 // Sync protection flag to prevent overlapping synchronizations
 let isSyncing = false;
 
+// Per-account sync mutex flags — prevent two parallel LowPrice / Primer sync
+// runs from racing on the existing-rows snapshot and writing duplicates.
+let isLowPriceSyncRunning = false;
+let isPrimerSyncRunning = false;
+
 // Alert tracking to prevent duplicate sends
 const sentAlerts = {
   hourlyReport: new Set(),
@@ -4484,6 +4489,16 @@ async function performSyncLogicLowPrice(exportAll = false) {
     return { success: true, message: 'Low Price account not configured', processed: 0 };
   }
 
+  // Mutex: prevent overlapping LowPrice runs. Each sync builds its own
+  // existingRowsByCustomerId snapshot from the sheet at the start; if two
+  // run in parallel, both can see "customer not in snapshot" for the same
+  // new payment and both addRow → duplicate rows in the sheet.
+  if (isLowPriceSyncRunning) {
+    logger.warn('⏭️ LowPrice sync already running, skipping this invocation');
+    return { success: true, message: 'LowPrice sync already running, skipped', processed: 0, skipped: 1 };
+  }
+  isLowPriceSyncRunning = true;
+
   const startTime = Date.now();
   const results = {
     processed: 0,
@@ -5054,7 +5069,7 @@ async function performSyncLogicLowPrice(exportAll = false) {
       hasStripeLowPrice: !!stripeLowPrice,
       hasEnvKey: !!ENV.STRIPE_SECRET_KEY_LOW_PRICE
     });
-    
+
     // Логируем детали ошибки для отладки
     console.error('❌ LowPrice sync error details:', {
       message: error.message,
@@ -5062,7 +5077,7 @@ async function performSyncLogicLowPrice(exportAll = false) {
       stack: error.stack,
       sheetName: LOW_PRICE_SHEET_NAME
     });
-    
+
     return {
       success: false,
       message: `Critical Low Price sync error: ${error.message}`,
@@ -5072,6 +5087,8 @@ async function performSyncLogicLowPrice(exportAll = false) {
       duration: `${duration}ms`,
       sheetName: LOW_PRICE_SHEET_NAME
     };
+  } finally {
+    isLowPriceSyncRunning = false;
   }
 }
 
@@ -5098,7 +5115,16 @@ async function performSyncLogicPrimer(exportAll = false) {
     });
     return { success: true, message: 'Primer API not configured', processed: 0 };
   }
-  
+
+  // Mutex: prevent overlapping Primer sync runs. Same race as LowPrice —
+  // each run takes its own existingRows snapshot, so two parallel runs
+  // can both see "customer not present" and both addRow.
+  if (isPrimerSyncRunning) {
+    logger.warn('⏭️ Primer sync already running, skipping this invocation');
+    return { success: true, message: 'Primer sync already running, skipped', processed: 0, skipped: 1 };
+  }
+  isPrimerSyncRunning = true;
+
   logger.info('✅ Primer API is configured, proceeding with sync...');
 
   const startTime = Date.now();
@@ -5948,7 +5974,7 @@ async function performSyncLogicPrimer(exportAll = false) {
       stack: error.stack,
       duration: `${duration}ms`
     });
-    
+
     return {
       success: false,
       message: `Critical Primer sync error: ${error.message}`,
@@ -5958,6 +5984,8 @@ async function performSyncLogicPrimer(exportAll = false) {
       duration: `${duration}ms`,
       sheetName: PRIMER_SHEET_NAME
     };
+  } finally {
+    isPrimerSyncRunning = false;
   }
 }
 
