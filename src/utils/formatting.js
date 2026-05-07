@@ -1,28 +1,12 @@
 // Data formatting utilities
 import { logInfo } from './logging.js';
 
-// Format campaign names with proper separators
+// Pass campaign/ad/adset names through unchanged.
+// Why: FB delivers them already structured (e.g. "Core-FL-BM-1-UTC-CC-3D-TK-AM").
+// Auto-inserting "_" between digit/letter mangled tokens like "3D" → "3_D".
 function formatCampaignName(name) {
   if (!name || name === 'N/A') return name;
-  
-  // Add separators for common patterns
-  return name
-    // Add separators before numbers
-    .replace(/([a-zA-Z])(\d)/g, '$1_$2')
-    // Add separators after numbers before letters
-    .replace(/(\d)([a-zA-Z])/g, '$1_$2')
-    // Add separators before uppercase letters (camelCase)
-    .replace(/([a-z])([A-Z])/g, '$1_$2')
-    // Add separators for common abbreviations
-    .replace(/([a-zA-Z])(WEB|EN|US|CA|AU|Broad|testora|LC|ABO|Core|ABO|cpi|fcb)([a-zA-Z])/g, '$1_$2_$3')
-    // Add separators for dates
-    .replace(/(\d{2})\.(\d{2})\.(\d{4})/g, '$1.$2.$3')
-    // Clean up multiple underscores
-    .replace(/_+/g, '_')
-    // Remove leading/trailing underscores
-    .replace(/^_|_$/g, '')
-    // Keep test geo notation like T1 without extra underscore (fix T_1 → T1)
-    .replace(/T_([0-9]+)/g, 'T$1');
+  return String(name).trim();
 }
 
 // Format payment data for Google Sheets
