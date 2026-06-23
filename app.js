@@ -825,11 +825,20 @@ app.post('/api/primer-webhook', express.raw({ type: 'application/json' }), async
     const signature = req.headers['x-signature-primary'];
     const webhookSecret = ENV.PRIMER_WEBHOOK_SECRET;
 
-    if (webhookSecret && signature) {
+    // When a webhook secret IS configured, the signature is required and is
+    // compared with a timing-safe equality check (a missing header is now
+    // rejected too). When no secret is set we keep the previous pass-through
+    // so deployments that have not yet configured PRIMER_WEBHOOK_SECRET keep
+    // working unchanged — set the secret to turn enforcement on.
+    if (webhookSecret) {
       const rawBody = req.body.toString('utf-8');
       const computed = crypto.createHmac('sha256', webhookSecret).update(rawBody).digest('base64');
-      if (computed !== signature) {
-        logger.warn('Primer webhook: invalid signature');
+      const computedBuf = Buffer.from(computed);
+      const signatureBuf = Buffer.from(signature || '');
+      const valid = signatureBuf.length === computedBuf.length &&
+                    crypto.timingSafeEqual(signatureBuf, computedBuf);
+      if (!valid) {
+        logger.warn('Primer webhook: invalid or missing signature', { hasSignature: Boolean(signature) });
         return res.status(401).json({ error: 'Invalid signature' });
       }
     }
@@ -988,6 +997,14 @@ async function processPrimerPaymentInBackground({ paymentId, customerId, amount,
 
     let resolveInFlight, rejectInFlight;
     const inFlightPromise = new Promise((rs, rj) => { resolveInFlight = rs; rejectInFlight = rj; });
+    // CRITICAL: attach a no-op catch so that if this promise is rejected on a
+    // Sheets failure (see catch below) and no concurrent webhook is awaiting it,
+    // Node does NOT report an "unhandled rejection". Without this, a single
+    // Google Sheets 502 during add_row crashed the entire process (the global
+    // unhandledRejection handler ran a full shutdown), stopping every alert/sync
+    // interval. Concurrent webhooks awaiting this promise still observe the
+    // rejection via their own try/catch above.
+    inFlightPromise.catch(() => {});
     primerInFlight.set(paymentId, inFlightPromise);
 
     try {
@@ -2923,61 +2940,6 @@ app.get('/api/load-existing', async (req, res) => {
   }
 });
 
-// Check duplicates endpoint
-app.get('/api/check-duplicates', async (req, res) => {
-  try {
-    logger.info('🔍 Проверяю дубликаты в Google Sheets...');
-    
-    const rows = await googleSheets.getAllRows();
-    
-    logger.info(`📋 Проверяю ${rows.length} строк на дубликаты...`);
-    
-    // Ищем дубликаты по email + дата + сумма
-    const duplicates = [];
-    const seen = new Map();
-    
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const email = row.get('Email') || '';
-      const date = row.get('Created Local (UTC+1)') || '';
-      const amount = row.get('Total Amount') || '';
-      
-      if (email && date && amount) {
-        const key = `${email}_${date}_${amount}`;
-        
-        if (seen.has(key)) {
-          duplicates.push({
-            row: i + 1,
-            email: email,
-            date: date,
-            amount: amount,
-            purchaseId: row.get('Purchase ID') || '',
-            duplicateOf: seen.get(key)
-          });
-        } else {
-          seen.set(key, i + 1);
-        }
-      }
-    }
-    
-    logger.info(`🔍 Найдено ${duplicates.length} дубликатов`);
-    
-    res.json({
-      success: true,
-      message: `Found ${duplicates.length} duplicates in ${rows.length} rows`,
-      total_rows: rows.length,
-      duplicates_count: duplicates.length,
-      duplicates: duplicates.slice(0, 10) // Показываем первые 10
-    });
-    
-  } catch (error) {
-    logger.error('Error checking duplicates', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-});
 
 // Memory status endpoint
 app.get('/api/memory-status', (req, res) => {
@@ -3575,25 +3537,6 @@ app.post('/api/test-notifications', async (req, res) => {
   });
 });
 
-// Metrics endpoint
-app.get('/api/metrics', (req, res) => {
-  try {
-    const allMetrics = metrics.getAll();
-    res.json({
-      success: true,
-      message: 'Application metrics',
-      metrics: allMetrics,
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    logger.error('Error getting metrics', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error getting metrics',
-      error: error.message
-    });
-  }
-});
 
 // Metrics summary endpoint
 app.get('/api/metrics/summary', (req, res) => {
@@ -8678,7 +8621,18 @@ app.listen(ENV.PORT, () => {
   console.log(`🛡️ Rate limiting: ${getRateLimitStats().maxRequests} requests per ${getRateLimitStats().window / 1000 / 60} minutes`);
   console.log(`💾 Cache system: Google Sheets caching enabled`);
   console.log(`📝 Structured logging: JSON format with timestamps`);
-  
+
+  // Non-fatal security posture check. We only WARN (never exit) so a missing
+  // value can't take down a running deployment. Set these to harden:
+  //  - ADMIN_API_KEY: without it, every /api admin endpoint is unauthenticated.
+  //  - PRIMER_WEBHOOK_SECRET: without it, Primer webhook signatures are NOT verified.
+  if (!ENV.ADMIN_API_KEY) {
+    logger.warn('⚠️ SECURITY: ADMIN_API_KEY is not set — admin /api endpoints are OPEN (no auth). Set it to require x-api-key.');
+  }
+  if (!ENV.PRIMER_WEBHOOK_SECRET) {
+    logger.warn('⚠️ SECURITY: PRIMER_WEBHOOK_SECRET is not set — Primer webhook signatures are NOT verified. Set it to enforce.');
+  }
+
   // ✅ Load existing purchases on startup with delay to avoid API quota issues
   setTimeout(async () => {
     try {
@@ -9480,15 +9434,20 @@ process.on('uncaughtException', (error) => {
   gracefulShutdown('UNCAUGHT_EXCEPTION');
 });
 
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (reason, promise) => {
-  logger.error('Unhandled Rejection', {
-    reason: reason,
-    promise: promise,
+// Handle unhandled promise rejections.
+// IMPORTANT: do NOT shut down the whole service here. Unhandled rejections almost
+// always come from transient errors in fire-and-forget background tasks (e.g. a
+// Google Sheets 502 while writing a Primer payment). Tearing the process down
+// stopped every alert/sync interval and took the service offline on a single
+// upstream hiccup. We log loudly and keep running. (uncaughtException above is
+// different — that can leave the process in an undefined state, so it still exits
+// and lets the platform restart it.)
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled Rejection (logged, service kept alive)', {
+    reason: (reason && reason.message) ? reason.message : String(reason),
+    stack: (reason && reason.stack) ? reason.stack : undefined,
     timestamp: new Date().toISOString()
   });
-  
-  gracefulShutdown('UNHANDLED_REJECTION');
 });
 
 export default app;
