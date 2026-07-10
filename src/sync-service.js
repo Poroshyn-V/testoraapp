@@ -40,6 +40,7 @@ async function sendSlack(text) {
       body: JSON.stringify({
         channel: ENV.SLACK_CHANNEL_ID,
         text: text,
+        mrkdwn: false,
         username: 'Stripe Sync Bot',
         icon_emoji: ':money_with_wings:'
       })

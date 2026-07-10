@@ -63,7 +63,9 @@ export async function sendSlack(payment, customer, metadata = {}) {
       },
       body: JSON.stringify({
         channel: ENV.SLACK_CHANNEL_ID,
-        text: message
+        text: message,
+        // Campaign/adset names contain "_" pairs that Slack mrkdwn eats as italics
+        mrkdwn: false
       })
     });
 
@@ -156,7 +158,9 @@ async function sendSlackText(message) {
       },
       body: JSON.stringify({
         channel: ENV.SLACK_CHANNEL_ID,
-        text: message
+        text: message,
+        // Alerts include ad/adset names with "_" pairs — keep Slack from italicizing them
+        mrkdwn: false
       })
     });
 

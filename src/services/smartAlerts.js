@@ -41,6 +41,9 @@ export class SmartAlerts {
    */
   async loadAllSheetRows() {
     const allRows = [];
+    // Sheets that failed to load in this pass — lets alerts distinguish
+    // "genuinely $0 today" from "Sheets quota error returned no data"
+    this.lastLoadFailures = [];
 
     // payments sheet
     try {
@@ -50,6 +53,7 @@ export class SmartAlerts {
       allRows.push(...rows);
       logInfo(`✅ Loaded ${rows.length} rows from payments sheet`);
     } catch (error) {
+      this.lastLoadFailures.push('payments');
       logWarn(`⚠️ Could not load payments sheet: ${error.message}`);
     }
 
@@ -61,6 +65,7 @@ export class SmartAlerts {
       allRows.push(...rows);
       logInfo(`✅ Loaded ${rows.length} rows from LowPrice sheet`);
     } catch (error) {
+      this.lastLoadFailures.push('LowPrice');
       logWarn(`⚠️ Could not load LowPrice sheet: ${error.message}`);
     }
 
@@ -76,6 +81,7 @@ export class SmartAlerts {
       const errorMessage = error?.message || '';
       const isQuotaError = errorMessage.includes('429') || errorMessage.includes('Quota exceeded');
       if (isQuotaError) {
+        this.lastLoadFailures.push('Primer');
         logWarn('⚠️ Google Sheets quota exceeded for Primer sheet, skipping');
       } else {
         logInfo(`ℹ️ Primer sheet not available: ${errorMessage}`);
@@ -657,6 +663,43 @@ New countries detected: ${newCountries.join(', ')}
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // REVENUE PACE ALERT
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  /**
+   * Sum revenue and purchase count for a UTC date.
+   * If maxMinutesOfDay is given, only counts rows created up to that
+   * time of day (for fair "same time yesterday" comparisons).
+   */
+  sumRevenueForDate(rows, dateStr, maxMinutesOfDay = null) {
+    let revenue = 0;
+    let count = 0;
+    for (const row of rows) {
+      if (this.getRowDateUTC(row) !== dateStr) continue;
+      if (maxMinutesOfDay !== null) {
+        const dateObj = this.getRowDateObj(row);
+        if (!dateObj) continue;
+        if (dateObj.getUTCHours() * 60 + dateObj.getUTCMinutes() > maxMinutesOfDay) continue;
+      }
+      revenue += parseFloat(row.get('Total Amount') || 0) || 0;
+      count++;
+    }
+    return { revenue, count };
+  }
+
+  /**
+   * Human-readable delta vs a baseline.
+   * Uses % on a meaningful base, absolute $ on a tiny base
+   * (avoids "-100% ($9.99)" style noise).
+   */
+  formatPaceDelta(current, baseline) {
+    if (baseline <= 0) return '';
+    const diff = current - baseline;
+    const sign = diff >= 0 ? '+' : '-';
+    if (baseline < 100) {
+      return ` (${sign}$${Math.abs(diff).toFixed(2)})`;
+    }
+    const pct = Math.round((Math.abs(diff) / baseline) * 100);
+    return ` (${sign}${pct}%)`;
+  }
+
   async checkRevenuePace() {
     try {
       const now = new Date();
@@ -665,54 +708,88 @@ New countries detected: ${newCountries.join(', ')}
       // Only run after at least a few hours of data
       if (currentHourUTC < 6) return null;
 
-      const rows = await this.loadAllSheetRows();
-      const todayStr = now.toISOString().split('T')[0];
-
-      // Today's revenue so far
-      const todayRevenue = this.filterRowsByDate(rows, todayStr)
-        .reduce((sum, row) => sum + parseFloat(row.get('Total Amount') || 0), 0);
-
-      // Project full day: (today_so_far / hours_elapsed) * 24
-      const hoursElapsed = currentHourUTC + (now.getUTCMinutes() / 60);
-      if (hoursElapsed <= 0) return null;
-      const projectedDaily = (todayRevenue / hoursElapsed) * 24;
-
-      // Yesterday's total
-      const yesterday = new Date(now);
-      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-      const yesterdayStr = yesterday.toISOString().split('T')[0];
-      const yesterdayRevenue = this.filterRowsByDate(rows, yesterdayStr)
-        .reduce((sum, row) => sum + parseFloat(row.get('Total Amount') || 0), 0);
-
-      // Today's purchases
-      const todayPurchases = this.filterRowsByDate(rows, todayStr).length;
-      const projectedPurchases = Math.round((todayPurchases / hoursElapsed) * 24);
-
-      const paceVsYesterday = yesterdayRevenue > 0
-        ? Math.round(((projectedDaily - yesterdayRevenue) / yesterdayRevenue) * 100)
-        : 0;
+      // Only send every 3 hours (6, 9, 12, 15, 18, 21)
+      if (currentHourUTC % 3 !== 0) return null;
 
       const alertKey = `revenue_pace_${currentHourUTC}`;
       if (this.sentRealTimeAlerts.has(alertKey)) return null;
 
-      // Only send every 3 hours (6, 9, 12, 15, 18, 21)
-      if (currentHourUTC % 3 !== 0) return null;
+      const rows = await this.loadAllSheetRows();
+
+      // If nothing loaded at all, a "$0.00 today" alert would be a false
+      // alarm caused by Sheets errors, not by missing sales — stay silent
+      if (rows.length === 0) {
+        logWarn('⏭️ Revenue pace skipped: no sheet rows loaded (Sheets unavailable?)');
+        return null;
+      }
+
+      const todayStr = now.toISOString().split('T')[0];
+      const yesterday = new Date(now);
+      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+      const minutesOfDay = currentHourUTC * 60 + now.getUTCMinutes();
+
+      // Apples-to-apples: today so far vs yesterday up to the same time
+      const today = this.sumRevenueForDate(rows, todayStr);
+      const yesterdaySameTime = this.sumRevenueForDate(rows, yesterdayStr, minutesOfDay);
+      const yesterdayFull = this.sumRevenueForDate(rows, yesterdayStr);
+      const avg7SameTime = this.getAvgRevenueByHour(rows, currentHourUTC);
+
+      // Naive linear projection — labelled as an estimate in the message
+      const hoursElapsed = minutesOfDay / 60;
+      if (hoursElapsed <= 0) return null;
+      const projectedDaily = (today.revenue / hoursElapsed) * 24;
+      const projectedPurchases = Math.round((today.count / hoursElapsed) * 24);
+
+      // Status vs the most stable baseline available (7-day avg, else yesterday)
+      const baseline = avg7SameTime > 0 ? avg7SameTime : yesterdaySameTime.revenue;
+      let statusEmoji = '🟡';
+      let statusWord = 'ON TRACK';
+      if (baseline > 0) {
+        const pace = (today.revenue - baseline) / baseline;
+        if (pace >= 0.1) {
+          statusEmoji = '🟢';
+          statusWord = 'AHEAD';
+        } else if (pace <= -0.1) {
+          statusEmoji = '🔴';
+          statusWord = 'BEHIND';
+        }
+      } else if (today.revenue > 0) {
+        statusEmoji = '🟢';
+        statusWord = 'AHEAD';
+      }
 
       this.sentRealTimeAlerts.set(alertKey, true);
       setTimeout(() => this.sentRealTimeAlerts.delete(alertKey), 2 * 60 * 60 * 1000);
 
-      const paceEmoji = paceVsYesterday >= 10 ? '🟢' : paceVsYesterday >= -10 ? '🟡' : '🔴';
-      const trendEmoji = paceVsYesterday >= 0 ? '📈' : '📉';
+      const timeStr = `${String(currentHourUTC).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')}`;
+      const plural = (n) => (n === 1 ? 'purchase' : 'purchases');
 
-      const alertText = `${paceEmoji} REVENUE PACE UPDATE
+      let alertText = `${statusEmoji} REVENUE PACE — ${statusWord} (as of ${timeStr} UTC)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-💰 Today so far: $${todayRevenue.toFixed(2)} (${todayPurchases} purchases)
-📊 Projected EOD: $${projectedDaily.toFixed(2)} (~${projectedPurchases} purchases)
-${trendEmoji} vs Yesterday: ${paceVsYesterday >= 0 ? '+' : ''}${paceVsYesterday}% ($${yesterdayRevenue.toFixed(2)})
-⏰ As of ${currentHourUTC}:00 UTC
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
+Today by now: $${today.revenue.toFixed(2)} · ${today.count} ${plural(today.count)}
+Yesterday same time: $${yesterdaySameTime.revenue.toFixed(2)} · ${yesterdaySameTime.count} ${plural(yesterdaySameTime.count)}${this.formatPaceDelta(today.revenue, yesterdaySameTime.revenue)}
+7-day avg same time: $${avg7SameTime.toFixed(2)}${this.formatPaceDelta(today.revenue, avg7SameTime)}
 
-      logInfo(`📤 Sending revenue pace update`);
+Projected EOD: ~$${projectedDaily.toFixed(2)} (~${projectedPurchases} ${plural(projectedPurchases)})
+Yesterday full day: $${yesterdayFull.revenue.toFixed(2)} · ${yesterdayFull.count} ${plural(yesterdayFull.count)}`;
+
+      const warnings = [];
+      if (this.lastLoadFailures?.length) {
+        warnings.push(`⚠️ Data may be incomplete: failed to load ${this.lastLoadFailures.join(', ')}`);
+      }
+      if (today.count === 0) {
+        warnings.push('⚠️ No purchases recorded today yet — check campaigns / payment flow');
+      } else if (statusWord === 'BEHIND') {
+        warnings.push('⚠️ Behind pace — check campaign delivery and spend');
+      }
+
+      if (warnings.length > 0) {
+        alertText += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${warnings.join('\n')}`;
+      }
+
+      logInfo(`📤 Sending revenue pace update (${statusWord})`);
       return alertText;
 
     } catch (error) {
@@ -742,7 +819,8 @@ ${trendEmoji} vs Yesterday: ${paceVsYesterday >= 0 ? '+' : ''}${paceVsYesterday}
 
       if (alerts.length === 0) return null;
 
-      return alerts.join('\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n');
+      // Each alert already carries its own separator lines — just add spacing
+      return alerts.join('\n\n');
     } catch (error) {
       logError('Error checking all real-time alerts', error);
       return null;
