@@ -3530,21 +3530,11 @@ app.post('/api/remove-test-data', async (req, res) => {
 
 // Test notifications endpoint (DISABLED - no test data)
 app.post('/api/test-notifications', async (req, res) => {
-  try {
-    // Fixed text only (no user input) — verifies Slack renders "_" literally with mrkdwn:false
-    const testMessage = `🧪 Underscore rendering test
-• Adset: WEB_EN_T2_Broad_-_testora_CC_10.07.2026_BrainHealthCheck_FL-BM-AM-IQ-TK-3D-IOS
-• Ad: 4_2360_1589_Testora_s_var_Career_Optlll_KF_IQ1_En_9x16_OB.png
-If every "_" above is visible and nothing is italic — the fix works.`;
-    await sendTextNotifications(testMessage);
-    res.json({
-      success: true,
-      message: 'Test notification sent',
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
-  }
+  res.json({
+    success: false,
+    message: 'Test notifications disabled to prevent spam',
+    timestamp: new Date().toISOString()
+  });
 });
 
 
