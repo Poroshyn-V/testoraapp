@@ -1221,6 +1221,17 @@ app.get('/', (_req, res) => res.json({
 }));
 
 // Health check
+// Which commit is actually running (Railway injects RAILWAY_GIT_* at build time)
+app.get('/api/version', (_req, res) => {
+  res.json({
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA || 'unknown',
+    commitMessage: process.env.RAILWAY_GIT_COMMIT_MESSAGE || 'unknown',
+    branch: process.env.RAILWAY_GIT_BRANCH || 'unknown',
+    startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+    uptimeSeconds: Math.floor(process.uptime())
+  });
+});
+
 app.get('/health', async (_req, res) => {
   try {
     const memUsage = process.memoryUsage();

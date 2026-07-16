@@ -54,7 +54,14 @@ export async function sendSlack(payment, customer, metadata = {}) {
   try {
     // Format message for Slack (same format as Telegram)
     const message = formatSlackNotification(payment, customer, metadata);
-    
+
+    // Commit in every send log — lets Railway logs prove which build sent a given message
+    logInfo('Posting Slack purchase message', {
+      commit: (process.env.RAILWAY_GIT_COMMIT_SHA || 'unknown').slice(0, 7),
+      mrkdwn: false,
+      paymentId: payment?.id
+    });
+
     const response = await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
       headers: {
@@ -150,6 +157,11 @@ async function sendSlackText(message) {
   }
 
   try {
+    logInfo('Posting Slack text message', {
+      commit: (process.env.RAILWAY_GIT_COMMIT_SHA || 'unknown').slice(0, 7),
+      mrkdwn: false
+    });
+
     const response = await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
       headers: {
