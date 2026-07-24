@@ -434,7 +434,7 @@ New countries detected: ${newCountries.join(', ')}
       // Group by creative
       const creativeStats = new Map();
       for (const purchase of lastHourPurchases) {
-        const adName = purchase.get('Ad Name') || '';
+        const adName = (purchase.get('Ad Name') || '').replace(/[\u200B\u200C\u200D\uFEFF]/g, '');
         const campaignName = purchase.get('Campaign Name') || purchase.get('UTM Campaign') || '';
         const adsetName = purchase.get('Adset Name') || '';
         const amount = parseFloat(purchase.get('Total Amount') || 0);
@@ -591,7 +591,7 @@ New countries detected: ${newCountries.join(', ')}
         const dateObj = this.getRowDateObj(row);
         if (!dateObj) continue;
 
-        const adName = row.get('Ad Name') || '';
+        const adName = (row.get('Ad Name') || '').replace(/[\u200B\u200C\u200D\uFEFF]/g, '');
         if (!adName || adName === 'N/A') continue;
 
         if (dateObj >= oneHourAgo) {

@@ -3541,11 +3541,23 @@ app.post('/api/remove-test-data', async (req, res) => {
 
 // Test notifications endpoint (DISABLED - no test data)
 app.post('/api/test-notifications', async (req, res) => {
-  res.json({
-    success: false,
-    message: 'Test notifications disabled to prevent spam',
-    timestamp: new Date().toISOString()
-  });
+  try {
+    // A/B test with the REAL adset name incl. zero-width spaces (the italics trigger)
+    const zwsp = '\u200B\u200B';
+    const rawName = `WEB_EN_US_Broad_-_testora_BC_24.07.2026_${zwsp}IQTestResults_FL-BM-IQ-5D`;
+    const fixedName = rawName.replace(/[\u200B\u200C\u200D\uFEFF]/g, '');
+    const testMessage = `🧪 Underscore test v2 (zero-width reproduction)
+• RAW (should break): ${rawName}
+• FIXED (should be intact): \`${fixedName}\``;
+    await sendTextNotifications(testMessage);
+    res.json({
+      success: true,
+      message: 'Test notification sent',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 

@@ -4,9 +4,11 @@ import { logInfo } from './logging.js';
 // Pass campaign/ad/adset names through unchanged.
 // Why: FB delivers them already structured (e.g. "Core-FL-BM-1-UTC-CC-3D-TK-AM").
 // Auto-inserting "_" between digit/letter mangled tokens like "3D" → "3_D".
+// Zero-width chars (pasted into Meta names) are stripped: Slack treats them as
+// word boundaries, turning "_..._<ZWSP>" into italics that eat the underscores.
 function formatCampaignName(name) {
   if (!name || name === 'N/A') return name;
-  return String(name).trim();
+  return String(name).replace(/[\u200B\u200C\u200D\uFEFF]/g, "").trim();
 }
 
 // Format payment data for Google Sheets
@@ -538,13 +540,13 @@ ${utmSource ? `🔹 Platform: ${utmSource}` : ''}
     message += `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n📊 Campaign Data:`;
     
     if (adName) {
-      message += `\n• Ad: ${adName}`;
+      message += `\n• Ad: \`${adName}\``;
     }
     if (adsetName) {
-      message += `\n• Adset: ${adsetName}`;
+      message += `\n• Adset: \`${adsetName}\``;
     }
     if (campaignName) {
-      message += `\n• Campaign: ${campaignName}`;
+      message += `\n• Campaign: \`${campaignName}\``;
     }
   }
 
