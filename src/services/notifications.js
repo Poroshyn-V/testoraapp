@@ -157,9 +157,13 @@ async function sendSlackText(message) {
   }
 
   try {
+    // Alerts go to the dedicated alerts channel when configured,
+    // so they don't drown in the purchase feed
+    const channel = ENV.SLACK_ALERTS_CHANNEL_ID || ENV.SLACK_CHANNEL_ID;
+
     logInfo('Posting Slack text message', {
       commit: (process.env.RAILWAY_GIT_COMMIT_SHA || 'unknown').slice(0, 7),
-      mrkdwn: false
+      channel
     });
 
     const response = await fetch('https://slack.com/api/chat.postMessage', {
@@ -169,7 +173,7 @@ async function sendSlackText(message) {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        channel: ENV.SLACK_CHANNEL_ID,
+        channel,
         text: message,
         // Alerts include ad/adset names with "_" pairs — keep Slack from italicizing them
         mrkdwn: false

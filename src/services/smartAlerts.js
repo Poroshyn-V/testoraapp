@@ -5,6 +5,8 @@ import AlertPriority from './alertPriority.js';
 import { alertConfig } from '../config/alertConfig.js';
 import { ENV } from '../config/env.js';
 import { fetchWithRetry } from '../utils/retry.js';
+import { toUSD } from '../utils/currency.js';
+import { isMetaConfigured, getTodaySpendByCampaign } from './metaAds.js';
 
 // Smart alerts service
 export class SmartAlerts {
@@ -50,7 +52,7 @@ export class SmartAlerts {
       const paymentsSheet = await googleSheets.getSheetByName('payments');
       await fetchWithRetry(() => paymentsSheet.loadHeaderRow(), 3, 2000);
       const rows = await fetchWithRetry(() => paymentsSheet.getRows(), 3, 2000);
-      allRows.push(...rows);
+      for (const r of rows) allRows.push(r);
       logInfo(`✅ Loaded ${rows.length} rows from payments sheet`);
     } catch (error) {
       this.lastLoadFailures.push('payments');
@@ -62,7 +64,7 @@ export class SmartAlerts {
       const lowPriceSheet = await googleSheets.getSheetByName('LowPrice');
       await fetchWithRetry(() => lowPriceSheet.loadHeaderRow(), 3, 2000);
       const rows = await fetchWithRetry(() => lowPriceSheet.getRows(), 3, 2000);
-      allRows.push(...rows);
+      for (const r of rows) allRows.push(r);
       logInfo(`✅ Loaded ${rows.length} rows from LowPrice sheet`);
     } catch (error) {
       this.lastLoadFailures.push('LowPrice');
@@ -75,7 +77,7 @@ export class SmartAlerts {
       const primerSheet = await googleSheets.getSheetByName(PRIMER_SHEET_NAME);
       await fetchWithRetry(() => primerSheet.loadHeaderRow(), 3, 2000);
       const rows = await fetchWithRetry(() => primerSheet.getRows(), 3, 2000);
-      allRows.push(...rows);
+      for (const r of rows) allRows.push(r);
       logInfo(`✅ Loaded ${rows.length} rows from ${PRIMER_SHEET_NAME} sheet`);
     } catch (error) {
       const errorMessage = error?.message || '';
@@ -119,6 +121,13 @@ export class SmartAlerts {
     return rows.filter(row => this.getRowDateUTC(row) === dateStr);
   }
 
+  /**
+   * Row amount normalized to USD (sheets mix USD/EUR/GBP/SEK...)
+   */
+  rowUSD(row) {
+    return toUSD(row.get('Total Amount'), row.get('Currency'));
+  }
+
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // REVENUE ANOMALY
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -138,7 +147,7 @@ export class SmartAlerts {
 
       // Today's revenue (all sheets)
       const todayRevenue = this.filterRowsByDate(rows, todayStr)
-        .reduce((sum, row) => sum + parseFloat(row.get('Total Amount') || 0), 0);
+        .reduce((sum, row) => sum + this.rowUSD(row), 0);
 
       // 7-day average revenue — but only up to the SAME hour of day
       // This prevents "it's 10am and we only have 30% of a full day's revenue" false alarms
@@ -196,7 +205,7 @@ export class SmartAlerts {
           const dateObj = this.getRowDateObj(row);
           return dateObj && dateObj.getUTCHours() <= cutoffHour;
         })
-        .reduce((sum, row) => sum + parseFloat(row.get('Total Amount') || 0), 0);
+        .reduce((sum, row) => sum + this.rowUSD(row), 0);
 
       revenues.push(dayRevenue);
     }
@@ -354,7 +363,7 @@ New countries detected: ${newCountries.join(', ')}
       const campaignStats = new Map();
       for (const purchase of lastHourPurchases) {
         const campaignName = purchase.get('Campaign Name') || purchase.get('UTM Campaign') || '';
-        const amount = parseFloat(purchase.get('Total Amount') || 0);
+        const amount = this.rowUSD(purchase);
 
         if (campaignName && campaignName !== 'N/A') {
           if (!campaignStats.has(campaignName)) {
@@ -437,7 +446,7 @@ New countries detected: ${newCountries.join(', ')}
         const adName = (purchase.get('Ad Name') || '').replace(/[\u200B\u200C\u200D\uFEFF]/g, '');
         const campaignName = purchase.get('Campaign Name') || purchase.get('UTM Campaign') || '';
         const adsetName = purchase.get('Adset Name') || '';
-        const amount = parseFloat(purchase.get('Total Amount') || 0);
+        const amount = this.rowUSD(purchase);
 
         if (adName && adName !== 'N/A') {
           if (!creativeStats.has(adName)) {
@@ -462,6 +471,32 @@ New countries detected: ${newCountries.join(', ')}
         this.previousHourCreativeStats.set(name, { purchases: stat.purchases, hour: currentHour });
       }
 
+      // 🆕 First sale of a brand-new creative: earliest purchase for this
+      // Ad Name across ALL history is within the last 2 hours
+      const newCreativeAlerts = [];
+      const statNames = new Set(creativeStats.keys());
+      const earliestByName = new Map();
+      for (const row of allRows) {
+        const name = (row.get('Ad Name') || '').replace(/[\u200B\u200C\u200D\uFEFF]/g, '');
+        if (!statNames.has(name)) continue;
+        const d = this.getRowDateObj(row);
+        if (!d) continue;
+        const cur = earliestByName.get(name);
+        if (!cur || d < cur) earliestByName.set(name, d);
+      }
+      const twoHoursAgo = new Date(now.getTime() - 2 * 60 * 60 * 1000);
+      for (const stat of creativeStats.values()) {
+        const first = earliestByName.get(stat.name);
+        if (first && first >= twoHoursAgo) {
+          const alertKey = `new_creative_${stat.name}`;
+          if (!this.sentRealTimeAlerts.has(alertKey)) {
+            newCreativeAlerts.push(stat);
+            this.sentRealTimeAlerts.set(alertKey, true);
+            setTimeout(() => this.sentRealTimeAlerts.delete(alertKey), 12 * 60 * 60 * 1000);
+          }
+        }
+      }
+
       // Tiered filtering
       const urgentCreatives = []; // 30+
       const scaleCreatives = [];  // 20-29
@@ -483,7 +518,7 @@ New countries detected: ${newCountries.join(', ')}
       hotCreatives.sort((a, b) => b.purchases - a.purchases);
 
       const allTiered = [...urgentCreatives, ...scaleCreatives, ...hotCreatives];
-      if (allTiered.length === 0) return null;
+      if (allTiered.length === 0 && newCreativeAlerts.length === 0) return null;
 
       // Dedup by hour
       const alertsToSend = { urgent: [], scale: [], hot: [] };
@@ -515,7 +550,8 @@ New countries detected: ${newCountries.join(', ')}
         }
       }
 
-      const totalAlerts = alertsToSend.urgent.length + alertsToSend.scale.length + alertsToSend.hot.length;
+      const totalAlerts = alertsToSend.urgent.length + alertsToSend.scale.length +
+        alertsToSend.hot.length + newCreativeAlerts.length;
       if (totalAlerts === 0) return null;
 
       // Build alert text
@@ -551,6 +587,14 @@ New countries detected: ${newCountries.join(', ')}
           alertText += `   ${c.name}\n`;
           alertText += `   📦 ${c.purchases} purchases | 💰 $${c.revenue.toFixed(2)}\n`;
           alertText += `   🎯 Campaign: ${c.campaign} | 📋 Adsets: ${c.adsets.size}\n\n`;
+        }
+      }
+
+      if (newCreativeAlerts.length > 0) {
+        alertText += `\n🆕 FIRST SALE — new creative converted:\n\n`;
+        for (const c of newCreativeAlerts) {
+          alertText += `   ${c.name}\n`;
+          alertText += `   📦 ${c.purchases} purchase(s) | 💰 $${c.revenue.toFixed(2)} | 🎯 ${c.campaign}\n\n`;
         }
       }
 
@@ -678,7 +722,7 @@ New countries detected: ${newCountries.join(', ')}
         if (!dateObj) continue;
         if (dateObj.getUTCHours() * 60 + dateObj.getUTCMinutes() > maxMinutesOfDay) continue;
       }
-      revenue += parseFloat(row.get('Total Amount') || 0) || 0;
+      revenue += this.rowUSD(row);
       count++;
     }
     return { revenue, count };
@@ -794,6 +838,168 @@ Yesterday full day: $${yesterdayFull.revenue.toFixed(2)} · ${yesterdayFull.coun
 
     } catch (error) {
       logError('Error checking revenue pace', error);
+      return null;
+    }
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // TRAFFIC HEALTH: zero-sales watchdog + per-platform death.
+  // Runs on a timer in app.js — sync-triggered alerts can't fire
+  // when nothing is selling, which is exactly the case to catch.
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  async checkTrafficHealth() {
+    try {
+      const now = new Date();
+      const rows = await this.loadAllSheetRows();
+      if (rows.length === 0) {
+        logWarn('⏭️ Traffic health skipped: no sheet rows loaded');
+        return null;
+      }
+
+      const HOUR = 60 * 60 * 1000;
+      const DAY = 24 * HOUR;
+
+      // Current 60-min window, total + per platform (UTM Source)
+      const hourStart = new Date(now.getTime() - HOUR);
+      let currentTotal = 0;
+      const currentByPlatform = new Map();
+      for (const row of rows) {
+        const d = this.getRowDateObj(row);
+        if (!d || d < hourStart || d >= now) continue;
+        currentTotal++;
+        const platform = (row.get('UTM Source') || '').toLowerCase();
+        if (platform && platform !== 'n/a') {
+          currentByPlatform.set(platform, (currentByPlatform.get(platform) || 0) + 1);
+        }
+      }
+
+      // 7-day baseline for the same clock window
+      let baselineTotal = 0;
+      const baselineByPlatform = new Map();
+      for (let i = 1; i <= 7; i++) {
+        const end = new Date(now.getTime() - i * DAY);
+        const start = new Date(end.getTime() - HOUR);
+        for (const row of rows) {
+          const d = this.getRowDateObj(row);
+          if (!d || d < start || d >= end) continue;
+          baselineTotal++;
+          const platform = (row.get('UTM Source') || '').toLowerCase();
+          if (platform && platform !== 'n/a') {
+            baselineByPlatform.set(platform, (baselineByPlatform.get(platform) || 0) + 1);
+          }
+        }
+      }
+      const avgTotal = baselineTotal / 7;
+
+      const problems = [];
+
+      // Everything stopped during normally-active hours
+      if (currentTotal === 0 && avgTotal >= 3) {
+        const key = 'traffic_zero_sales';
+        if (!this.sentRealTimeAlerts.has(key)) {
+          this.sentRealTimeAlerts.set(key, true);
+          setTimeout(() => this.sentRealTimeAlerts.delete(key), 2 * 60 * 60 * 1000);
+          problems.push(
+            `🛑 ZERO SALES: 0 purchases in the last 60 min (7-day avg for this hour: ${avgTotal.toFixed(1)})\n` +
+            `   Check tracking / payment providers / ad accounts`
+          );
+        }
+      }
+
+      // A single platform died while the rest are alive
+      if (currentTotal > 0) {
+        for (const [platform, total] of baselineByPlatform) {
+          const avg = total / 7;
+          if (avg >= 2 && !currentByPlatform.has(platform)) {
+            const key = `traffic_platform_${platform}`;
+            if (!this.sentRealTimeAlerts.has(key)) {
+              this.sentRealTimeAlerts.set(key, true);
+              setTimeout(() => this.sentRealTimeAlerts.delete(key), 3 * 60 * 60 * 1000);
+              problems.push(
+                `🛑 ${platform}: 0 purchases in the last 60 min (usually ~${avg.toFixed(1)}/hour)\n` +
+                `   Check ad account / billing / pixel for this channel`
+              );
+            }
+          }
+        }
+      }
+
+      if (problems.length === 0) return null;
+
+      let text = `🚨 TRAFFIC ALERT\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${problems.join('\n\n')}`;
+      if (this.lastLoadFailures?.length) {
+        text += `\n\n⚠️ Data may be incomplete: failed to load ${this.lastLoadFailures.join(', ')}`;
+      }
+      text += `\n⏰ ${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')} UTC`;
+
+      logInfo('📤 Sending traffic health alert', { problems: problems.length });
+      return text;
+    } catch (error) {
+      logError('Error checking traffic health', error);
+      return null;
+    }
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // SPEND WITHOUT SALES (Meta)
+  // Campaign spent >= FB_SPEND_ALERT_USD today (Meta account TZ) but has
+  // zero tracked purchases in the last 12h. 12h window (not calendar day)
+  // avoids false positives around UTC/LA midnight boundaries.
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  async checkSpendNoSales() {
+    try {
+      if (!isMetaConfigured()) return null;
+
+      const spendByCampaign = await getTodaySpendByCampaign();
+      if (spendByCampaign.size === 0) return null;
+
+      const rows = await this.loadAllSheetRows();
+      if (rows.length === 0) {
+        logWarn('⏭️ Spend check skipped: no sheet rows loaded');
+        return null;
+      }
+
+      const now = new Date();
+      const windowStart = new Date(now.getTime() - 12 * 60 * 60 * 1000);
+      const purchasedCampaigns = new Set();
+      for (const row of rows) {
+        const d = this.getRowDateObj(row);
+        if (!d || d < windowStart) continue;
+        const name = (row.get('Campaign Name') || row.get('UTM Campaign') || '')
+          .replace(/[\u200B\u200C\u200D\uFEFF]/g, '').trim();
+        if (name) purchasedCampaigns.add(name);
+      }
+
+      const offenders = [];
+      for (const [name, spend] of spendByCampaign) {
+        if (spend < ENV.FB_SPEND_ALERT_USD) continue;
+        if (purchasedCampaigns.has(name)) continue;
+        const key = `spend_no_sales_${name}`;
+        if (this.sentRealTimeAlerts.has(key)) continue;
+        this.sentRealTimeAlerts.set(key, true);
+        setTimeout(() => this.sentRealTimeAlerts.delete(key), 4 * 60 * 60 * 1000);
+        offenders.push({ name, spend });
+      }
+
+      if (offenders.length === 0) return null;
+      offenders.sort((a, b) => b.spend - a.spend);
+
+      let text = `💸 SPEND WITHOUT SALES (Meta, today)\n`;
+      text += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+      for (const o of offenders.slice(0, 10)) {
+        text += `   ${o.name}\n`;
+        text += `   💸 $${o.spend.toFixed(2)} spent · 0 purchases in the last 12h\n\n`;
+      }
+      if (offenders.length > 10) {
+        text += `   …and ${offenders.length - 10} more campaigns\n\n`;
+      }
+      text += `⚠️ ACTION: check these campaigns — pause or fix tracking\n`;
+      text += `⏰ ${String(now.getUTCHours()).padStart(2, '0')}:${String(now.getUTCMinutes()).padStart(2, '0')} UTC`;
+
+      logInfo('📤 Sending spend-no-sales alert', { offenders: offenders.length });
+      return text;
+    } catch (error) {
+      logError('Error checking spend without sales', error);
       return null;
     }
   }

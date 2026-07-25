@@ -15,6 +15,15 @@ export const ENV = {
   TELEGRAM_CHAT_ID: process.env.TELEGRAM_CHAT_ID,
   SLACK_BOT_TOKEN: process.env.SLACK_BOT_TOKEN,
   SLACK_CHANNEL_ID: process.env.SLACK_CHANNEL_ID,
+  // Optional separate channel for alerts (watchdog, creative death, pace...)
+  // so they don't drown in the purchase feed; falls back to SLACK_CHANNEL_ID
+  SLACK_ALERTS_CHANNEL_ID: process.env.SLACK_ALERTS_CHANNEL_ID || null,
+  // Meta Marketing API for spend/ROAS alerts
+  FB_ACCESS_TOKEN: process.env.FB_ACCESS_TOKEN || null,
+  // Comma-separated act_XXX ids; if empty, auto-discovers accounts named "Testora"
+  FB_AD_ACCOUNT_IDS: process.env.FB_AD_ACCOUNT_IDS || null,
+  // Alert when a Meta campaign spent >= this (USD) today with zero purchases
+  FB_SPEND_ALERT_USD: parseFloat(process.env.FB_SPEND_ALERT_USD || '50'),
   GOOGLE_SERVICE_EMAIL: process.env.GOOGLE_SERVICE_EMAIL,
   GOOGLE_SERVICE_PRIVATE_KEY: process.env.GOOGLE_SERVICE_PRIVATE_KEY,
   GOOGLE_SHEETS_DOC_ID: process.env.GOOGLE_SHEETS_DOC_ID,

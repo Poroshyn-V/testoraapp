@@ -8981,6 +8981,27 @@ app.listen(ENV.PORT, () => {
       }
     }, 30000); // Проверяем каждые 30 секунд
     
+    // Traffic health watchdog — every 15 min, independent of syncs:
+    // when nothing is selling there are no syncs to trigger alerts
+    const trafficHealthInterval = setInterval(async () => {
+      try {
+        const alert = await smartAlerts.checkTrafficHealth();
+        if (alert) await sendTextNotifications(alert);
+      } catch (error) {
+        logger.error('❌ Traffic health check failed', { error: error.message });
+      }
+    }, 15 * 60 * 1000);
+
+    // Meta spend-without-sales — hourly (Graph API rate limits)
+    const spendCheckInterval = setInterval(async () => {
+      try {
+        const alert = await smartAlerts.checkSpendNoSales();
+        if (alert) await sendTextNotifications(alert);
+      } catch (error) {
+        logger.error('❌ Spend-no-sales check failed', { error: error.message });
+      }
+    }, 60 * 60 * 1000);
+
     // Автоматическая очистка дубликатов каждые 30 минут
     const duplicateCleanupInterval = setInterval(async () => {
       try {
