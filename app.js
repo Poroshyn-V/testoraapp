@@ -9383,7 +9383,7 @@ Possible causes: Primer outage, webhook misconfigured, network issue`;
 // Graceful shutdown handling
 
 // Graceful shutdown function
-async function gracefulShutdown(signal) {
+async function gracefulShutdown(signal, exitCode = 0) {
   logger.info(`${signal} received, shutting down gracefully...`, {
     timestamp: new Date().toISOString(),
     uptime: process.uptime()
@@ -9443,9 +9443,12 @@ async function gracefulShutdown(signal) {
       finalUptime: process.uptime()
     });
     
-    // Give a moment for logs to flush
+    // Give a moment for logs to flush.
+    // exitCode MUST be non-zero for crash paths (UNCAUGHT_EXCEPTION): Railway's
+    // ON_FAILURE restart policy ignores exit 0, so exiting "successfully" after a
+    // crash left the service down permanently (502) until a manual redeploy.
     setTimeout(() => {
-      process.exit(0);
+      process.exit(exitCode);
     }, 1000);
     
   } catch (error) {
@@ -9475,7 +9478,7 @@ process.on('uncaughtException', (error) => {
     timestamp: new Date().toISOString()
   });
   
-  gracefulShutdown('UNCAUGHT_EXCEPTION');
+  gracefulShutdown('UNCAUGHT_EXCEPTION', 1);
 });
 
 // Handle unhandled promise rejections.
